@@ -5,7 +5,10 @@ use okane_core::common::{Stock, TimeFrame};
 use okane_core::market::entity::Candle;
 use okane_core::store::error::StoreError;
 use okane_core::store::port::MarketStore;
-use sqlx::{SqlitePool, sqlite::{SqliteConnectOptions, SqlitePoolOptions}};
+use sqlx::{
+    SqlitePool,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+};
 use std::path::PathBuf;
 
 /// MarketStore 的 SQLite 实现，采用“一库一股”策略。
@@ -59,7 +62,7 @@ impl SqliteMarketStore {
         }
 
         let db_path = self.base_path.join(format!("{}.db", key));
-        
+
         // 使用官方推荐的配置方式，确保自动创建数据库文件
         let options = SqliteConnectOptions::new()
             .filename(db_path)
@@ -170,20 +173,21 @@ impl MarketStore for SqliteMarketStore {
         let pool = self.get_or_init_pool(stock).await?;
         let timeframe_str = format!("{:?}", timeframe);
 
-        let records = sqlx::query_as::<_, (DateTime<Utc>, f64, f64, f64, f64, Option<f64>, f64, bool)>(
-            r#"
+        let records =
+            sqlx::query_as::<_, (DateTime<Utc>, f64, f64, f64, f64, Option<f64>, f64, bool)>(
+                r#"
             SELECT time, open, high, low, close, adj_close, volume, is_final
             FROM candles
             WHERE timeframe = ? AND time >= ? AND time <= ?
             ORDER BY time ASC
             "#,
-        )
-        .bind(&timeframe_str)
-        .bind(start)
-        .bind(end)
-        .fetch_all(&pool)
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))?;
+            )
+            .bind(&timeframe_str)
+            .bind(start)
+            .bind(end)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
 
         Ok(records
             .into_iter()

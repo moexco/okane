@@ -2,7 +2,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use okane_core::store::error::StoreError;
 use okane_core::store::port::{Position, StockMetadata, SystemStore, User};
-use sqlx::{SqlitePool, sqlite::{SqliteConnectOptions, SqlitePoolOptions}};
+use sqlx::{
+    SqlitePool,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+};
 use std::fs;
 
 /// 默认系统数据库存储路径
@@ -38,7 +41,7 @@ impl SqliteSystemStore {
         fs::create_dir_all(&root).map_err(|e| StoreError::Database(e.to_string()))?;
 
         let db_path = root.join(DEFAULT_SYSTEM_DB);
-        
+
         // 使用官方推荐的配置方式，确保自动创建数据库文件
         let options = SqliteConnectOptions::new()
             .filename(db_path)

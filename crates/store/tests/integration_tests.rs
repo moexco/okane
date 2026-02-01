@@ -26,7 +26,11 @@ async fn test_store_full_integration() {
         created_at: Utc::now(),
     };
     system_store.save_user(&user).await.unwrap();
-    let saved_user = system_store.get_user("u1").await.unwrap().expect("User should exist");
+    let saved_user = system_store
+        .get_user("u1")
+        .await
+        .unwrap()
+        .expect("User should exist");
     assert_eq!(saved_user.name, "Tester");
 
     // 自选股
@@ -74,7 +78,10 @@ async fn test_store_full_integration() {
         is_final: true,
     }];
 
-    market_store.save_candles(&stock, TimeFrame::Day1, &candles).await.unwrap();
+    market_store
+        .save_candles(&stock, TimeFrame::Day1, &candles)
+        .await
+        .unwrap();
 
     // 验证物理路径 (应当在临时目录下)
     let db_file = root_path.join("market").join("AAPL_NASDAQ.db");
@@ -83,7 +90,10 @@ async fn test_store_full_integration() {
     // 读取验证
     let start = Utc.with_ymd_and_hms(2026, 2, 1, 0, 0, 0).unwrap();
     let end = Utc.with_ymd_and_hms(2026, 2, 1, 23, 59, 59).unwrap();
-    let loaded = market_store.load_candles(&stock, TimeFrame::Day1, start, end).await.unwrap();
+    let loaded = market_store
+        .load_candles(&stock, TimeFrame::Day1, start, end)
+        .await
+        .unwrap();
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].close, 152.0);
     assert_eq!(loaded[0].adj_close, Some(152.0));

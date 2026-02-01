@@ -8,7 +8,7 @@ use tokio::time::timeout;
 
 /// # Summary
 /// 雅虎财经行情获取的集成测试。
-/// 
+///
 /// # Logic
 /// 1. 初始化 YahooProvider。
 /// 2. 抓取 AAPL 过去 7 天的日线数据。

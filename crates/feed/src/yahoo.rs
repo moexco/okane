@@ -295,13 +295,20 @@ impl MarketDataProvider for YahooProvider {
                 {
                     for candle in candles.iter_mut() {
                         // 如果 K 线时间 + 周期 <= 当前时间，则认为已收盘
-                        let is_closed = candle.time + chrono::Duration::seconds(cycle_secs) <= Utc::now();
+                        let is_closed =
+                            candle.time + chrono::Duration::seconds(cycle_secs) <= Utc::now();
                         candle.is_final = is_closed;
 
                         let should_push = match last_pushed_ts {
                             None => true,
                             Some(ts) if candle.time > ts => true,
-                            Some(ts) if candle.time == ts && candle.is_final && !last_pushed_is_final => true,
+                            Some(ts)
+                                if candle.time == ts
+                                    && candle.is_final
+                                    && !last_pushed_is_final =>
+                            {
+                                true
+                            }
                             _ => false,
                         };
 
