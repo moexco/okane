@@ -1,0 +1,18 @@
+[package]
+name = "okane-notify"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1.89"
+lettre = { version = "0.11.19", features = ["tokio1", "rustls-tls", "builder", "tokio1-rustls-tls", "smtp-transport", "hostname"], default-features = false }
+log = "0.4.29"
+okane-core = { version = "0.1.0", path = "../core" }
+reqwest = { version = "0.13.1", features = ["json"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+thiserror = "2.0.18"
+
+[dev-dependencies]
+dotenvy = "0.15.7"
+tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }

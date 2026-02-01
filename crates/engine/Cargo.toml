@@ -1,0 +1,8 @@
+[package]
+name = "okane-engine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+extism = "1.13.0"
+okane-core = { version = "0.1.0", path = "../core" }
