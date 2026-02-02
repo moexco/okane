@@ -12,6 +12,10 @@ graph TB
         Engine[crates/engine]
     end
 
+    subgraph "领域实现层 (Domain Implementation)"
+        MarketImpl[crates/market]
+    end
+
     subgraph "领域层 (Domain)"
         Core[crates/core]
     end
@@ -20,6 +24,7 @@ graph TB
         Feed[crates/feed]
         Store[crates/store]
         Notify[crates/notify]
+        Cache[crates/cache]
     end
 
     %% 依赖关系
@@ -28,33 +33,50 @@ graph TB
     App --> Store
     App --> Notify
     App --> Core
+    App --> MarketImpl
+    App --> Cache
 
     Engine --> Core
     Feed --> Core
     Store --> Core
     Notify --> Core
+    Cache --> Core
+    MarketImpl --> Core
 
     %% 运行时逻辑流向 (通过 Trait)
     Engine -. 使用接口 .-> Core
+    MarketImpl -. 实现接口 .-> Core
     Feed -. 实现接口 .-> Core
     Store -. 实现接口 .-> Core
     Notify -. 实现接口 .-> Core
+    Cache -. 实现接口 .-> Core
 ```
 
 ## 2. 模块职责说明 (Crates)
-- **core**: 定义系统核心。包含 `Stock` 实体、`Candle` 时序数据、以及 `MarketDataProvider` 等 **Port (端口/接口)**。它是系统的防腐层核心，不依赖外部。
+- **core**: 定义系统核心。包含 `Stock` 聚合根、`Candle` 时序数据、以及 `MarketDataProvider`、`Market` 领域服务等 **Port (端口/接口)**。它是系统的防腐层核心，不依赖外部。
+- **market**: 领域逻辑实现。负责 `Market` 和 `Stock` 契约的具体实现。包含单源订阅、多路广播、以及基于引用计数的资源自动回收逻辑。
 - **feed**: 行情抓取适配器。实现 `MarketDataProvider`，目前对接 Yahoo Finance。
 - **store**: 数据持久化适配器。实现存储接口，负责 SQLite 的物理读写。
-- **engine**: 策略引擎。负责加载 WASM 脚本，并调用存储的数据进行指标计算和信号生成。
+- **cache**: 业务无关的异步 KV 存储接口。它仅作为数据在内存中的载体，不感知具体业务逻辑。
+- **engine**: 策略引擎。负责加载 WASM 脚本，并调用 `Stock` 聚合根进行指标计算和信号生成。
 - **notify**: 通知适配器。实现信号推送逻辑 (Telegram/Email)。
 - **app**: 引导程序。负责将上述模块进行“接线”（依赖注入），启动主循环。
 
-## 3. 核心流程
-1. **数据链**: `feed` (抓取) -> `store` (落库)。
-2. **逻辑链**: `engine` (计算) -> `notify` (推送)。
-3. **隔离性**: 策略逻辑运行在 WASM 沙箱中，通过 `core` 定义的标准接口与系统交互。
+## 3. 核心领域对象：Stock 聚合根
+`Stock` 是系统中最核心的聚合根，它具备以下特性：
+- **身份唯一性**: 同一个 Symbol 在内存中仅存在一个物理聚合根实例。
+- **能力内聚**: 封装了实时流订阅、瞬时价格查询、历史回溯等所有行情行为。
+- **生命周期自愈 (Weak-Hub 模式)**: 
+    - `Market` 注册表持有 `Weak<StockInner>` 引用，外部（Engine/API）持有 `Arc<dyn Stock>` 引用。
+    - 当所有外部 `Arc` 被释放时，聚合根自动触发 `Drop`，清理注册表并停止底层的抓取任务（Feed Connection）。
 
-## 4. 技术特性
+## 4. 核心流程
+1. **获取**: 外部模块通过 `Market::get_stock("AAPL")` 获取聚合根。若已有实例，则返回现有引用。
+2. **数据链**: `feed` (抓取) -> `market` (广播并存入 `cache`) -> `store` (落库)。
+3. **逻辑链**: `engine` (获取聚合根并订阅/查询) -> `notify` (推送)。
+4. **隔离性**: 策略逻辑运行在 WASM 沙箱中，通过 `core` 定义的标准接口与系统交互。
+
+## 5. 技术特性
 - **运行时**: `tokio`
 - **数据库**: `sqlx` (SQLite)
 - **WASM 策略引擎**: 采用 **Extism** 框架。
@@ -68,8 +90,11 @@ graph TB
     * 对外暴露的函数方法必须包含 `///` 注释，详细说明 `# Logic` (逻辑步骤), `# Arguments`, `# Returns`。
     * 对外暴露的数据集合或抽象接口必须包含 `///` 注释，详细说明 `# Summary` (设计意图),  `# Invariants` (约束规则)。
     * 对外暴露的成员字段必须包含 `//` 注释，解释其含义。
+- **编码规范**：
+    * 禁止在`lib.rs`中编写逻辑代码
+    * 禁止在`lib.rs`中使用`pub use`导出
 
-## 5. 代码组织规范 (Code Organization)
+## 6. 代码组织规范 (Code Organization)
 
 项目遵循 **单模块单目录 (Single Module per Directory)** 的拆分原则，杜绝“上帝文件”。
 
@@ -79,7 +104,7 @@ graph TB
 *   **`common/`**: 通用基础类型。
     *   包含: `Stock`, `TimeFrame`
 *   **`market/`**: 行情相关业务。
-    *   包含: `entity.rs` (Candle), `port.rs` (MarketDataProvider), `error.rs` (MarketError)
+    *   包含: `entity.rs` (Candle), `port.rs` (MarketDataProvider, Market & Stock Traits), `error.rs` (MarketError)
 *   **`store/`**: 持久化相关业务。
     *   包含: `port.rs` (MarketStore), `error.rs` (StoreError)
 *   **`notify/`**: 通知相关业务。
@@ -90,12 +115,12 @@ graph TB
 2.  **物理隔离**：通过目录层级强制隔离不同业务域的实现细节。
 3.  **显式 Port**：所有需要外部实现的抽象行为必须在各子域的 `port.rs` 中定义。
 
-## 6. 缓存规范 (Cache Standard)
+## 7. 缓存规范 (Cache Standard)
 
-### 6.1 定义与职责
+### 7.1 定义与职责
 Cache 被定义为一个**业务无关的异步 KV 存储接口**。它仅作为数据在内存中的载体，不感知具体业务逻辑。
 
-### 6.2 接口规约
+### 7.2 接口规约
 - **标准操作**：必须实现 `set`、`get`、`del` 三个核心方法。
 - **泛型支持**：接口应支持通过序列化/反序列化进行强类型数据的存取。
 - **管理策略**：Cache 内部不提供 TTL (过期时间) 或容量淘汰机制。数据的新鲜度维护与版本管理完全由上游业务逻辑自行实现。

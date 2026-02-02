@@ -1,0 +1,17 @@
+[package]
+name = "okane-market"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-stream = "0.3.6"
+async-trait = "0.1.89"
+chrono = "0.4.43"
+dashmap = "6.1.0"
+futures = "0.3.31"
+okane-core = { version = "0.1.0", path = "../core" }
+tokio = { version = "1.49.0", features = ["sync", "rt", "time", "macros"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+okane-feed = { path = "../feed" }

@@ -18,7 +18,7 @@ pub struct Stock {
 ///
 /// # Invariants
 /// - 无特定约束。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum TimeFrame {
     // 1分钟
     Minute1,
