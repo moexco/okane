@@ -84,7 +84,7 @@ graph TB
 - **序列化**: `serde`
 - **数据获取模式**:
     *   **Pull (拉取)**: 用于回测或补全历史数据，通过 `fetch_candles` 同步获取。
-    *   **Push (订阅)**: 用于实时策略追踪，通过 `subscribe_candles` 返回一个异步流 (`Stream`)。
+    *   **Push (订阅)**: 用于实时策略追踪，通过 `subscribe` 返回一个异步流 (`Stream`)。
     *   **屏蔽差异**: Provider 必须保证订阅接口可用。对于不支持原生长连接的源，应在内部通过异步轮询 (Polling) 模拟实时流。
 - **注释文档规范**：
     * 对外暴露的函数方法必须包含 `///` 注释，详细说明 `# Logic` (逻辑步骤), `# Arguments`, `# Returns`。
