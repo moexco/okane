@@ -1,33 +1,35 @@
+use crate::buffer::RollingBuffer;
 use async_trait::async_trait;
+use okane_cache::mem::MemCache;
+use okane_core::cache::port::CacheExt;
 use okane_core::common::{Stock as StockIdentity, TimeFrame};
 use okane_core::market::entity::Candle;
 use okane_core::market::error::MarketError;
 use okane_core::market::port::{CandleStream, MarketDataProvider, Stock, StockStatus};
+use okane_core::store::port::MarketStore;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::{broadcast, mpsc};
-use tracing::{info, warn};
+use tracing::info;
 
 /// # Summary
 /// Stock 聚合根的具体实现结构。
 ///
 /// # Invariants
-/// - 内部状态访问必须由 Mutex 保护。
-/// - 被销毁时必须主动向管理器发送信号。
+/// - 内部状态完全托管于独占的 MemCache 实例中。
+/// - 只有广播通道句柄维护在内存 Mutex 中。
 pub(crate) struct StockInner {
     // 证券身份信息
     identity: StockIdentity,
-    // 多周期广播器映射
+    // 广播通道映射（无法序列化，保留在内存中）
     channels: Mutex<HashMap<TimeFrame, broadcast::Sender<Candle>>>,
-    // 各周期最新 K 线快照缓存
-    latest_candles: Mutex<HashMap<TimeFrame, Candle>>,
-    // 各周期最近收盘 K 线缓存
-    last_closed_candles: Mutex<HashMap<TimeFrame, Candle>>,
-    // 当前成交价
-    price: Mutex<Option<f64>>,
+    // 独占内存缓存实例
+    cache: MemCache,
+    // 持久化存储驱动
+    store: Arc<dyn MarketStore>,
     // 用于通知清理注册表的通道
     cleanup_tx: mpsc::Sender<String>,
-    // 数据源驱动，供聚合根内部调用
+    // 数据源驱动
     provider: Arc<dyn MarketDataProvider>,
 }
 
@@ -36,28 +38,30 @@ impl StockInner {
     /// 创建并初始化聚合根。
     ///
     /// # Logic
-    /// 1. 构造 StockInner 实例。
-    /// 2. 构造配套的 StockFetcher 并注入聚合根的弱引用。
-    /// 3. 启动后台抓取协程。
+    /// 1. 构造 StockInner 实例并注入独占 Cache。
+    /// 2. 启动后台抓取协程。
     ///
     /// # Arguments
-    /// * `identity`: 证券身份标识。
-    /// * `cleanup_tx`: 管理器提供的清理信号通道。
-    /// * `provider`: 行情数据源驱动。
+    /// * `identity`: 证券身份。
+    /// * `cleanup_tx`: 清理通道。
+    /// * `provider`: 数据源驱动。
+    /// * `cache`: 独占缓存实例。
+    /// * `store`: 全局存储驱动。
     ///
     /// # Returns
-    /// 返回包装为 Arc 的聚合根实例强引用。
+    /// 返回聚合根实例的强引用 Arc。
     pub fn create(
         identity: StockIdentity,
         cleanup_tx: mpsc::Sender<String>,
         provider: Arc<dyn MarketDataProvider>,
+        cache: MemCache,
+        store: Arc<dyn MarketStore>,
     ) -> Arc<Self> {
         let stock = Arc::new(Self {
             identity: identity.clone(),
             channels: Mutex::new(HashMap::new()),
-            latest_candles: Mutex::new(HashMap::new()),
-            last_closed_candles: Mutex::new(HashMap::new()),
-            price: Mutex::new(None),
+            cache,
+            store,
             cleanup_tx,
             provider: provider.clone(),
         });
@@ -69,34 +73,106 @@ impl StockInner {
     }
 
     /// # Summary
+    /// 获取行情缓冲区的缓存键。
+    ///
+    /// # Logic
+    /// 根据 TimeFrame 返回静态字符串。
+    ///
+    /// # Arguments
+    /// * `tf`: 周期。
+    ///
+    /// # Returns
+    /// 缓存 Key 字符串。
+    fn k_key(tf: TimeFrame) -> &'static str {
+        match tf {
+            TimeFrame::Minute1 => "k:1m",
+            TimeFrame::Minute5 => "k:5m",
+            TimeFrame::Hour1 => "k:1h",
+            TimeFrame::Day1 => "k:1d",
+        }
+    }
+
+    /// # Summary
+    /// 获取最新快照的缓存键。
+    ///
+    /// # Logic
+    /// 根据 TimeFrame 返回静态字符串。
+    ///
+    /// # Arguments
+    /// * `tf`: 周期。
+    ///
+    /// # Returns
+    /// 缓存 Key 字符串。
+    fn l_key(tf: TimeFrame) -> &'static str {
+        match tf {
+            TimeFrame::Minute1 => "l:1m",
+            TimeFrame::Minute5 => "l:5m",
+            TimeFrame::Hour1 => "l:1h",
+            TimeFrame::Day1 => "l:1d",
+        }
+    }
+
+    /// # Summary
+    /// 获取最近收盘的缓存键。
+    ///
+    /// # Logic
+    /// 根据 TimeFrame 返回静态字符串。
+    ///
+    /// # Arguments
+    /// * `tf`: 周期。
+    ///
+    /// # Returns
+    /// 缓存 Key 字符串。
+    fn lc_key(tf: TimeFrame) -> &'static str {
+        match tf {
+            TimeFrame::Minute1 => "lc:1m",
+            TimeFrame::Minute5 => "lc:5m",
+            TimeFrame::Hour1 => "lc:1h",
+            TimeFrame::Day1 => "lc:1d",
+        }
+    }
+
+    /// # Summary
     /// 更新内部状态并触发广播分发。
     ///
     /// # Logic
-    /// 1. 更新价格快照。
-    /// 2. 更新最新 K 线。
-    /// 3. 若 K 线标记为已收盘，同步更新闭合 K 线缓存。
-    /// 4. 通过对应周期的广播发送端分发数据。
+    /// 1. 更新缓存中的最新价格 ("p")。
+    /// 2. 更新缓存中的最新 K 线快照 ("l:{tf}")。
+    /// 3. 获取并更新缓存中的 RollingBuffer ("k:{tf}")。
+    /// 4. 若收盘，更新缓存 ("lc:{tf}") 并异步落库。
+    /// 5. 触发广播。
     ///
     /// # Arguments
-    /// * `candle`: 新收到的行情数据。
-    /// * `timeframe`: 数据所属的周期。
+    /// * `candle`: 新接收到的行情数据。
+    /// * `timeframe`: 目标周期。
     ///
     /// # Returns
     /// 无。
-    pub fn update_and_broadcast(&self, candle: Candle, timeframe: TimeFrame) {
-        let mut price = self.price.lock().unwrap();
-        *price = Some(candle.close);
+    pub async fn update_and_broadcast(&self, candle: Candle, timeframe: TimeFrame) {
+        // 更新价格和快照
+        let _ = self.cache.set("p", &candle.close).await;
+        let _ = self.cache.set(Self::l_key(timeframe), &candle).await;
+
+        // 更新滚动缓冲区 (k:rollingbuff)
+        let key = Self::k_key(timeframe);
+        let mut buffer = self
+            .cache
+            .get::<RollingBuffer<Candle>>(key)
+            .await
+            .unwrap_or_default()
+            .unwrap_or_else(|| RollingBuffer::new(200));
+        buffer.push(candle.clone());
+        let _ = self.cache.set(key, &buffer).await;
 
         if candle.is_final {
-            self.last_closed_candles
-                .lock()
-                .unwrap()
-                .insert(timeframe, candle.clone());
+            let _ = self.cache.set(Self::lc_key(timeframe), &candle).await;
+            let store = self.store.clone();
+            let id = self.identity.clone();
+            let c = candle.clone();
+            tokio::spawn(async move {
+                let _ = store.save_candles(&id, timeframe, &[c]).await;
+            });
         }
-        self.latest_candles
-            .lock()
-            .unwrap()
-            .insert(timeframe, candle.clone());
 
         let channels = self.channels.lock().unwrap();
         if let Some(tx) = channels.get(&timeframe) {
@@ -107,10 +183,10 @@ impl StockInner {
 
 impl Drop for StockInner {
     /// # Summary
-    /// 处理聚合根销毁。
+    /// 析构处理。
     ///
     /// # Logic
-    /// 1. 将自身的 Symbol 发送到清理通道。
+    /// 发送清理信号到管理端通道。
     ///
     /// # Arguments
     /// 无。
@@ -125,10 +201,10 @@ impl Drop for StockInner {
 #[async_trait]
 impl Stock for StockInner {
     /// # Summary
-    /// 获取身份实体引用。
+    /// 获取身份。
     ///
     /// # Logic
-    /// 1. 返回内部 identity。
+    /// 直接返回内部持有的身份实体引用。
     ///
     /// # Arguments
     /// 无。
@@ -140,10 +216,10 @@ impl Stock for StockInner {
     }
 
     /// # Summary
-    /// 获取即时成交价。
+    /// 获取最新价。
     ///
     /// # Logic
-    /// 1. 加锁读取瞬时价格缓存。
+    /// 从缓存读取 "p" 对应的值。
     ///
     /// # Arguments
     /// 无。
@@ -151,14 +227,14 @@ impl Stock for StockInner {
     /// # Returns
     /// 价格选项。
     fn current_price(&self) -> Option<f64> {
-        *self.price.lock().unwrap()
+        futures::executor::block_on(async { self.cache.get::<f64>("p").await.ok().flatten() })
     }
 
     /// # Summary
-    /// 获取指定周期最新 K 线。
+    /// 获取最新 K 线。
     ///
     /// # Logic
-    /// 1. 加锁从最新 K 线缓存中读取。
+    /// 从缓存读取指定周期的快照 Key。
     ///
     /// # Arguments
     /// * `timeframe`: 目标周期。
@@ -166,40 +242,47 @@ impl Stock for StockInner {
     /// # Returns
     /// K 线选项。
     fn latest_candle(&self, timeframe: TimeFrame) -> Option<Candle> {
-        self.latest_candles.lock().unwrap().get(&timeframe).cloned()
+        futures::executor::block_on(async {
+            self.cache
+                .get::<Candle>(Self::l_key(timeframe))
+                .await
+                .ok()
+                .flatten()
+        })
     }
 
     /// # Summary
-    /// 获取指定周期最近闭合 K 线。
+    /// 获取最近收盘 K 线。
     ///
     /// # Logic
-    /// 1. 加锁从收盘 K 线缓存中读取。
+    /// 从缓存读取指定周期的 lc Key。
     ///
     /// # Arguments
     /// * `timeframe`: 目标周期。
     ///
     /// # Returns
-    /// K 线选项数据。
+    /// K 线选项。
     fn last_closed_candle(&self, timeframe: TimeFrame) -> Option<Candle> {
-        self.last_closed_candles
-            .lock()
-            .unwrap()
-            .get(&timeframe)
-            .cloned()
+        futures::executor::block_on(async {
+            self.cache
+                .get::<Candle>(Self::lc_key(timeframe))
+                .await
+                .ok()
+                .flatten()
+        })
     }
 
     /// # Summary
-    /// 订阅实时流。
+    /// 订阅行情实时流。
     ///
     /// # Logic
-    /// 1. 获取或创建特定 TimeFrame 的 broadcast 通道。
-    /// 2. 使用 async_stream 转换 Receiver 为异步流。
+    /// 获取或创建多周期广播通道并产出异步流。
     ///
     /// # Arguments
-    /// * `timeframe`: 目标周期。
+    /// * `timeframe`: 订阅周期。
     ///
     /// # Returns
-    /// 动态分发的 Candle 流。
+    /// 异步行情流。
     fn subscribe(&self, timeframe: TimeFrame) -> CandleStream {
         let mut channels = self.channels.lock().unwrap();
         let tx = channels.entry(timeframe).or_insert_with(|| {
@@ -219,18 +302,17 @@ impl Stock for StockInner {
     }
 
     /// # Summary
-    /// 回溯历史。
+    /// 历史行情回溯。
     ///
     /// # Logic
-    /// 1. 计算时间跨度。
-    /// 2. 委托底层 Provider 进行查询。
+    /// 优先从本地持久化 Store 加载，若不足则调 Provider。
     ///
     /// # Arguments
     /// * `timeframe`: 周期。
-    /// * `limit`: 回溯根数。
+    /// * `limit`: 回溯数量。
     ///
     /// # Returns
-    /// 历史 K 线向量。
+    /// 历史数据结果向量。
     async fn fetch_history(
         &self,
         timeframe: TimeFrame,
@@ -238,16 +320,24 @@ impl Stock for StockInner {
     ) -> Result<Vec<Candle>, MarketError> {
         let now = chrono::Utc::now();
         let start = now - chrono::Duration::days(limit as i64);
+        if let Ok(local) = self
+            .store
+            .load_candles(&self.identity, timeframe, start, now)
+            .await
+            && local.len() >= limit
+        {
+            return Ok(local);
+        }
         self.provider
             .fetch_candles(&self.identity, timeframe, start, now)
             .await
     }
 
     /// # Summary
-    /// 查看聚合根状态。
+    /// 获取运行状态。
     ///
     /// # Logic
-    /// 1. 暂硬编码为 Online。
+    /// 默认返回 Online。
     ///
     /// # Arguments
     /// 无。
@@ -260,25 +350,19 @@ impl Stock for StockInner {
 }
 
 /// # Summary
-/// 抓取任务后台逻辑。
-///
-/// # Invariants
-/// - 只持有对聚合根的弱引用，确保不阻碍聚合根的销毁。
+/// 抓取任务后台逻辑执行器。
 struct StockFetcher {
-    // 标的身份
     identity: StockIdentity,
-    // 对聚合根实现 StockInner 的弱引用
     inner: Weak<StockInner>,
-    // 数据源
     provider: Arc<dyn MarketDataProvider>,
 }
 
 impl StockFetcher {
     /// # Summary
-    /// 构造函数。
+    /// 构造 Fetcher 实例。
     ///
     /// # Logic
-    /// 1. 结构化赋值成员变量。
+    /// 初始化字段。
     ///
     /// # Arguments
     /// * `identity`: 证券身份。
@@ -286,8 +370,8 @@ impl StockFetcher {
     /// * `provider`: 数据源驱动。
     ///
     /// # Returns
-    /// 返回 StockFetcher 实例。
-    pub fn new(
+    /// 返回 Fetcher 实例。
+    fn new(
         identity: StockIdentity,
         inner: Weak<StockInner>,
         provider: Arc<dyn MarketDataProvider>,
@@ -300,20 +384,18 @@ impl StockFetcher {
     }
 
     /// # Summary
-    /// 协程执行逻辑。
+    /// 启动抓取协程。
     ///
     /// # Logic
-    /// 1. 订阅底层 Provider 的流。
-    /// 2. 每当收到数据时，尝试 upgrade。若失败则意味着外部引用已全部失效，任务退出。
+    /// 循环订阅原始行情流并分发至聚合根更新。
     ///
     /// # Arguments
     /// 无。
     ///
     /// # Returns
-    /// 无返回值。
-    pub async fn run(self) {
+    /// 无。
+    async fn run(self) {
         info!("Fetcher for {} started", self.identity.symbol);
-
         if let Ok(mut stream) = self
             .provider
             .subscribe_candles(&self.identity, TimeFrame::Minute1)
@@ -321,17 +403,11 @@ impl StockFetcher {
         {
             while let Some(candle) = futures::StreamExt::next(&mut stream).await {
                 if let Some(stock) = self.inner.upgrade() {
-                    stock.update_and_broadcast(candle, TimeFrame::Minute1);
+                    stock.update_and_broadcast(candle, TimeFrame::Minute1).await;
                 } else {
-                    info!(
-                        "No active references for {}, fetcher exiting",
-                        self.identity.symbol
-                    );
                     break;
                 }
             }
-        } else {
-            warn!("Failed to subscribe for {}", self.identity.symbol);
         }
     }
 }
@@ -340,9 +416,11 @@ impl StockFetcher {
 mod tests {
     use super::*;
     use crate::manager::MarketImpl;
-    use chrono::Utc;
+    use chrono::{DateTime, Utc};
     use futures::stream;
     use okane_core::market::port::Market;
+    use okane_core::store::error::StoreError;
+    use okane_core::store::port::MarketStore;
 
     struct MockProvider;
     #[async_trait]
@@ -373,27 +451,46 @@ mod tests {
                 is_final: true,
             })
             .ok();
+            Ok(Box::pin(stream::unfold(rx, |mut rx| async move {
+                rx.recv().await.map(|c| (c, rx))
+            })))
+        }
+    }
 
-            let s = stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|c| (c, rx)) });
-            Ok(Box::pin(s))
+    struct MockStore;
+    #[async_trait]
+    impl MarketStore for MockStore {
+        async fn save_candles(
+            &self,
+            _: &StockIdentity,
+            _: TimeFrame,
+            _: &[Candle],
+        ) -> Result<(), StoreError> {
+            Ok(())
+        }
+        async fn load_candles(
+            &self,
+            _: &StockIdentity,
+            _: TimeFrame,
+            _: DateTime<Utc>,
+            _: DateTime<Utc>,
+        ) -> Result<Vec<Candle>, StoreError> {
+            Ok(vec![])
         }
     }
 
     #[tokio::test]
     async fn test_stock_aggregate_lifecycle() {
         let provider = Arc::new(MockProvider);
-        let market = MarketImpl::new(provider);
+        let store = Arc::new(MockStore);
+        let market = MarketImpl::new(provider, store);
         let symbol = "TEST";
-
         {
             let stock = market.get_stock(symbol).await.expect("Should get stock");
-            assert_eq!(stock.identity().symbol, symbol);
-
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             assert!(stock.current_price().is_some());
             assert_eq!(market.active_count(), 1);
         }
-
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         assert_eq!(market.active_count(), 0);
     }

@@ -1,10 +1,13 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use dashmap::DashMap;
 use futures::StreamExt;
 use okane_core::common::{Stock as StockIdentity, TimeFrame};
 use okane_core::market::entity::Candle;
 use okane_core::market::error::MarketError;
 use okane_core::market::port::{CandleStream, Market, MarketDataProvider, StockStatus};
+use okane_core::store::error::StoreError;
+use okane_core::store::port::MarketStore;
 use okane_market::manager::MarketImpl;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -70,10 +73,58 @@ impl MarketDataProvider for MockProvider {
 }
 
 /// # Summary
+/// 基于内存的简易存储实现。
+struct MemMarketStore {
+    db: DashMap<(String, TimeFrame), Vec<Candle>>,
+}
+
+impl MemMarketStore {
+    fn new() -> Self {
+        Self { db: DashMap::new() }
+    }
+}
+
+#[async_trait]
+impl MarketStore for MemMarketStore {
+    async fn save_candles(
+        &self,
+        stock: &StockIdentity,
+        timeframe: TimeFrame,
+        candles: &[Candle],
+    ) -> Result<(), StoreError> {
+        let mut entry = self
+            .db
+            .entry((stock.symbol.clone(), timeframe))
+            .or_default();
+        entry.extend_from_slice(candles);
+        Ok(())
+    }
+
+    async fn load_candles(
+        &self,
+        stock: &StockIdentity,
+        timeframe: TimeFrame,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<Candle>, StoreError> {
+        let candles = self
+            .db
+            .get(&(stock.symbol.clone(), timeframe))
+            .map(|v| v.clone())
+            .unwrap_or_default();
+        Ok(candles
+            .into_iter()
+            .filter(|c| c.time >= start && c.time <= end)
+            .collect())
+    }
+}
+
+/// # Summary
 /// 初始化测试所需的 Market 环境。
 async fn setup() -> (Arc<MarketImpl>, Arc<MockProvider>) {
     let provider = Arc::new(MockProvider::new());
-    let market = MarketImpl::new(provider.clone());
+    let store = Arc::new(MemMarketStore::new());
+    let market = MarketImpl::new(provider.clone(), store);
     (market, provider)
 }
 

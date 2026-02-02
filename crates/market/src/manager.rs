@@ -1,9 +1,11 @@
 use crate::stock::StockInner;
 use async_trait::async_trait;
 use dashmap::DashMap;
+use okane_cache::mem::MemCache;
 use okane_core::common::Stock as StockIdentity;
 use okane_core::market::error::MarketError;
 use okane_core::market::port::{Market, MarketDataProvider, Stock};
+use okane_core::store::port::MarketStore;
 use std::sync::{Arc, Weak};
 use tokio::sync::mpsc;
 use tracing::{debug, info};
@@ -17,6 +19,8 @@ use tracing::{debug, info};
 pub struct MarketImpl {
     // 原始行情数据源驱动
     provider: Arc<dyn MarketDataProvider>,
+    // 持久化存储驱动
+    store: Arc<dyn MarketStore>,
     // 活跃聚合根注册表，Key 为 Symbol，Value 为弱引用
     stocks: DashMap<String, Weak<StockInner>>,
     // 用于接收聚合根销毁信号的发送端
@@ -29,18 +33,20 @@ impl MarketImpl {
     ///
     /// # Logic
     /// 1. 创建 mpsc 通道用于资源清理。
-    /// 2. 构造 MarketImpl 实例并包装为 Arc。
+    /// 2. 构造 MarketImpl 实例并包装为 Arc，注入数据源和存储驱动。
     /// 3. 启动后台协程监听清理通道，根据接收到的 Symbol 移除注册表条目。
     ///
     /// # Arguments
     /// * `provider`: 满足 MarketDataProvider 接口的数据源驱动。
+    /// * `store`: 满足 MarketStore 接口的持久化驱动。
     ///
     /// # Returns
     /// 返回 MarketImpl 的共享指针。
-    pub fn new(provider: Arc<dyn MarketDataProvider>) -> Arc<Self> {
+    pub fn new(provider: Arc<dyn MarketDataProvider>, store: Arc<dyn MarketStore>) -> Arc<Self> {
         let (tx, mut rx) = mpsc::channel(100);
         let market = Arc::new(Self {
             provider,
+            store,
             stocks: DashMap::new(),
             cleanup_tx: tx,
         });
@@ -82,8 +88,8 @@ impl Market for MarketImpl {
     /// 根据证券代码获取或创建一个聚合根实例。
     ///
     /// # Logic
-    /// 1. 尝试从 stocks 注册表中获取 Weak 引用。
-    /// 2. 若 Weak 引用能成功 upgrade，说明聚合根活跃，直接返回其 Arc。
+    /// 1. 尝试从 stocks 注册表中获取 Weak 引用并升级。
+    /// 2. 若升级成功，说明聚合根活跃，直接返回其 Arc。
     /// 3. 否则，通过 StockInner::create 构造新实例并启动后台抓取任务。
     /// 4. 将新实例的弱引用存入注册表并返回强引用。
     ///
@@ -104,8 +110,13 @@ impl Market for MarketImpl {
             exchange: None,
         };
 
-        let arc_stock =
-            StockInner::create(identity, self.cleanup_tx.clone(), self.provider.clone());
+        let arc_stock = StockInner::create(
+            identity,
+            self.cleanup_tx.clone(),
+            self.provider.clone(),
+            MemCache::new(),
+            self.store.clone(),
+        );
 
         self.stocks
             .insert(symbol.to_string(), Arc::downgrade(&arc_stock));

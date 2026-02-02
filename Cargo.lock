@@ -1973,8 +1973,12 @@ dependencies = [
  "chrono",
  "dashmap",
  "futures",
+ "okane-cache",
  "okane-core",
  "okane-feed",
+ "okane-store",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
 ]
