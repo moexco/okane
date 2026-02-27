@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 
 struct MockStock {
     identity: StockIdentity,
-    price_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Candle>>>,
+    rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Candle>>>,
 }
 
 #[async_trait]
@@ -33,32 +33,42 @@ impl Stock for MockStock {
     fn status(&self) -> StockStatus {
         StockStatus::Online
     }
-
     fn subscribe(&self, _: TimeFrame) -> CandleStream {
-        let rx = self.price_rx.clone();
+        let rx = self.rx.clone();
         let s = async_stream::stream! {
             let mut rx = rx.lock().await;
-            while let Some(candle) = rx.recv().await {
-                yield candle;
-            }
+            while let Some(c) = rx.recv().await { yield c; }
         };
         Box::pin(s)
     }
-
     async fn fetch_history(
         &self,
         _: TimeFrame,
-        _: usize,
-        _: Option<chrono::DateTime<Utc>>,
+        limit: usize,
+        end_at: Option<chrono::DateTime<Utc>>,
     ) -> Result<Vec<Candle>, MarketError> {
-        Ok(vec![])
+        // 返回足够数量的历史 K 线，close=100.0，使 SMA10=100.0
+        let base_time = end_at.unwrap_or_else(Utc::now);
+        let mut candles = Vec::new();
+        for i in 0..limit {
+            candles.push(Candle {
+                time: base_time - chrono::Duration::minutes(i as i64),
+                open: 100.0,
+                high: 100.0,
+                low: 100.0,
+                close: 100.0,
+                adj_close: None,
+                volume: 0.0,
+                is_final: true,
+            });
+        }
+        Ok(candles)
     }
 }
 
 struct MockMarket {
     stock: Arc<MockStock>,
 }
-
 #[async_trait]
 impl Market for MockMarket {
     async fn get_stock(&self, _: &str) -> Result<Arc<dyn Stock>, MarketError> {
@@ -69,7 +79,6 @@ impl Market for MockMarket {
 struct MockHandler {
     captured: Arc<Mutex<Vec<Signal>>>,
 }
-
 #[async_trait]
 impl SignalHandler for MockHandler {
     fn matches(&self, _: &Signal) -> bool {
@@ -81,128 +90,119 @@ impl SignalHandler for MockHandler {
     }
 }
 
-/// JS 策略源码：close > 150 时产生 LongEntry 信号
-const JS_STRATEGY: &str = r#"
-function onCandle(input) {
-    var candle = JSON.parse(input);
-    if (candle.close > 150.0) {
-        return JSON.stringify({
-            id: "sig_js_001",
-            symbol: "AAPL",
-            timestamp: new Date().toISOString(),
-            kind: "LongEntry",
-            strategy_id: "js-test-strategy",
-            metadata: {}
-        });
-    }
-    return "null";
-}
-"#;
-
-#[tokio::test]
-async fn test_js_strategy_integration() {
-    let (tx, rx) = mpsc::unbounded_channel();
-    let mock_stock = Arc::new(MockStock {
-        identity: StockIdentity {
-            symbol: "AAPL".to_string(),
-            exchange: Some("NASDAQ".to_string()),
-        },
-        price_rx: Arc::new(tokio::sync::Mutex::new(rx)),
-    });
-    let market = Arc::new(MockMarket {
-        stock: mock_stock.clone(),
-    });
-
-    let mut engine = JsEngine::new(market);
-    let captured_signals = Arc::new(Mutex::new(Vec::new()));
-    engine.register_handler(Box::new(MockHandler {
-        captured: captured_signals.clone(),
-    }));
-
-    // QuickJS 不是 Send，使用 LocalSet + spawn_local
-    let local = tokio::task::LocalSet::new();
-
-    let handle = local.spawn_local(async move {
-        engine
-            .run_strategy("AAPL", TimeFrame::Minute1, JS_STRATEGY)
-            .await
-    });
-
-    local
-        .run_until(async {
-            // 推送触发信号的数据 (close > 150.0)
-            tx.send(Candle {
-                time: Utc::now(),
-                open: 100.0,
-                high: 160.0,
-                low: 90.0,
-                close: 155.0,
-                adj_close: None,
-                volume: 1000.0,
-                is_final: true,
-            })
-            .unwrap();
-
-            // 给处理时间
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-            // 验证结果
-            let signals = captured_signals.lock().unwrap();
-            assert_eq!(signals.len(), 1, "Should have captured 1 signal");
-            assert_eq!(signals[0].kind, SignalKind::LongEntry);
-            assert_eq!(signals[0].strategy_id, "js-test-strategy");
-
-            handle.abort();
-        })
-        .await;
+/// 从文件系统加载 JS 示例策略
+fn load_js_example() -> String {
+    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let js_path = workspace_root.join("examples/js-strategy-demo/strategy.js");
+    std::fs::read_to_string(&js_path)
+        .unwrap_or_else(|e| panic!("Failed to read {}: {}", js_path.display(), e))
 }
 
+/// 测试 JS 示例策略：满足条件时应发出 LongEntry 信号
+/// 条件：close > SMA10 (100.0) && volume > 500 && is_final = true
 #[tokio::test]
-async fn test_js_strategy_no_signal_when_below_threshold() {
+async fn test_js_example_strategy_signal() {
+    let js_source = load_js_example();
+
     let (tx, rx) = mpsc::unbounded_channel();
     let mock_stock = Arc::new(MockStock {
         identity: StockIdentity {
             symbol: "AAPL".to_string(),
             exchange: None,
         },
-        price_rx: Arc::new(tokio::sync::Mutex::new(rx)),
+        rx: Arc::new(tokio::sync::Mutex::new(rx)),
     });
-    let market = Arc::new(MockMarket {
-        stock: mock_stock.clone(),
-    });
-
+    let market = Arc::new(MockMarket { stock: mock_stock });
     let mut engine = JsEngine::new(market);
-    let captured_signals = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::new(Mutex::new(Vec::new()));
     engine.register_handler(Box::new(MockHandler {
-        captured: captured_signals.clone(),
+        captured: captured.clone(),
     }));
 
     let local = tokio::task::LocalSet::new();
-
     let handle = local.spawn_local(async move {
         engine
-            .run_strategy("AAPL", TimeFrame::Minute1, JS_STRATEGY)
+            .run_strategy("AAPL", TimeFrame::Minute1, &js_source)
             .await
     });
 
     local
         .run_until(async {
+            // close=150.0 > SMA10(100.0), volume=1000 > 500, is_final=true → 触发
             tx.send(Candle {
                 time: Utc::now(),
                 open: 100.0,
-                high: 105.0,
+                high: 155.0,
                 low: 95.0,
-                close: 100.0,
+                close: 150.0,
                 adj_close: None,
-                volume: 500.0,
+                volume: 1000.0,
                 is_final: true,
+            })
+            .unwrap();
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+
+            let signals = captured.lock().unwrap();
+            assert_eq!(signals.len(), 1, "Should have captured 1 signal from JS example");
+            assert_eq!(signals[0].kind, SignalKind::LongEntry);
+            assert_eq!(signals[0].strategy_id, "js-ema-breakout");
+
+            handle.abort();
+        })
+        .await;
+}
+
+/// 测试 JS 示例策略：is_final=false 时应跳过
+#[tokio::test]
+async fn test_js_example_strategy_skip_non_final() {
+    let js_source = load_js_example();
+
+    let (tx, rx) = mpsc::unbounded_channel();
+    let mock_stock = Arc::new(MockStock {
+        identity: StockIdentity {
+            symbol: "AAPL".to_string(),
+            exchange: None,
+        },
+        rx: Arc::new(tokio::sync::Mutex::new(rx)),
+    });
+    let market = Arc::new(MockMarket { stock: mock_stock });
+    let mut engine = JsEngine::new(market);
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    engine.register_handler(Box::new(MockHandler {
+        captured: captured.clone(),
+    }));
+
+    let local = tokio::task::LocalSet::new();
+    let handle = local.spawn_local(async move {
+        engine
+            .run_strategy("AAPL", TimeFrame::Minute1, &js_source)
+            .await
+    });
+
+    local
+        .run_until(async {
+            // is_final=false → JS 策略直接返回 "null"
+            tx.send(Candle {
+                time: Utc::now(),
+                open: 100.0,
+                high: 155.0,
+                low: 95.0,
+                close: 150.0,
+                adj_close: None,
+                volume: 1000.0,
+                is_final: false,
             })
             .unwrap();
 
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-            let signals = captured_signals.lock().unwrap();
-            assert_eq!(signals.len(), 0, "Should NOT have captured any signal");
+            let signals = captured.lock().unwrap();
+            assert_eq!(signals.len(), 0, "Non-final candle should NOT produce any signal");
 
             handle.abort();
         })

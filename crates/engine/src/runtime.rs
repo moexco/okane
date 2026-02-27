@@ -1,39 +1,60 @@
-use extism::{Manifest, Plugin, Wasm};
-use futures::StreamExt;
+use chrono::{DateTime, Utc};
+
 use okane_core::common::TimeFrame;
 use okane_core::engine::entity::Signal;
 use okane_core::engine::error::EngineError;
 use okane_core::engine::port::SignalHandler;
 use okane_core::market::port::Market;
 use std::sync::Arc;
-use tracing::{error, info};
 
 /// # Summary
-/// 基于 WASM 的策略执行引擎。
+/// 策略来源枚举，区分 JS 和 WASM 策略。
 ///
 /// # Invariants
-/// - 负责加载策略脚本并绑定到特定个股的数据流。
-/// - 执行过程中一旦报错立即停止。
-/// - 信号处理通过已注册的钩子 (SignalHandler) 分发。
-pub struct WasmEngine {
-    // 市场数据访问端口
-    market: Arc<dyn Market>,
-    // 已注册的信号处理器
-    handlers: Vec<Box<dyn SignalHandler>>,
+/// - `JavaScript` 变体必须包含合法的 ES2020 源码。
+/// - `Wasm` 变体必须包含合法的 WASM 模块字节。
+pub enum StrategySource {
+    /// JS 源码直接执行（通过 QuickJS RuntimeEngine）
+    JavaScript(String),
+    /// 编译后的 WASM 字节码（通过 wasmtime RuntimeEngine）
+    Wasm(Vec<u8>),
 }
 
-impl WasmEngine {
+/// # Summary
+/// 插件执行上下文，提供策略运行所需的宿主能力。
+///
+/// # Invariants
+/// - `market` 引用在上下文生命周期内有效。
+/// - `current_time` 在每次 K 线到达时更新。
+pub struct PluginContext {
+    /// 市场数据访问端口
+    pub market: Arc<dyn Market>,
+    /// 当前处理的最新 K 线时间，保证回测和实盘的时间一致性
+    pub current_time: Option<DateTime<Utc>>,
+}
+
+/// # Summary
+/// 引擎基础设施，封装市场访问和信号分发的公共能力。
+///
+/// # Invariants
+/// - `handlers` 中的每个处理器必须实现 `SignalHandler`。
+/// - 信号分发顺序与注册顺序一致。
+pub struct EngineBase {
+    /// 市场数据访问端口
+    pub market: Arc<dyn Market>,
+    /// 已注册的信号处理器列表
+    pub handlers: Vec<Box<dyn SignalHandler>>,
+}
+
+impl EngineBase {
     /// # Summary
-    /// 创建引擎实例。
-    ///
-    /// # Logic
-    /// 1. 初始化包含市场驱动和空处理器列表的 WasmEngine。
+    /// 创建引擎基础设施实例。
     ///
     /// # Arguments
     /// * `market`: 市场数据驱动接口。
     ///
     /// # Returns
-    /// * `Self` - 初始化后的引擎实例。
+    /// * `Self` - 初始化后的实例。
     pub fn new(market: Arc<dyn Market>) -> Self {
         Self {
             market,
@@ -44,82 +65,10 @@ impl WasmEngine {
     /// # Summary
     /// 注册信号处理器。
     ///
-    /// # Logic
-    /// 1. 将传入的处理器追加到内部列表中。
-    ///
     /// # Arguments
     /// * `handler`: 信号处理钩子实现。
-    ///
-    /// # Returns
-    /// * None
     pub fn register_handler(&mut self, handler: Box<dyn SignalHandler>) {
         self.handlers.push(handler);
-    }
-
-    /// # Summary
-    /// 运行特定个股的策略。
-    ///
-    /// # Logic
-    /// 1. 初始化 Extism 插件实例。
-    /// 2. 获取股票聚合根并订阅指定时间周期的 K 线流。
-    /// 3. 在循环中接收 K 线，序列化为 JSON 后传给 WASM 的 `on_candle` 函数。
-    /// 4. 若产生信号，则通过 `dispatch_signal` 进行分发。
-    /// 5. 任何执行错误将导致循环终止并返回错误。
-    ///
-    /// # Arguments
-    /// * `symbol`: 证券代码。
-    /// * `timeframe`: 时间周期。
-    /// * `wasm_bytes`: 策略插件的二进制字节。
-    ///
-    /// # Returns
-    /// * `Result<(), EngineError>` - 运行成功或报错。
-    pub async fn run_strategy(
-        &self,
-        symbol: &str,
-        timeframe: TimeFrame,
-        wasm_bytes: &[u8],
-    ) -> Result<(), EngineError> {
-        info!(
-            "Starting strategy for {} with timeframe {:?}",
-            symbol, timeframe
-        );
-
-        // 初始化 Extism 插件
-        let manifest = Manifest::new([Wasm::data(wasm_bytes.to_vec())]);
-        let mut plugin =
-            Plugin::new(&manifest, [], true).map_err(|e| EngineError::Plugin(e.to_string()))?;
-
-        // 获取股票聚合根
-        let stock = self
-            .market
-            .get_stock(symbol)
-            .await
-            .map_err(|e| EngineError::Market(e.to_string()))?;
-
-        let mut stream = stock.subscribe(timeframe);
-
-        // 核心执行循环
-        while let Some(candle) = stream.next().await {
-            // 序列化输入数据
-            let input =
-                serde_json::to_string(&candle).map_err(|e| EngineError::Plugin(e.to_string()))?;
-
-            // 调用插件方法
-            match plugin.call::<&str, &str>("on_candle", &input) {
-                Ok(output) => {
-                    // 解析输出信号 (预期返回 Option<Signal> 的 JSON)
-                    if let Ok(Some(signal)) = serde_json::from_str::<Option<Signal>>(output) {
-                        self.dispatch_signal(signal).await?;
-                    }
-                }
-                Err(e) => {
-                    error!("Strategy execution failed for {}: {}", symbol, e);
-                    return Err(EngineError::Plugin(e.to_string()));
-                }
-            }
-        }
-
-        Ok(())
     }
 
     /// # Summary
@@ -134,12 +83,34 @@ impl WasmEngine {
     ///
     /// # Returns
     /// * `Result<(), EngineError>` - 分发结果。
-    async fn dispatch_signal(&self, signal: Signal) -> Result<(), EngineError> {
+    pub async fn dispatch_signal(&self, signal: Signal) -> Result<(), EngineError> {
         for handler in &self.handlers {
             if handler.matches(&signal) {
                 handler.handle(signal.clone()).await?;
             }
         }
         Ok(())
+    }
+
+    /// # Summary
+    /// 创建针对特定证券和周期的 K 线订阅流。
+    ///
+    /// # Arguments
+    /// * `symbol`: 证券代码。
+    /// * `timeframe`: K 线时间周期。
+    ///
+    /// # Returns
+    /// * 成功返回 K 线流和 Stock 聚合根，失败返回 EngineError。
+    pub async fn subscribe(
+        &self,
+        symbol: &str,
+        timeframe: TimeFrame,
+    ) -> Result<okane_core::market::port::CandleStream, EngineError> {
+        let stock = self
+            .market
+            .get_stock(symbol)
+            .await
+            .map_err(|e| EngineError::Market(e.to_string()))?;
+        Ok(stock.subscribe(timeframe))
     }
 }

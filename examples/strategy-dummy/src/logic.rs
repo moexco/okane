@@ -1,103 +1,56 @@
-use chrono::{DateTime, Utc};
-use extism_pdk::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
-/// # Summary
-/// 策略输入数据结构 (K 线)。
-///
-/// # Invariants
-/// - 与核心域 `Candle` 结构保持序列化兼容。
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct Candle {
-    // 时间戳
-    pub time: DateTime<Utc>,
-    // 开盘价
-    pub open: f64,
-    // 最高价
-    pub high: f64,
-    // 最低价
-    pub low: f64,
-    // 收盘价
     pub close: f64,
-    // 成交量
-    pub volume: f64,
-    // 是否闭合
-    pub is_final: bool,
 }
 
-/// # Summary
-/// 策略输出信号结构。
-///
-/// # Invariants
-/// - 与核心域 `Signal` 结构保持序列化兼容。
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct Signal {
-    // 唯一标识
     pub id: String,
-    // 证券代码
     pub symbol: String,
-    // 产生时间
-    pub timestamp: DateTime<Utc>,
-    // 信号种类
-    pub kind: SignalKind,
-    // 策略 ID
+    pub timestamp: String,
+    pub kind: String,
     pub strategy_id: String,
-    // 附加信息
-    pub metadata: HashMap<String, String>,
+    pub metadata: std::collections::HashMap<String, String>,
 }
 
-/// # Summary
-/// 信号种类枚举。
-///
-/// # Invariants
-/// - 必须涵盖交易指令与系统通知。
-#[derive(Debug, Serialize, PartialEq)]
-pub enum SignalKind {
-    // 进场做多
-    LongEntry,
-    // 进场做空
-    ShortEntry,
-    // 多头平仓
-    LongExit,
-    // 空头平仓
-    ShortExit,
-    // 警告
-    Alert,
-    // 信息
-    Info,
+#[unsafe(no_mangle)]
+pub fn alloc(len: i32) -> *mut u8 {
+    let mut buf = Vec::with_capacity(len as usize);
+    let ptr = buf.as_mut_ptr();
+    std::mem::forget(buf);
+    ptr
 }
 
-/// # Summary
-/// 策略逻辑入口。
-///
-/// # Logic
-/// 1. 解析输入的 JSON 字符串为 `Candle` 对象。
-/// 2. 判断收盘价是否大于 150.0。
-/// 3. 若满足条件，构造并返回一个做多信号。
-/// 4. 否则返回 null 字符串。
-///
-/// # Arguments
-/// * `input` - 包含 K 线数据的 JSON 字符串。
-///
-/// # Returns
-/// * `FnResult<String>` - 包含 `Option<Signal>` 的 JSON 字符串结果。
-#[plugin_fn]
-pub fn on_candle(input: String) -> FnResult<String> {
-    let candle: Candle = serde_json::from_str(&input).map_err(WithReturnCode::from)?;
+/// # Safety
+/// `ptr` must point to a valid, allocated buffer of at least `len` bytes.
+#[unsafe(no_mangle)]
+pub unsafe fn on_candle(ptr: *mut u8, len: i32) -> i32 {
+    let input_bytes = unsafe { Vec::from_raw_parts(ptr, len as usize, len as usize) };
 
-    if candle.close > 150.0 {
-        let signal = Signal {
-            id: "sig_dummy_001".to_string(),
-            symbol: "DUMMY".to_string(),
-            timestamp: Utc::now(),
-            kind: SignalKind::LongEntry,
-            strategy_id: "dummy-strategy".to_string(),
-            metadata: HashMap::new(),
+    if let Ok(candle) = serde_json::from_slice::<Candle>(&input_bytes)
+        && candle.close > 150.0
+    {
+        let sig = Signal {
+            id: "sig_wasm_001".to_string(),
+            symbol: "AAPL".to_string(),
+            timestamp: "2026-02-02T10:00:00Z".to_string(),
+            kind: "LongEntry".to_string(),
+            strategy_id: "wasm-dummy".to_string(),
+            metadata: std::collections::HashMap::new(),
         };
-        let output = serde_json::to_string(&Some(signal)).map_err(WithReturnCode::from)?;
-        Ok(output)
-    } else {
-        Ok("null".to_string())
+        if let Ok(mut json) = serde_json::to_vec(&sig) {
+            let len_bytes = (json.len() as u32).to_le_bytes();
+            let mut out = Vec::with_capacity(4 + json.len());
+            out.extend_from_slice(&len_bytes);
+            out.append(&mut json);
+
+            let out_ptr = out.as_mut_ptr();
+            std::mem::forget(out);
+            return out_ptr as i32;
+        }
     }
+
+    0
 }

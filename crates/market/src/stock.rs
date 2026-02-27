@@ -306,10 +306,12 @@ impl Stock for StockInner {
     ///
     /// # Logic
     /// 优先从本地持久化 Store 加载，若不足则调 Provider。
+    /// 根据 `end_at` 确定时间窗口。
     ///
     /// # Arguments
     /// * `timeframe`: 周期。
     /// * `limit`: 回溯数量。
+    /// * `end_at`: 截止时间。
     ///
     /// # Returns
     /// 历史数据结果向量。
@@ -317,19 +319,21 @@ impl Stock for StockInner {
         &self,
         timeframe: TimeFrame,
         limit: usize,
+        end_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<Candle>, MarketError> {
-        let now = chrono::Utc::now();
-        let start = now - chrono::Duration::days(limit as i64);
+        let end = end_at.unwrap_or_else(chrono::Utc::now);
+        let start = end - chrono::Duration::days(limit as i64);
+
         if let Ok(local) = self
             .store
-            .load_candles(&self.identity, timeframe, start, now)
+            .load_candles(&self.identity, timeframe, start, end)
             .await
             && local.len() >= limit
         {
             return Ok(local);
         }
         self.provider
-            .fetch_candles(&self.identity, timeframe, start, now)
+            .fetch_candles(&self.identity, timeframe, start, end)
             .await
     }
 

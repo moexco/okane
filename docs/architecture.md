@@ -58,7 +58,9 @@ graph TB
 - **feed**: 行情抓取适配器。实现 `MarketDataProvider`，目前对接 Yahoo Finance。
 - **store**: 数据持久化适配器。实现存储接口，负责 SQLite 的物理读写。
 - **cache**: 业务无关的异步 KV 存储接口。它仅作为数据在内存中的载体，不感知具体业务逻辑。
-- **engine**: 策略引擎。负责加载 WASM 脚本，并调用 `Stock` 聚合根进行指标计算和信号生成。
+- **engine**: 策略引擎。提供双运行时支持：
+  - **JsEngine (主线)**：基于 `rquickjs` (QuickJS) 在沙盒中直接执行 JavaScript 策略，覆盖开发、调试、回测、生产全生命周期。
+  - **WasmEngine (储备)**：基于 `wasmtime` 执行其他编译型语言（Rust/C/Go）生成的 WASM 策略模块，暂不优先实现。
 - **notify**: 通知适配器。实现信号推送逻辑 (Telegram/Email)。
 - **app**: 引导程序。负责将上述模块进行“接线”（依赖注入），启动主循环。
 
@@ -74,14 +76,17 @@ graph TB
 1. **获取**: 外部模块通过 `Market::get_stock("AAPL")` 获取聚合根。若已有实例，则返回现有引用。
 2. **数据链**: `feed` (抓取) -> `market` (广播并存入 `cache`) -> `store` (落库)。
 3. **逻辑链**: `engine` (获取聚合根并订阅/查询) -> `notify` (推送)。
-4. **隔离性**: 策略逻辑运行在 WASM 沙箱中，通过 `core` 定义的标准接口与系统交互。
+4. **隔离性**: 策略逻辑运行在 QuickJS 沙盒中，默认无任何 I/O 能力，所有平台能力通过 `host` 对象显式注入。
 
 ## 5. 技术特性
 - **运行时**: `tokio`
 - **数据库**: `sqlx` (SQLite)
-- **WASM 策略引擎**: 采用 **Extism** 框架。
-  - **理由**: 提供开箱即用的多语言 PDK 支持（允许使用 Go/JS/Rust 编写策略），自动处理复杂的 Host/Guest 内存交换（JSON/Bytes），大幅降低插件系统开发成本。
-- **序列化**: `serde`
+- **策略引擎 (双运行时)**:
+  - **JsEngine (主线)**: 基于 `rquickjs`，在 QuickJS 沙盒中直接执行 JS 策略。沙盒默认无文件/网络等 I/O 能力，配置 32MB 内存、1MB 栈大小限制。平台能力通过 `host` 对象注入（`log`、`now`、`fetchHistory`）。
+  - **WasmEngine (储备)**: 基于 `wasmtime`，为未来其他编译型语言策略预留。代码保留但暂不优先实现。
+  - **驱动模型 (Push Loop)**: 采用 Host-Driven 模式。引擎持有 `market.subscribe()` 流，每当有新 K 线时，主动调用策略的 `onCandle` 回调。
+  - **注意**: QuickJS 为单线程运行时（`AsyncContext` 不是 `Send`），在 tokio 多线程环境中需使用 `LocalSet::spawn_local`。
+- **序列化**: `serde` + `serde_json`
 - **数据获取模式**:
     *   **Pull (拉取)**: 用于回测或补全历史数据，通过 `fetch_candles` 同步获取。
     *   **Push (订阅)**: 用于实时策略追踪，通过 `subscribe` 返回一个异步流 (`Stream`)。

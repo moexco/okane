@@ -1,5 +1,5 @@
 [package]
-name = "strategy-dummy"
+name = "strategy-host-test"
 version = "0.1.0"
 edition = "2024"
 
@@ -7,6 +7,6 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-chrono = { version = "0.4.43", features = ["serde"] }
+chrono = { version = "0.4.43", default-features = false, features = ["serde", "alloc"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"

@@ -256,7 +256,7 @@ async fn test_stock_subscribe() {
 async fn test_stock_fetch_history() {
     let (market, _) = setup().await;
     let stock = market.get_stock("AAPL").await.unwrap();
-    let history = stock.fetch_history(TimeFrame::Day1, 10).await;
+    let history = stock.fetch_history(TimeFrame::Day1, 10, None).await;
     assert!(history.is_ok());
     assert!(!history.unwrap().is_empty());
 }

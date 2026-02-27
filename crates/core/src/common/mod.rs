@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 /// # Summary
 /// 证券标的实体，代表系统关注的特定股票或资产。
@@ -28,4 +29,18 @@ pub enum TimeFrame {
     Hour1,
     // 1日
     Day1,
+}
+
+impl FromStr for TimeFrame {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "1m" | "minute1" => Ok(TimeFrame::Minute1),
+            "5m" | "minute5" => Ok(TimeFrame::Minute5),
+            "1h" | "hour1" => Ok(TimeFrame::Hour1),
+            "1d" | "day1" => Ok(TimeFrame::Day1),
+            _ => Err(format!("Unknown TimeFrame: {}", s)),
+        }
+    }
 }

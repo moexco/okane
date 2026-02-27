@@ -89,6 +89,7 @@ pub trait Stock: Send + Sync {
     /// # Arguments
     /// * `timeframe`: K 线周期。
     /// * `limit`: 请求的数量上限。
+    /// * `end_at`: 可选的截止时间（包含），若为 None 则表示从最新时刻向前回溯。
     ///
     /// # Returns
     /// 成功返回 K 线列表，失败返回 MarketError。
@@ -96,6 +97,7 @@ pub trait Stock: Send + Sync {
         &self,
         timeframe: TimeFrame,
         limit: usize,
+        end_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<Candle>, MarketError>;
 
     /// # Summary
