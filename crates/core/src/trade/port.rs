@@ -54,6 +54,12 @@ pub trait TradePort: Send + Sync {
     /// # Arguments
     /// * `account_id` - 待查询的系统级 Account ID
     async fn get_account(&self, account_id: AccountId) -> Result<AccountSnapshot, TradeError>;
+
+    /// 查询某个逻辑账户当前的活动订单列表
+    ///
+    /// # Arguments
+    /// * `account_id` - 系统级 Account ID
+    async fn get_orders(&self, account_id: &AccountId) -> Result<Vec<Order>, TradeError>;
 }
 
 /// # Summary

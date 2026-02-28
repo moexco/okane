@@ -62,6 +62,7 @@ async fn spawn_test_server() -> (String, Arc<dyn SystemStore>, tempfile::TempDir
         strategy_manager,
         trade_port: trade_service,
         system_store: system_store.clone(),
+        market_port: market,
     };
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

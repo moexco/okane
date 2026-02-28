@@ -17,4 +17,8 @@ impl TradePort for MockTradePort {
     async fn get_account(&self, _account_id: AccountId) -> Result<AccountSnapshot, TradeError> {
         unimplemented!()
     }
+
+    async fn get_orders(&self, _account_id: &AccountId) -> Result<Vec<Order>, TradeError> {
+        Ok(vec![])
+    }
 }

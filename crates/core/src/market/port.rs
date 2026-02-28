@@ -88,16 +88,16 @@ pub trait Stock: Send + Sync {
     ///
     /// # Arguments
     /// * `timeframe`: K 线周期。
-    /// * `limit`: 请求的数量上限。
-    /// * `end_at`: 可选的截止时间（包含），若为 None 则表示从最新时刻向前回溯。
+    /// * `start`: 开始时间。
+    /// * `end`: 结束时间。
     ///
     /// # Returns
     /// 成功返回 K 线列表，失败返回 MarketError。
     async fn fetch_history(
         &self,
         timeframe: TimeFrame,
-        limit: usize,
-        end_at: Option<chrono::DateTime<chrono::Utc>>,
+        start: chrono::DateTime<chrono::Utc>,
+        end: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<Candle>, MarketError>;
 
     /// # Summary

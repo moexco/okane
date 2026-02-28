@@ -46,12 +46,12 @@ impl Stock for MockStock {
     async fn fetch_history(
         &self,
         _: TimeFrame,
-        limit: usize,
-        end_at: Option<chrono::DateTime<Utc>>,
+        _start: chrono::DateTime<Utc>,
+        end: chrono::DateTime<Utc>,
     ) -> Result<Vec<Candle>, MarketError> {
         let mut candles = Vec::new();
-        let base_time = end_at.unwrap_or_else(Utc::now);
-        for i in 0..limit {
+        let base_time = end;
+        for i in 0..5 { // 测试逻辑中期望是 5 根
             candles.push(Candle {
                 time: base_time - chrono::Duration::minutes(i as i64),
                 open: 100.0,

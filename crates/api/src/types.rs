@@ -44,6 +44,88 @@ pub struct AccountSnapshotResponse {
     pub positions: Vec<PositionResponse>,
 }
 
+/// 订单流 DTO
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct OrderResponse {
+    /// 订单 ID
+    #[schema(example = "ord-123456")]
+    pub id: String,
+    /// 归属账户 ID
+    #[schema(example = "SysAcct_Alpha_01")]
+    pub account_id: String,
+    /// 股票代码
+    #[schema(example = "NVDA")]
+    pub symbol: String,
+    /// 方向 (Buy/Sell)
+    #[schema(example = "Buy")]
+    pub direction: String,
+    /// 限价 (市价单为 null)
+    #[schema(value_type = Option<f64>, example = 120.5)]
+    pub price: Option<f64>,
+    /// 委托数量
+    #[schema(value_type = f64, example = 100.0)]
+    pub volume: f64,
+    /// 已成交数量
+    #[schema(value_type = f64, example = 50.0)]
+    pub filled_volume: f64,
+    /// 状态 (Pending, Filled, Canceled 等)
+    #[schema(example = "Pending")]
+    pub status: String,
+    /// 创建时间 (毫秒级时间戳)
+    #[schema(example = 1710000000000_i64)]
+    pub created_at: i64,
+}
+
+// ============================================================
+//  行情相关 DTO
+// ============================================================
+
+/// 股票元数据 DTO
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct StockMetadataResponse {
+    /// 股票代码
+    #[schema(example = "AAPL")]
+    pub symbol: String,
+    /// 股票名称
+    #[schema(example = "Apple Inc.")]
+    pub name: String,
+    /// 交易所
+    #[schema(example = "NASDAQ")]
+    pub exchange: String,
+    /// 货币
+    #[schema(example = "USD")]
+    pub currency: String,
+    /// 板块
+    #[schema(example = "Technology")]
+    pub sector: Option<String>,
+}
+
+/// K 线数据 DTO
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CandleResponse {
+    /// 时间戳 (ISO 8601)
+    #[schema(example = "2026-03-01T10:00:00Z")]
+    pub time: String,
+    /// 开盘价
+    #[schema(value_type = f64, example = 150.5)]
+    pub open: f64,
+    /// 最高价
+    #[schema(value_type = f64, example = 152.0)]
+    pub high: f64,
+    /// 最低价
+    #[schema(value_type = f64, example = 149.0)]
+    pub low: f64,
+    /// 收盘价
+    #[schema(value_type = f64, example = 151.0)]
+    pub close: f64,
+    /// 成交量
+    #[schema(value_type = f64, example = 1000000.0)]
+    pub volume: f64,
+    /// 是否已完结
+    #[schema(example = true)]
+    pub is_final: bool,
+}
+
 // ============================================================
 //  策略相关 DTO
 // ============================================================
@@ -276,6 +358,49 @@ impl From<&okane_core::store::port::User> for UserResponse {
             name: u.name.clone(),
             role: u.role.to_string(),
             created_at: u.created_at.to_rfc3339(),
+        }
+    }
+}
+
+impl From<okane_core::store::port::StockMetadata> for StockMetadataResponse {
+    fn from(m: okane_core::store::port::StockMetadata) -> Self {
+        Self {
+            symbol: m.symbol,
+            name: m.name,
+            exchange: m.exchange,
+            currency: m.currency,
+            sector: m.sector,
+        }
+    }
+}
+
+impl From<okane_core::market::entity::Candle> for CandleResponse {
+    fn from(c: okane_core::market::entity::Candle) -> Self {
+        Self {
+            time: c.time.to_rfc3339(),
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+            volume: c.volume,
+            is_final: c.is_final,
+        }
+    }
+}
+
+impl From<okane_core::trade::entity::Order> for OrderResponse {
+    fn from(o: okane_core::trade::entity::Order) -> Self {
+        use rust_decimal::prelude::ToPrimitive;
+        Self {
+            id: o.id.0,
+            account_id: o.account_id.0,
+            symbol: o.symbol,
+            direction: format!("{:?}", o.direction),
+            price: o.price.and_then(|p| p.to_f64()),
+            volume: o.volume.to_f64().unwrap_or(0.0),
+            filled_volume: o.filled_volume.to_f64().unwrap_or(0.0),
+            status: format!("{:?}", o.status),
+            created_at: o.created_at,
         }
     }
 }

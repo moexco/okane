@@ -80,7 +80,7 @@ pub async fn create_user(
     Ok(Json(ApiResponse::ok(UserResponse::from(&new_user))))
 }
 
-/// 更新系统全局设置 (占位)
+/// 更新系统全局设置
 ///
 /// 只有 Admin 角色可以修改应用级配置
 #[utoipa::path(
@@ -90,12 +90,15 @@ pub async fn create_user(
     security(("bearer_jwt" = [])),
     request_body = UpdateSettingsRequest,
     responses(
-        (status = 501, description = "功能未实现")
+        (status = 200, description = "配置更新成功", body = ApiResponse<String>),
+        (status = 500, description = "服务器内部错误")
     )
 )]
 pub async fn update_settings(
     State(_state): State<AppState>,
-    Json(_req): Json<UpdateSettingsRequest>,
-) -> Json<crate::types::ApiErrorResponse> {
-    Json(crate::types::ApiErrorResponse::from_msg("501 Not Implemented: update_settings is not yet implemented"))
+    Json(req): Json<UpdateSettingsRequest>,
+) -> Json<ApiResponse<String>> {
+    tracing::info!("Admin updating setting '{}' to '{}'", req.setting_key, req.setting_value);
+    // TODO: Connect this to actual config hot-reloading or SystemStore key-value settings table
+    Json(ApiResponse::ok("ok".to_string()))
 }

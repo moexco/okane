@@ -194,7 +194,7 @@ impl JsEngine {
             "fetchHistory",
             Function::new(ctx.clone(), move |symbol: String, tf: String, limit: i32| -> String {
                 let ctx_mutex = ctx_for_fetch.lock().unwrap_or_else(|e| e.into_inner());
-                let end_at = Some(ctx_mutex.time_provider.now());
+                let end_at = ctx_mutex.time_provider.now();
                 let market = ctx_mutex.market.clone();
                 drop(ctx_mutex);
 
@@ -206,9 +206,14 @@ impl JsEngine {
                 // 阻塞式桥接异步调用
                 match futures::executor::block_on(async {
                     let stock = market.get_stock(&symbol).await.map_err(|e| e.to_string())?;
+                    let end = end_at;
+                    let duration = tf_parsed.duration() * (limit * 2);
+                    let start = end - duration;
+
                     stock
-                        .fetch_history(tf_parsed, limit as usize, end_at)
+                        .fetch_history(tf_parsed, start, end)
                         .await
+                        .map(|h| h.into_iter().rev().take(limit as usize).rev().collect::<Vec<_>>())
                         .map_err(|e| e.to_string())
                 }) {
                     Ok(candles) => serde_json::to_string(&candles).unwrap_or_else(|e| {

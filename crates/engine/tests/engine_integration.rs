@@ -50,8 +50,8 @@ impl Stock for MockStock {
     async fn fetch_history(
         &self,
         _: TimeFrame,
-        _: usize,
-        _: Option<chrono::DateTime<Utc>>,
+        _: chrono::DateTime<Utc>,
+        _: chrono::DateTime<Utc>,
     ) -> Result<Vec<Candle>, MarketError> {
         Ok(vec![])
     }

@@ -48,6 +48,17 @@ impl FromStr for TimeFrame {
     }
 }
 
+impl TimeFrame {
+    pub fn duration(&self) -> chrono::Duration {
+        match self {
+            TimeFrame::Minute1 => chrono::Duration::minutes(1),
+            TimeFrame::Minute5 => chrono::Duration::minutes(5),
+            TimeFrame::Hour1 => chrono::Duration::hours(1),
+            TimeFrame::Day1 => chrono::Duration::days(1),
+        }
+    }
+}
+
 impl std::fmt::Display for TimeFrame {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

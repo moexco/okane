@@ -86,6 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         strategy_manager: manager.clone(),
         trade_port: trade_service,
         system_store,
+        market_port: market.clone(),
     };
 
     let bind_addr = format!("{}:{}", app_config.server.host, app_config.server.port);

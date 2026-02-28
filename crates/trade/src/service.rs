@@ -96,6 +96,16 @@ impl TradePort for TradeService {
     async fn get_account(&self, account_id: AccountId) -> Result<AccountSnapshot, TradeError> {
         self.account_port.snapshot(&account_id).await
     }
+
+    async fn get_orders(&self, account_id: &AccountId) -> Result<Vec<Order>, TradeError> {
+        let pending = self.pending_orders.read().await;
+        // 过滤出属于该 account_id 的活动订单
+        let orders = pending.values()
+            .filter(|o| o.account_id == *account_id)
+            .cloned()
+            .collect();
+        Ok(orders)
+    }
 }
 
 #[async_trait]

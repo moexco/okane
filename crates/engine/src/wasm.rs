@@ -291,15 +291,21 @@ impl WasmEngine {
                     let plugin_ctx = caller.data().clone();
                     let (end_at, market) = {
                         let ctx = plugin_ctx.lock().unwrap_or_else(|e| e.into_inner());
-                        (Some(ctx.time_provider.now()), ctx.market.clone())
+                        (ctx.time_provider.now(), ctx.market.clone())
                     };
 
                     // 阻塞式桥接异步调用
                     let result = futures::executor::block_on(async {
                         let stock = market.get_stock(&symbol).await.map_err(|e| e.to_string())?;
+                        // 计算起始时间 (limit * 周期 * 缓冲系数)
+                        let duration = tf.duration() * (limit * 2);
+                        let start = end_at - duration;
+                        let end = end_at;
+
                         stock
-                            .fetch_history(tf, limit as usize, end_at)
+                            .fetch_history(tf, start, end)
                             .await
+                            .map(|h| h.into_iter().rev().take(limit as usize).rev().collect::<Vec<_>>())
                             .map_err(|e| e.to_string())
                     });
 

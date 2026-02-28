@@ -235,6 +235,28 @@ impl SystemStore for SqliteSystemStore {
     }
 
     /// # Summary
+    /// 将股票从用户的自选列表移除。
+    ///
+    /// # Logic
+    /// 从 `watchlists` 表删除相关记录。
+    ///
+    /// # Arguments
+    /// * `user_id` - 用户唯一标识符。
+    /// * `symbol` - 股票代码。
+    ///
+    /// # Returns
+    /// * `Result<(), StoreError>`
+    async fn remove_from_watchlist(&self, user_id: &str, symbol: &str) -> Result<(), StoreError> {
+        sqlx::query("DELETE FROM watchlists WHERE user_id = ? AND symbol = ?")
+            .bind(user_id)
+            .bind(symbol)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// # Summary
     /// 获取用户的所有持仓。
     ///
     /// # Logic

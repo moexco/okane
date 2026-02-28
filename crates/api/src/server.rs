@@ -15,6 +15,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use okane_core::store::port::SystemStore;
 use okane_core::trade::port::TradePort;
+use okane_core::market::port::Market;
 use okane_manager::strategy::StrategyManager;
 
 use crate::routes::{account, admin, auth, strategy, market, watchlist, trade};
@@ -35,6 +36,8 @@ pub struct AppState {
     pub trade_port: Arc<dyn TradePort>,
     /// 系统数据访问接口 (用于鉴权验证和用户管理)
     pub system_store: Arc<dyn SystemStore>,
+    /// 行情数据入口 (查询K线与状态)
+    pub market_port: Arc<dyn Market>,
 }
 
 // ============================================================

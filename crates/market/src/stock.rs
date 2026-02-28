@@ -318,20 +318,21 @@ impl Stock for StockInner {
     async fn fetch_history(
         &self,
         timeframe: TimeFrame,
-        limit: usize,
-        end_at: Option<chrono::DateTime<chrono::Utc>>,
+        start: chrono::DateTime<chrono::Utc>,
+        end: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<Candle>, MarketError> {
-        let end = end_at.unwrap_or_else(chrono::Utc::now);
-        let start = end - chrono::Duration::days(limit as i64);
-
-        if let Ok(local) = self
+        // 优先从本地数据库加载
+        if let Some(local) = self
             .store
             .load_candles(&self.identity, timeframe, start, end)
             .await
-            && local.len() >= limit
+            .ok()
+            .filter(|l| !l.is_empty())
         {
             return Ok(local);
         }
+
+        // 本地缺失则拉取远端数据
         self.provider
             .fetch_candles(&self.identity, timeframe, start, end)
             .await

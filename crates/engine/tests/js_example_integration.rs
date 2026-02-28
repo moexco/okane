@@ -46,15 +46,14 @@ impl Stock for MockStock {
     async fn fetch_history(
         &self,
         _: TimeFrame,
-        limit: usize,
-        end_at: Option<chrono::DateTime<Utc>>,
+        _start: chrono::DateTime<Utc>,
+        end: chrono::DateTime<Utc>,
     ) -> Result<Vec<Candle>, MarketError> {
-        // 返回足够数量的历史 K 线，close=100.0，使 SMA10=100.0
-        let base_time = end_at.unwrap_or_else(Utc::now);
+        // 返回 10 根历史 K 线 (由 start 向前推或在范围内生成)
         let mut candles = Vec::new();
-        for i in 0..limit {
+        for i in 0..10 {
             candles.push(Candle {
-                time: base_time - chrono::Duration::minutes(i as i64),
+                time: end - chrono::Duration::minutes(i as i64),
                 open: 100.0,
                 high: 100.0,
                 low: 100.0,

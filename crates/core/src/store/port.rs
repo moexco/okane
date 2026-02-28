@@ -203,6 +203,20 @@ pub trait SystemStore: Send + Sync {
     /// 操作结果。
     async fn add_to_watchlist(&self, user_id: &str, symbol: &str) -> Result<(), StoreError>;
 
+    /// # Summary
+    /// 将股票从用户自选股中移除。
+    ///
+    /// # Logic
+    /// 从 `watchlists` 表中删除记录。
+    ///
+    /// # Arguments
+    /// * `user_id`: 用户唯一标识。
+    /// * `symbol`: 股票代码。
+    ///
+    /// # Returns
+    /// 操作结果。
+    async fn remove_from_watchlist(&self, user_id: &str, symbol: &str) -> Result<(), StoreError>;
+
     // --- 交易域 ---
 
     /// # Summary

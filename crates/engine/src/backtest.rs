@@ -58,9 +58,14 @@ impl BacktestDriver {
             .map_err(|e| e.to_string())?;
 
         // 统一预拉取回测所需的所有历史 K 线
+        // 计算一个足够宽的时间窗口，考虑周末和停牌缺口 (使用 2x 缓冲)
+        let duration = timeframe.duration() * (limit as i32 * 2);
+        let end_time = start_time + duration;
+
         let history = stock
-            .fetch_history(timeframe, limit, Some(start_time))
+            .fetch_history(timeframe, start_time, end_time)
             .await
+            .map(|h| h.into_iter().take(limit).collect::<Vec<_>>())
             .map_err(|e| e.to_string())?;
 
         if history.is_empty() {

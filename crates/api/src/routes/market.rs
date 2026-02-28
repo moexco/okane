@@ -1,7 +1,12 @@
 use axum::Json;
-use axum::extract::{Path, Query};
+use axum::extract::{Path, Query, State};
 use serde::Deserialize;
-use crate::types::ApiErrorResponse;
+use std::str::FromStr;
+use chrono::{DateTime, Utc};
+
+use okane_core::common::TimeFrame;
+use crate::server::AppState;
+use crate::types::{ApiErrorResponse, ApiResponse, CandleResponse, StockMetadataResponse};
 use utoipa::ToSchema;
 
 #[derive(Deserialize, ToSchema)]
@@ -9,10 +14,9 @@ pub struct SearchQuery {
     pub q: String,
 }
 
-/// 搜索股票 (占位)
+/// 搜索股票
 /// 
-/// # TODO
-/// 当前未实现，需通过 MarketStore 进行实际查询。
+/// 根据关键字 (代码或名称) 从存储中模糊匹配搜索股票元数据。
 #[utoipa::path(
     get,
     path = "/api/v1/market/search",
@@ -21,13 +25,21 @@ pub struct SearchQuery {
         ("q" = String, Query, description = "搜索关键字")
     ),
     responses(
-        (status = 501, description = "功能未实现")
+        (status = 200, description = "搜索成功", body = ApiResponse<Vec<StockMetadataResponse>>),
+        (status = 500, description = "内部服务器错误")
     )
 )]
 pub async fn search_stocks(
-    Query(_query): Query<SearchQuery>,
-) -> Json<ApiErrorResponse> {
-    Json(ApiErrorResponse::from_msg("501 Not Implemented: search_stocks is not yet implemented"))
+    State(state): State<AppState>,
+    Query(query): Query<SearchQuery>,
+) -> Result<Json<ApiResponse<Vec<StockMetadataResponse>>>, Json<ApiErrorResponse>> {
+    match state.system_store.search_stocks(&query.q).await {
+        Ok(results) => {
+            let dtos = results.into_iter().map(Into::into).collect();
+            Ok(Json(ApiResponse::ok(dtos)))
+        }
+        Err(e) => Err(Json(ApiErrorResponse::from_msg(format!("Store error: {}", e)))),
+    }
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -37,27 +49,47 @@ pub struct CandlesQuery {
     pub end: String,
 }
 
-/// 获取历史 K 线 (占位)
+/// 获取历史 K 线
 /// 
-/// # TODO
-/// 当前未实现，需通过 MarketStore 读取历史 K 线数据。
+/// 获取特定股票的多周期 K 线数据。时间必须为 RFC3339 格式 (例如: "2026-03-01T10:00:00Z")。
 #[utoipa::path(
     get,
     path = "/api/v1/market/candles/{symbol}",
     tag = "行情 (Market)",
     params(
         ("symbol" = String, Path, description = "股票代码"),
-        ("tf" = String, Query, description = "Timeframe (e.g., 1m, 1d)"),
+        ("tf" = String, Query, description = "Timeframe (e.g., 1m, 1h, 1d)"),
         ("start" = String, Query, description = "ISO 8601 start time"),
         ("end" = String, Query, description = "ISO 8601 end time")
     ),
     responses(
-        (status = 501, description = "功能未实现")
+        (status = 200, description = "拉取成功", body = ApiResponse<Vec<CandleResponse>>),
+        (status = 400, description = "无效的请求参数"),
+        (status = 500, description = "内部服务器错误")
     )
 )]
 pub async fn get_candles(
-    Path(_symbol): Path<String>,
-    Query(_query): Query<CandlesQuery>,
-) -> Json<ApiErrorResponse> {
-    Json(ApiErrorResponse::from_msg("501 Not Implemented: get_candles is not yet implemented"))
+    State(state): State<AppState>,
+    Path(symbol): Path<String>,
+    Query(query): Query<CandlesQuery>,
+) -> Result<Json<ApiResponse<Vec<CandleResponse>>>, Json<ApiErrorResponse>> {
+    let tf = TimeFrame::from_str(&query.tf)
+        .map_err(|e| Json(ApiErrorResponse::from_msg(format!("Invalid timeframe: {}", e))))?;
+    
+    let start = DateTime::parse_from_rfc3339(&query.start)
+        .map_err(|_| Json(ApiErrorResponse::from_msg("Invalid start time format, expected RFC3339")))?
+        .with_timezone(&Utc);
+        
+    let end = DateTime::parse_from_rfc3339(&query.end)
+        .map_err(|_| Json(ApiErrorResponse::from_msg("Invalid end time format, expected RFC3339")))?
+        .with_timezone(&Utc);
+
+    let stock_agg = state.market_port.get_stock(&symbol).await
+        .map_err(|e| Json(ApiErrorResponse::from_msg(format!("Market error: {}", e))))?;
+        
+    let history = stock_agg.fetch_history(tf, start, end).await
+        .map_err(|e| Json(ApiErrorResponse::from_msg(format!("Fetch history error: {}", e))))?;
+        
+    let dtos = history.into_iter().map(Into::into).collect();
+    Ok(Json(ApiResponse::ok(dtos)))
 }

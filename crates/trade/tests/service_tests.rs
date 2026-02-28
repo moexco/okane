@@ -16,6 +16,7 @@ struct DummyStock {
     identity: StockIdentity,
 }
 
+#[async_trait::async_trait]
 impl Stock for DummyStock {
     fn identity(&self) -> &StockIdentity {
         &self.identity
@@ -26,18 +27,15 @@ impl Stock for DummyStock {
     fn latest_candle(&self, _timeframe: TimeFrame) -> Option<Candle> { None }
     fn last_closed_candle(&self, _timeframe: TimeFrame) -> Option<Candle> { None }
     fn subscribe(&self, _timeframe: TimeFrame) -> okane_core::market::port::CandleStream { unimplemented!() }
-    fn fetch_history<'life0, 'async_trait>(
-        &'life0 self,
+    async fn fetch_history(
+        &self,
         _timeframe: TimeFrame,
-        _limit: usize,
-        _end_at: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<Vec<Candle>, MarketError>> + core::marker::Send + 'async_trait>>
-    where
-        'life0: 'async_trait,
-        Self: 'async_trait,
-    {
+        _start: chrono::DateTime<chrono::Utc>,
+        _end: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<Candle>, MarketError> {
         unimplemented!()
     }
+    
     fn status(&self) -> StockStatus { StockStatus::Online }
 }
 
