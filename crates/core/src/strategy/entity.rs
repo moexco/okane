@@ -51,6 +51,7 @@ pub enum StrategyStatus {
 pub struct StrategyInstance {
     pub id: String,
     pub symbol: String,
+    pub account_id: String, // 绑定的交易账户
     pub timeframe: TimeFrame,
     pub engine_type: EngineType,
     pub source: Vec<u8>,

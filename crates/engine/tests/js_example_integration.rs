@@ -1,3 +1,4 @@
+pub mod mock_trade;
 use async_trait::async_trait;
 use chrono::Utc;
 use okane_core::common::{Stock as StockIdentity, TimeFrame};
@@ -117,7 +118,7 @@ async fn test_js_example_strategy_signal() {
         rx: Arc::new(tokio::sync::Mutex::new(rx)),
     });
     let market = Arc::new(MockMarket { stock: mock_stock });
-    let mut engine = JsEngine::new(market);
+    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort); let mut engine = JsEngine::new(market, trade);
     let captured = Arc::new(Mutex::new(Vec::new()));
     engine.register_handler(Box::new(MockHandler {
         captured: captured.clone(),
@@ -126,7 +127,7 @@ async fn test_js_example_strategy_signal() {
     let local = tokio::task::LocalSet::new();
     let handle = local.spawn_local(async move {
         engine
-            .run_strategy("AAPL", TimeFrame::Minute1, &js_source)
+            .run_strategy("AAPL", "mock_account", TimeFrame::Minute1, &js_source)
             .await
     });
 
@@ -171,7 +172,7 @@ async fn test_js_example_strategy_skip_non_final() {
         rx: Arc::new(tokio::sync::Mutex::new(rx)),
     });
     let market = Arc::new(MockMarket { stock: mock_stock });
-    let mut engine = JsEngine::new(market);
+    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort); let mut engine = JsEngine::new(market, trade);
     let captured = Arc::new(Mutex::new(Vec::new()));
     engine.register_handler(Box::new(MockHandler {
         captured: captured.clone(),
@@ -180,7 +181,7 @@ async fn test_js_example_strategy_skip_non_final() {
     let local = tokio::task::LocalSet::new();
     let handle = local.spawn_local(async move {
         engine
-            .run_strategy("AAPL", TimeFrame::Minute1, &js_source)
+            .run_strategy("AAPL", "mock_account", TimeFrame::Minute1, &js_source)
             .await
     });
 

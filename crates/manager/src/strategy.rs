@@ -2,7 +2,7 @@ use chrono::Utc;
 use dashmap::DashMap;
 use okane_core::common::TimeFrame;
 use okane_core::engine::error::EngineError;
-use okane_core::engine::port::EngineBuilder;
+use okane_core::engine::port::{EngineBuilder, EngineBuildParams};
 use okane_core::store::error::StoreError;
 use okane_core::strategy::entity::{EngineType, StrategyInstance, StrategyStatus};
 use okane_core::strategy::port::StrategyStore;
@@ -51,6 +51,8 @@ pub struct StrategyManager {
     store: Arc<dyn StrategyStore>,
     // 引擎构建接口
     engine_builder: Arc<dyn EngineBuilder>,
+    // 交易服务通道
+    trade_port: Arc<dyn okane_core::trade::port::TradePort>,
     // 运行中的策略协程句柄，Key 为 "{user_id}_{instance_id}"
     running_tasks: DashMap<String, AbortHandle>,
 }
@@ -68,10 +70,12 @@ impl StrategyManager {
     pub fn new(
         store: Arc<dyn StrategyStore>,
         engine_builder: Arc<dyn EngineBuilder>,
+        trade_port: Arc<dyn okane_core::trade::port::TradePort>,
     ) -> Arc<Self> {
         Arc::new(Self {
             store,
             engine_builder,
+            trade_port,
             running_tasks: DashMap::new(),
         })
     }
@@ -105,6 +109,7 @@ impl StrategyManager {
         let instance = StrategyInstance {
             id: instance_id.clone(),
             symbol: req.symbol.clone(),
+            account_id: String::from("SystemDefault_01"), // 默认分配一个本地账号作为兜底
             timeframe: req.timeframe,
             engine_type: req.engine_type.clone(),
             source: req.source.clone(),
@@ -116,14 +121,15 @@ impl StrategyManager {
         // 持久化
         self.store.save_instance(user_id, &instance).await?;
 
-        // 构建引擎执行 Future
-        let fut = self.engine_builder.build(
-            req.engine_type,
-            req.symbol,
-            req.timeframe,
-            req.source,
-            Vec::new(), // TODO: 外部注入 SignalHandler 列表
-        )?;
+        let fut = self.engine_builder.build(EngineBuildParams {
+            engine_type: req.engine_type,
+            symbol: req.symbol,
+            account_id: instance.account_id.clone(),
+            timeframe: req.timeframe,
+            source: req.source,
+            handlers: Vec::new(), // TODO: 外部注入 SignalHandler 列表
+            trade_port: self.trade_port.clone(),
+        })?;
 
         // 更新状态为 Running
         self.store

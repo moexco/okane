@@ -16,3 +16,4 @@ tempfile = "3.10.1"
 tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }
 okane-store = { version = "0.1.0", path = "../store" }
 okane-engine = { version = "0.1.0", path = "../engine" }
+async-trait = "0.1.89"

@@ -1,6 +1,5 @@
-use okane_core::common::TimeFrame;
 use okane_core::engine::error::EngineError;
-use okane_core::engine::port::{EngineBuilder, SignalHandler, EngineFuture};
+use okane_core::engine::port::{EngineBuilder, EngineFuture, EngineBuildParams};
 use okane_core::market::port::Market;
 use okane_core::strategy::entity::EngineType;
 
@@ -47,17 +46,13 @@ impl EngineBuilder for EngineFactory {
     /// 4. 对于 WasmEngine：直接包装为 Send Future。
     fn build(
         &self,
-        engine_type: EngineType,
-        symbol: String,
-        timeframe: TimeFrame,
-        source: Vec<u8>,
-        handlers: Vec<Box<dyn SignalHandler>>,
+        params: EngineBuildParams,
     ) -> Result<EngineFuture, EngineError> {
         let market = self.market.clone();
 
-        match engine_type {
+        match params.engine_type {
             EngineType::JavaScript => {
-                let js_source = String::from_utf8(source).map_err(|e| {
+                let js_source = String::from_utf8(params.source).map_err(|e| {
                     EngineError::Plugin(format!("Invalid UTF-8 in JS source: {}", e))
                 })?;
 
@@ -73,12 +68,12 @@ impl EngineBuilder for EngineFactory {
 
                         let local = tokio::task::LocalSet::new();
                         local.block_on(&rt, async move {
-                            let mut engine = JsEngine::new(market);
-                            for handler in handlers {
+                            let mut engine = JsEngine::new(market, params.trade_port);
+                            for handler in params.handlers {
                                 engine.register_handler(handler);
                             }
                             let result = engine
-                                .run_strategy(&symbol, timeframe, &js_source)
+                                .run_strategy(&params.symbol, &params.account_id, params.timeframe, &js_source)
                                 .await;
                             let _ = tx.send(result);
                         });
@@ -92,12 +87,12 @@ impl EngineBuilder for EngineFactory {
             EngineType::Wasm => {
                 // WasmEngine 的 Future 是 Send 的，可以直接包装
                 Ok(Box::pin(async move {
-                    let mut engine = WasmEngine::new(market);
-                    for handler in handlers {
+                    let mut engine = WasmEngine::new(market, params.trade_port);
+                    for handler in params.handlers {
                         engine.register_handler(handler);
                     }
                     engine
-                        .run_strategy(&symbol, timeframe, &source)
+                        .run_strategy(&params.symbol, &params.account_id, params.timeframe, &params.source)
                         .await
                 }))
             }

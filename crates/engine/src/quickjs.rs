@@ -18,6 +18,7 @@ use tracing::{error, info, warn};
 /// - 适用于策略开发、调试和回测场景。
 pub struct JsEngine {
     pub base: EngineBase,
+    trade_port: Arc<dyn okane_core::trade::port::TradePort>,
 }
 
 impl JsEngine {
@@ -29,9 +30,13 @@ impl JsEngine {
     ///
     /// # Returns
     /// * `Self` - 初始化后的引擎实例。
-    pub fn new(market: Arc<dyn Market>) -> Self {
+    pub fn new(
+        market: Arc<dyn Market>,
+        trade_port: Arc<dyn okane_core::trade::port::TradePort>,
+    ) -> Self {
         Self {
             base: EngineBase::new(market),
+            trade_port,
         }
     }
 
@@ -64,6 +69,7 @@ impl JsEngine {
     pub async fn run_strategy(
         &self,
         symbol: &str,
+        account_id: &str,
         timeframe: TimeFrame,
         js_source: &str,
     ) -> Result<(), EngineError> {
@@ -87,6 +93,8 @@ impl JsEngine {
         // 共享的插件上下文
         let plugin_ctx = Arc::new(Mutex::new(PluginContext {
             market: self.base.market.clone(),
+            trade_port: self.trade_port.clone(),
+            account_id: account_id.to_string(),
             current_time: None,
         }));
 
@@ -211,6 +219,74 @@ impl JsEngine {
                     Ok(candles) => serde_json::to_string(&candles).unwrap_or_else(|e| {
                         format!("{{\"error\": \"{}\"}}", e)
                     }),
+                    Err(e) => format!("{{\"error\": \"{}\"}}", e),
+                }
+            })
+            .map_err(|e| EngineError::Plugin(e.to_string()))?,
+        )
+        .map_err(|e| EngineError::Plugin(e.to_string()))?;
+
+        // host.buy(symbol: string, price: number | null, volume: number) -> string (OrderId | Error)
+        let ctx_for_buy = plugin_ctx.clone();
+        host.set(
+            "buy",
+            Function::new(ctx.clone(), move |symbol: String, price: Option<f64>, volume: f64| -> String {
+                let ctx_mutex = ctx_for_buy.lock().unwrap();
+                let trade_port = ctx_mutex.trade_port.clone();
+                let account_id = ctx_mutex.account_id.clone();
+                drop(ctx_mutex);
+
+                let req_price = price.and_then(rust_decimal::Decimal::from_f64_retain);
+                let req_vol = rust_decimal::Decimal::from_f64_retain(volume).unwrap_or(rust_decimal::Decimal::ZERO);
+                
+                let order = okane_core::trade::entity::Order::new(
+                    okane_core::trade::entity::OrderId(uuid::Uuid::new_v4().to_string()),
+                    okane_core::trade::entity::AccountId(account_id),
+                    symbol,
+                    okane_core::trade::entity::OrderDirection::Buy,
+                    req_price,
+                    req_vol,
+                    0,
+                );
+
+                match futures::executor::block_on(async {
+                    trade_port.submit_order(order).await
+                }) {
+                    Ok(oid) => oid.0,
+                    Err(e) => format!("{{\"error\": \"{}\"}}", e),
+                }
+            })
+            .map_err(|e| EngineError::Plugin(e.to_string()))?,
+        )
+        .map_err(|e| EngineError::Plugin(e.to_string()))?;
+
+        // host.sell(symbol: string, price: number | null, volume: number) -> string (OrderId | Error)
+        let ctx_for_sell = plugin_ctx.clone();
+        host.set(
+            "sell",
+            Function::new(ctx.clone(), move |symbol: String, price: Option<f64>, volume: f64| -> String {
+                let ctx_mutex = ctx_for_sell.lock().unwrap();
+                let trade_port = ctx_mutex.trade_port.clone();
+                let account_id = ctx_mutex.account_id.clone();
+                drop(ctx_mutex);
+
+                let req_price = price.and_then(rust_decimal::Decimal::from_f64_retain);
+                let req_vol = rust_decimal::Decimal::from_f64_retain(volume).unwrap_or(rust_decimal::Decimal::ZERO);
+                
+                let order = okane_core::trade::entity::Order::new(
+                    okane_core::trade::entity::OrderId(uuid::Uuid::new_v4().to_string()),
+                    okane_core::trade::entity::AccountId(account_id),
+                    symbol,
+                    okane_core::trade::entity::OrderDirection::Sell,
+                    req_price,
+                    req_vol,
+                    0,
+                );
+
+                match futures::executor::block_on(async {
+                    trade_port.submit_order(order).await
+                }) {
+                    Ok(oid) => oid.0,
                     Err(e) => format!("{{\"error\": \"{}\"}}", e),
                 }
             })

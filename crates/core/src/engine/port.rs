@@ -48,6 +48,18 @@ use std::pin::Pin;
 pub type EngineFuture = Pin<Box<dyn Future<Output = Result<(), EngineError>> + Send>>;
 
 /// # Summary
+/// 构建引擎任务的参数集合。
+pub struct EngineBuildParams {
+    pub engine_type: EngineType,
+    pub symbol: String,
+    pub account_id: String,
+    pub timeframe: TimeFrame,
+    pub source: Vec<u8>,
+    pub handlers: Vec<Box<dyn SignalHandler>>,
+    pub trade_port: std::sync::Arc<dyn crate::trade::port::TradePort>,
+}
+
+/// # Summary
 /// 引擎构建接口。
 /// 由 `crates/engine` 实现，通过 `crates/app` 注入到 `crates/manager`，
 /// 使 manager 无需编译期依赖任何具体引擎实现。
@@ -60,20 +72,12 @@ pub trait EngineBuilder: Send + Sync {
     /// 根据引擎类型和策略配置，构建一个可执行的策略运行任务。
     ///
     /// # Arguments
-    /// * `engine_type` - 目标引擎类型。
-    /// * `symbol` - 目标证券代码。
-    /// * `timeframe` - K 线时间周期。
-    /// * `source` - 策略源码 (JS) 或字节码 (WASM)。
-    /// * `handlers` - 信号处理器列表，由调用方组装后传入。
+    /// * `params` - 策略执行所需的所有参数。
     ///
     /// # Returns
     /// * `Result<Pin<Box<dyn Future<...>>>>` - 可 spawn 的异步任务闭包。
     fn build(
         &self,
-        engine_type: EngineType,
-        symbol: String,
-        timeframe: TimeFrame,
-        source: Vec<u8>,
-        handlers: Vec<Box<dyn SignalHandler>>,
+        params: EngineBuildParams,
     ) -> Result<EngineFuture, EngineError>;
 }

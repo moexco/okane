@@ -126,6 +126,8 @@ graph TB
 
 项目遵循 **单模块单目录 (Single Module per Directory)** 的拆分原则，杜绝"上帝文件"。
 
+代码必须经过cargo clippy检查且不存在警告，禁止使用 `#[allow(clippy::too_many_arguments)]` 之类的东西绕过警告。
+
 ### Core 领域层目录结构
 `crates/core` 必须按照**业务子域**进行垂直切分，每个子域拥有独立的目录和 `mod.rs` 入口。接口定义文件统一命名为 `port.rs`。
 

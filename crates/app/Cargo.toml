@@ -10,6 +10,7 @@ okane-feed = { version = "0.1.0", path = "../feed" }
 okane-manager = { version = "0.1.0", path = "../manager" }
 okane-market = { version = "0.1.0", path = "../market" }
 okane-store = { version = "0.1.0", path = "../store" }
+okane-trade = { version = "0.1.0", path = "../trade" }
 tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "signal"] }
 tracing = "0.1.43"
 tracing-subscriber = "0.3.19"

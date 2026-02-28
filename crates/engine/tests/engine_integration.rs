@@ -1,3 +1,4 @@
+pub mod mock_trade;
 use async_trait::async_trait;
 use chrono::Utc;
 use okane_core::common::{Stock as StockIdentity, TimeFrame};
@@ -113,7 +114,7 @@ async fn test_js_strategy_integration() {
         stock: mock_stock.clone(),
     });
 
-    let mut engine = JsEngine::new(market);
+    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort); let mut engine = JsEngine::new(market, trade);
     let captured_signals = Arc::new(Mutex::new(Vec::new()));
     engine.register_handler(Box::new(MockHandler {
         captured: captured_signals.clone(),
@@ -124,7 +125,7 @@ async fn test_js_strategy_integration() {
 
     let handle = local.spawn_local(async move {
         engine
-            .run_strategy("AAPL", TimeFrame::Minute1, JS_STRATEGY)
+            .run_strategy("AAPL", "mock_account", TimeFrame::Minute1, JS_STRATEGY)
             .await
     });
 
@@ -171,7 +172,7 @@ async fn test_js_strategy_no_signal_when_below_threshold() {
         stock: mock_stock.clone(),
     });
 
-    let mut engine = JsEngine::new(market);
+    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort); let mut engine = JsEngine::new(market, trade);
     let captured_signals = Arc::new(Mutex::new(Vec::new()));
     engine.register_handler(Box::new(MockHandler {
         captured: captured_signals.clone(),
@@ -181,7 +182,7 @@ async fn test_js_strategy_no_signal_when_below_threshold() {
 
     let handle = local.spawn_local(async move {
         engine
-            .run_strategy("AAPL", TimeFrame::Minute1, JS_STRATEGY)
+            .run_strategy("AAPL", "mock_account", TimeFrame::Minute1, JS_STRATEGY)
             .await
     });
 

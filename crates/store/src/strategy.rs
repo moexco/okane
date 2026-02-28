@@ -55,6 +55,7 @@ impl SqliteStrategyStore {
             CREATE TABLE IF NOT EXISTS strategy_instances (
                 id TEXT PRIMARY KEY,
                 symbol TEXT NOT NULL,
+                account_id TEXT NOT NULL DEFAULT '',
                 timeframe TEXT NOT NULL,
                 engine_type TEXT NOT NULL,
                 source BLOB NOT NULL,
@@ -105,12 +106,13 @@ impl StrategyStore for SqliteStrategyStore {
         sqlx::query(
             r#"
             INSERT OR REPLACE INTO strategy_instances 
-            (id, symbol, timeframe, engine_type, source, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (id, symbol, account_id, timeframe, engine_type, source, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&instance.id)
         .bind(&instance.symbol)
+        .bind(&instance.account_id)
         .bind(instance.timeframe.to_string())
         .bind(instance.engine_type.to_string())
         .bind(&instance.source)
@@ -125,8 +127,8 @@ impl StrategyStore for SqliteStrategyStore {
 
     async fn get_instance(&self, user_id: &str, id: &str) -> Result<StrategyInstance, StoreError> {
         let pool = self.get_or_init_pool(user_id).await?;
-        let row = sqlx::query_as::<_, (String, String, String, String, Vec<u8>, String, DateTime<Utc>, DateTime<Utc>)>(
-            "SELECT id, symbol, timeframe, engine_type, source, status, created_at, updated_at FROM strategy_instances WHERE id = ?"
+        let row = sqlx::query_as::<_, (String, String, String, String, String, Vec<u8>, String, DateTime<Utc>, DateTime<Utc>)>(
+            "SELECT id, symbol, account_id, timeframe, engine_type, source, status, created_at, updated_at FROM strategy_instances WHERE id = ?"
         )
         .bind(id)
         .fetch_optional(&pool)
@@ -137,12 +139,13 @@ impl StrategyStore for SqliteStrategyStore {
         Ok(StrategyInstance {
             id: row.0,
             symbol: row.1,
-            timeframe: row.2.parse().map_err(|e: String| StoreError::Database(e))?,
-            engine_type: row.3.parse().map_err(|e: String| StoreError::Database(e))?,
-            source: row.4,
-            status: str_to_status(&row.5),
-            created_at: row.6,
-            updated_at: row.7,
+            account_id: row.2,
+            timeframe: row.3.parse().map_err(|e: String| StoreError::Database(e))?,
+            engine_type: row.4.parse().map_err(|e: String| StoreError::Database(e))?,
+            source: row.5,
+            status: str_to_status(&row.6),
+            created_at: row.7,
+            updated_at: row.8,
         })
     }
 
@@ -160,8 +163,8 @@ impl StrategyStore for SqliteStrategyStore {
 
     async fn list_instances(&self, user_id: &str) -> Result<Vec<StrategyInstance>, StoreError> {
         let pool = self.get_or_init_pool(user_id).await?;
-        let rows = sqlx::query_as::<_, (String, String, String, String, Vec<u8>, String, DateTime<Utc>, DateTime<Utc>)> (
-            "SELECT id, symbol, timeframe, engine_type, source, status, created_at, updated_at FROM strategy_instances ORDER BY created_at DESC"
+        let rows = sqlx::query_as::<_, (String, String, String, String, String, Vec<u8>, String, DateTime<Utc>, DateTime<Utc>)> (
+            "SELECT id, symbol, account_id, timeframe, engine_type, source, status, created_at, updated_at FROM strategy_instances ORDER BY created_at DESC"
         )
         .fetch_all(&pool)
         .await
@@ -171,12 +174,13 @@ impl StrategyStore for SqliteStrategyStore {
              Ok(StrategyInstance {
                 id: row.0,
                 symbol: row.1,
-                timeframe: row.2.parse().map_err(|e: String| StoreError::Database(e))?,
-                engine_type: row.3.parse().map_err(|e: String| StoreError::Database(e))?,
-                source: row.4,
-                status: str_to_status(&row.5),
-                created_at: row.6,
-                updated_at: row.7,
+                account_id: row.2,
+                timeframe: row.3.parse().map_err(|e: String| StoreError::Database(e))?,
+                engine_type: row.4.parse().map_err(|e: String| StoreError::Database(e))?,
+                source: row.5,
+                status: str_to_status(&row.6),
+                created_at: row.7,
+                updated_at: row.8,
             })
         }).collect()
     }

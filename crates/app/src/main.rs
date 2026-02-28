@@ -6,6 +6,9 @@ use okane_manager::strategy::StrategyManager;
 use okane_market::manager::MarketImpl;
 use okane_store::market::SqliteMarketStore;
 use okane_store::strategy::SqliteStrategyStore;
+use okane_trade::account::AccountManager;
+use okane_trade::service::TradeService;
+use okane_core::trade::port::TradePort;
 use tracing::info;
 
 /// # Summary
@@ -35,12 +38,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4. 实例化引擎工厂（App 层知道具体实现，Manager 不知道）
     let engine_builder = Arc::new(EngineFactory::new(market.clone()));
 
-    // 5. 构造应用服务层（注入 Core Trait 抽象）
-    let _manager = StrategyManager::new(strategy_store, engine_builder);
+    // 5. 实例化交易服务（目前使用本地撮合和内存账户）
+    let account_manager = Arc::new(AccountManager::default());
+    let trade_service: Arc<dyn TradePort> = Arc::new(TradeService::new(account_manager, market.clone()));
+
+    // 6. 构造应用服务层（注入 Core Trait 抽象）
+    let _manager = StrategyManager::new(strategy_store, engine_builder, trade_service);
 
     info!("StrategyManager initialized. Waiting for signals...");
 
-    // 6. 挂起主线程，等待外部退出信号
+    // 7. 挂起主线程，等待外部退出信号
     tokio::signal::ctrl_c().await?;
     info!("Shutdown signal received. Exiting...");
 

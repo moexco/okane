@@ -1891,6 +1891,7 @@ dependencies = [
  "okane-manager",
  "okane-market",
  "okane-store",
+ "okane-trade",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1930,6 +1931,7 @@ dependencies = [
  "futures",
  "okane-core",
  "rquickjs",
+ "rust_decimal",
  "serde_json",
  "tokio",
  "tracing",
@@ -1956,6 +1958,7 @@ dependencies = [
 name = "okane-manager"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "dashmap",
  "okane-core",

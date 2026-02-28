@@ -17,6 +17,7 @@ use wasmtime::*;
 /// - 适用于生产运行或第三方高性能策略插件。
 pub struct WasmEngine {
     pub base: EngineBase,
+    trade_port: Arc<dyn okane_core::trade::port::TradePort>,
 }
 
 impl WasmEngine {
@@ -28,9 +29,13 @@ impl WasmEngine {
     ///
     /// # Returns
     /// * `Self` - 初始化后的引擎实例。
-    pub fn new(market: Arc<dyn Market>) -> Self {
+    pub fn new(
+        market: Arc<dyn Market>,
+        trade_port: Arc<dyn okane_core::trade::port::TradePort>,
+    ) -> Self {
         Self {
             base: EngineBase::new(market),
+            trade_port,
         }
     }
 
@@ -66,6 +71,7 @@ impl WasmEngine {
     pub async fn run_strategy(
         &self,
         symbol: &str,
+        account_id: &str,
         timeframe: TimeFrame,
         wasm_bytes: &[u8],
     ) -> Result<(), EngineError> {
@@ -82,6 +88,8 @@ impl WasmEngine {
 
         let plugin_ctx = Arc::new(Mutex::new(PluginContext {
             market: self.base.market.clone(),
+            trade_port: self.trade_port.clone(),
+            account_id: account_id.to_string(),
             current_time: None,
         }));
 
@@ -328,6 +336,94 @@ impl WasmEngine {
                     }
                 },
             )
+            .map_err(|e| EngineError::Plugin(e.to_string()))?;
+
+        // 辅助闭包：处理报单逻辑（买/卖）
+        let process_order = |
+            mut caller: Caller<'_, Arc<Mutex<PluginContext>>>,
+            sym_ptr: i32,
+            sym_len: i32,
+            price_f64: f64, // 使用 f64 传递价格以简化 FFI
+            vol_f64: f64,   // 使用 f64 传递数量以简化 FFI
+            out_ptr: i32,
+            direction: okane_core::trade::entity::OrderDirection,
+        | -> i32 {
+            let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m,
+                None => return 0,
+            };
+
+            // 读取 symbol
+            let mut sym_buf = vec![0u8; sym_len as usize];
+            if memory.read(&caller, sym_ptr as usize, &mut sym_buf).is_err() {
+                return 0;
+            }
+            let symbol = match String::from_utf8(sym_buf) {
+                Ok(s) => s,
+                Err(_) => return 0,
+            };
+
+            // 获取 trade_port 和 account_id
+            let plugin_ctx = caller.data().clone();
+            let (trade_port, account_id) = {
+                let ctx = plugin_ctx.lock().unwrap();
+                (ctx.trade_port.clone(), ctx.account_id.clone())
+            };
+
+            let req_price = if price_f64 > 0.0 {
+                rust_decimal::Decimal::from_f64_retain(price_f64)
+            } else {
+                None
+            };
+            let req_vol = rust_decimal::Decimal::from_f64_retain(vol_f64).unwrap_or(rust_decimal::Decimal::ZERO);
+
+            let order = okane_core::trade::entity::Order::new(
+                okane_core::trade::entity::OrderId(uuid::Uuid::new_v4().to_string()),
+                okane_core::trade::entity::AccountId(account_id),
+                symbol,
+                direction,
+                req_price,
+                req_vol,
+                0, // mock strategy id
+            );
+
+            // 阻塞调用下单
+            let result = futures::executor::block_on(async {
+                trade_port.submit_order(order).await
+            });
+
+            match result {
+                Ok(oid) => {
+                    let json = format!("{{\"order_id\": \"{}\"}}", oid.0);
+                    let json_bytes = json.as_bytes();
+                    let len_bytes = (json_bytes.len() as u32).to_le_bytes();
+                    if memory.write(&mut caller, out_ptr as usize, &len_bytes).is_err() { return 0; }
+                    if memory.write(&mut caller, (out_ptr as usize) + 4, json_bytes).is_err() { return 0; }
+                    json_bytes.len() as i32
+                }
+                Err(e) => {
+                    let json = format!("{{\"error\": \"{}\"}}", e);
+                    let json_bytes = json.as_bytes();
+                    let len_bytes = (json_bytes.len() as u32).to_le_bytes();
+                    if memory.write(&mut caller, out_ptr as usize, &len_bytes).is_err() { return 0; }
+                    if memory.write(&mut caller, (out_ptr as usize) + 4, json_bytes).is_err() { return 0; }
+                    json_bytes.len() as i32
+                }
+            }
+        };
+
+        // host_buy(sym_ptr: i32, sym_len: i32, price: f64, vol: f64, out_ptr: i32) -> i32
+        linker
+            .func_wrap("env", "host_buy", move |caller: Caller<'_, Arc<Mutex<PluginContext>>>, sym_ptr: i32, sym_len: i32, price: f64, vol: f64, out_ptr: i32| -> i32 {
+                process_order(caller, sym_ptr, sym_len, price, vol, out_ptr, okane_core::trade::entity::OrderDirection::Buy)
+            })
+            .map_err(|e| EngineError::Plugin(e.to_string()))?;
+
+        // host_sell(sym_ptr: i32, sym_len: i32, price: f64, vol: f64, out_ptr: i32) -> i32
+        linker
+            .func_wrap("env", "host_sell", move |caller: Caller<'_, Arc<Mutex<PluginContext>>>, sym_ptr: i32, sym_len: i32, price: f64, vol: f64, out_ptr: i32| -> i32 {
+                process_order(caller, sym_ptr, sym_len, price, vol, out_ptr, okane_core::trade::entity::OrderDirection::Sell)
+            })
             .map_err(|e| EngineError::Plugin(e.to_string()))?;
 
         Ok(())

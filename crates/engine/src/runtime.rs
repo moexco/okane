@@ -29,6 +29,10 @@ pub enum StrategySource {
 pub struct PluginContext {
     /// 市场数据访问端口
     pub market: Arc<dyn Market>,
+    /// 交易指令下发端口
+    pub trade_port: Arc<dyn okane_core::trade::port::TradePort>,
+    /// 绑定的交易账户 ID
+    pub account_id: String,
     /// 当前处理的最新 K 线时间，保证回测和实盘的时间一致性
     pub current_time: Option<DateTime<Utc>>,
 }

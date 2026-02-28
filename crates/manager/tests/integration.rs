@@ -1,6 +1,7 @@
+pub mod mock_trade;
 use okane_core::common::TimeFrame;
 use okane_core::engine::error::EngineError;
-use okane_core::engine::port::{EngineBuilder, SignalHandler, EngineFuture};
+use okane_core::engine::port::{EngineBuilder, EngineFuture, EngineBuildParams};
 use okane_core::strategy::entity::{EngineType, StrategyStatus};
 use okane_manager::strategy::{StartRequest, StrategyManager};
 use okane_store::strategy::SqliteStrategyStore;
@@ -14,11 +15,7 @@ struct MockEngineBuilder;
 impl EngineBuilder for MockEngineBuilder {
     fn build(
         &self,
-        _engine_type: EngineType,
-        _symbol: String,
-        _timeframe: TimeFrame,
-        _source: Vec<u8>,
-        _handlers: Vec<Box<dyn SignalHandler>>,
+        _params: EngineBuildParams,
     ) -> Result<EngineFuture, EngineError> {
         Ok(Box::pin(async {
             // 模拟策略运行一段时间
@@ -35,7 +32,8 @@ async fn test_strategy_lifecycle() {
 
     let store = Arc::new(SqliteStrategyStore::new().unwrap());
     let engine_builder = Arc::new(MockEngineBuilder);
-    let manager = StrategyManager::new(store, engine_builder);
+    let trade_port = Arc::new(mock_trade::MockTradePort);
+    let manager = StrategyManager::new(store, engine_builder, trade_port);
 
     let user_id = "test_user";
     let req = StartRequest {
@@ -63,14 +61,14 @@ async fn test_strategy_lifecycle() {
     // 4. 下发一个不停止的策略
     struct InfiniteEngineBuilder;
     impl EngineBuilder for InfiniteEngineBuilder {
-        fn build(&self, _: EngineType, _: String, _: TimeFrame, _: Vec<u8>, _: Vec<Box<dyn SignalHandler>>) -> Result<EngineFuture, EngineError> {
+        fn build(&self, _params: EngineBuildParams) -> Result<EngineFuture, EngineError> {
             Ok(Box::pin(async {
                 loop { sleep(Duration::from_secs(1)).await; }
             }))
         }
     }
     
-    let manager = StrategyManager::new(Arc::new(SqliteStrategyStore::new().unwrap()), Arc::new(InfiniteEngineBuilder));
+    let manager = StrategyManager::new(Arc::new(SqliteStrategyStore::new().unwrap()), Arc::new(InfiniteEngineBuilder), Arc::new(mock_trade::MockTradePort));
     let req = StartRequest {
         symbol: "AAPL".to_string(),
         timeframe: TimeFrame::Minute1,
