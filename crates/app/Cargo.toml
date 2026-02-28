@@ -4,3 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+okane-core = { version = "0.1.0", path = "../core" }
+okane-engine = { version = "0.1.0", path = "../engine" }
+okane-feed = { version = "0.1.0", path = "../feed" }
+okane-manager = { version = "0.1.0", path = "../manager" }
+okane-market = { version = "0.1.0", path = "../market" }
+okane-store = { version = "0.1.0", path = "../store" }
+tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "signal"] }
+tracing = "0.1.43"
+tracing-subscriber = "0.3.19"

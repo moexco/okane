@@ -44,3 +44,14 @@ impl FromStr for TimeFrame {
         }
     }
 }
+
+impl std::fmt::Display for TimeFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TimeFrame::Minute1 => write!(f, "1m"),
+            TimeFrame::Minute5 => write!(f, "5m"),
+            TimeFrame::Hour1 => write!(f, "1h"),
+            TimeFrame::Day1 => write!(f, "1d"),
+        }
+    }
+}

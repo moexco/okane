@@ -86,7 +86,9 @@ async fn test_market_broadcast_with_real_feed() {
         );
     };
 
-    if let Err(_) = tokio::time::timeout(tokio::time::Duration::from_secs(15), wait_for_data).await
+    if tokio::time::timeout(tokio::time::Duration::from_secs(15), wait_for_data)
+        .await
+        .is_err()
     {
         eprintln!("Broadcast integration test timed out (normal if market is closed or no trades)");
     }

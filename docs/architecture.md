@@ -4,16 +4,17 @@
 
 ```mermaid
 graph TB
-    subgraph "启动层 (Entrance)"
+    subgraph "启动层 (DI Container)"
         App[crates/app]
     end
 
-    subgraph "核心应用层 (Application)"
-        Engine[crates/engine]
+    subgraph "应用层 (Application Service)"
+        Manager[crates/manager]
     end
 
     subgraph "领域实现层 (Domain Implementation)"
         MarketImpl[crates/market]
+        Engine[crates/engine]
     end
 
     subgraph "领域层 (Domain)"
@@ -27,56 +28,72 @@ graph TB
         Cache[crates/cache]
     end
 
-    %% 依赖关系
+    %% 编译期依赖关系
+    %% App 是唯一知道所有具体实现的组装点
+    App --> Manager
     App --> Engine
     App --> Feed
     App --> Store
     App --> Notify
-    App --> Core
     App --> MarketImpl
     App --> Cache
+    App --> Core
 
+    %% Manager 编译期仅依赖 Core
+    Manager --> Core
+
+    %% 所有实现层编译期仅依赖 Core
     Engine --> Core
+    MarketImpl --> Core
     Feed --> Core
     Store --> Core
     Notify --> Core
     Cache --> Core
-    MarketImpl --> Core
 
-    %% 运行时逻辑流向 (通过 Trait)
-    Engine -. 使用接口 .-> Core
-    MarketImpl -. 实现接口 .-> Core
-    Feed -. 实现接口 .-> Core
-    Store -. 实现接口 .-> Core
-    Notify -. 实现接口 .-> Core
-    Cache -. 实现接口 .-> Core
+    %% 运行时注入关系 (App 在 main 中通过 Arc<dyn Trait> 注入)
+    App -. "注入 Arc<dyn Market>" .-> Manager
+    App -. "注入 Arc<dyn StrategyStore>" .-> Manager
+    App -. "注入 Arc<dyn EngineBuilder>" .-> Manager
 ```
 
 ## 2. 模块职责说明 (Crates)
-- **core**: 定义系统核心。包含 `Stock` 聚合根、`Candle` 时序数据、以及 `MarketDataProvider`、`Market` 领域服务等 **Port (端口/接口)**。它是系统的防腐层核心，不依赖外部。
+- **core**: 定义系统核心领域。包含 `Stock`、`StrategyInstance` 聚合根、`Candle` 时序数据、以及 `Market`、`MarketDataProvider`、`StrategyStore`、`EngineBuilder` 等 **Port (端口/接口)**。它是系统的防腐层核心，不依赖外部。
+- **manager**: 独立的应用调度服务 (Application Service / Facade)。编译期**仅依赖 `core`**，所有具体实现通过 `Arc<dyn Trait>` 由 `app` 在启动时注入。负责根据请求创建 `StrategyInstance` 聚合根，通过 `EngineBuilder` 接口动态分发给对应的引擎执行，并管控 `tokio::spawn` 协程的生命周期（启停、监控）。
 - **market**: 领域逻辑实现。负责 `Market` 和 `Stock` 契约的具体实现。包含单源订阅、多路广播、以及基于引用计数的资源自动回收逻辑。
-- **feed**: 行情抓取适配器。实现 `MarketDataProvider`，目前对接 Yahoo Finance。
-- **store**: 数据持久化适配器。实现存储接口，负责 SQLite 的物理读写。
-- **cache**: 业务无关的异步 KV 存储接口。它仅作为数据在内存中的载体，不感知具体业务逻辑。
-- **engine**: 策略引擎。提供双运行时支持：
+- **engine**: 策略引擎执行器 (Infrastructure Executor)。提供双运行时支持，本身**无状态**，通过实现 `EngineBuilder` 接口被 `manager` 间接调用：
   - **JsEngine (主线)**：基于 `rquickjs` (QuickJS) 在沙盒中直接执行 JavaScript 策略，覆盖开发、调试、回测、生产全生命周期。
   - **WasmEngine (储备)**：基于 `wasmtime` 执行其他编译型语言（Rust/C/Go）生成的 WASM 策略模块，暂不优先实现。
+- **feed**: 行情抓取适配器。实现 `MarketDataProvider`，目前对接 Yahoo Finance。
+- **store**: 数据持久化适配器。实现存储接口，负责 SQLite 的物理读写。策略存储采用"一户一库" (One Database per User) 策略以规避 SQLite 并发瓶颈。
+- **cache**: 业务无关的异步 KV 存储接口。它仅作为数据在内存中的载体，不感知具体业务逻辑。
 - **notify**: 通知适配器。实现信号推送逻辑 (Telegram/Email)。
-- **app**: 引导程序。负责将上述模块进行“接线”（依赖注入），启动主循环。
+- **app**: 纯粹的 DI 容器 (Dependency Injection) 与启动引导程序。负责实例化所有具体实现组件并通过 `Arc<dyn Trait>` 注入到 `manager`，然后挂载前端接入层（Web API / CLI）。自身不包含业务逻辑。
 
-## 3. 核心领域对象：Stock 聚合根
-`Stock` 是系统中最核心的聚合根，它具备以下特性：
+## 3. 核心领域对象
+
+### 3.1 Stock 聚合根
+`Stock` 是系统中最核心的行情聚合根，它具备以下特性：
 - **身份唯一性**: 同一个 Symbol 在内存中仅存在一个物理聚合根实例。
 - **能力内聚**: 封装了实时流订阅、瞬时价格查询、历史回溯等所有行情行为。
 - **生命周期自愈 (Weak-Hub 模式)**: 
     - `Market` 注册表持有 `Weak<StockInner>` 引用，外部（Engine/API）持有 `Arc<dyn Stock>` 引用。
     - 当所有外部 `Arc` 被释放时，聚合根自动触发 `Drop`，清理注册表并停止底层的抓取任务（Feed Connection）。
 
+### 3.2 StrategyInstance 聚合根
+`StrategyInstance` 是负责定义和追踪策略运行状态的聚合根：
+- **身份标识**: 拥有全系统唯一的实例 ID。
+- **配置数据**: 绑定目标引擎类型（JS/WASM）、目标证券 (`symbol`)、时间周期 (`timeframe`) 以及策略源码/字节码。
+- **状态变迁**: 严格遵循状态机 `Pending` -> `Running` -> `Stopped` / `Failed`。
+- **运行统计**: 追踪产生交易信号的次数、生命周期内的运行日志以及错误信息。
+
 ## 4. 核心流程
-1. **获取**: 外部模块通过 `Market::get_stock("AAPL")` 获取聚合根。若已有实例，则返回现有引用。
+1. **获取聚合根**: 
+   - **数据向**: `StrategyManager` 内部通过 `Market::get_stock("AAPL")` 获取 `Stock`。如已有实例，则返回现有 `Weak` 的 `Arc` 升级引用。
+   - **控制向**: 外部请求通过 `StrategyManager` 查询或更新 `StrategyInstance`。
 2. **数据链**: `feed` (抓取) -> `market` (广播并存入 `cache`) -> `store` (落库)。
-3. **逻辑链**: `engine` (获取聚合根并订阅/查询) -> `notify` (推送)。
-4. **隔离性**: 策略逻辑运行在 QuickJS 沙盒中，默认无任何 I/O 能力，所有平台能力通过 `host` 对象显式注入。
+3. **控制链 (Facade 调度)**: `客户端/前端` -> `StrategyManager`.start() -> 生成 `StrategyInstance` -> `StrategyManager` 通过 `EngineBuilder` 创建引擎并分配 `tokio::spawn` 挂载执行。
+4. **业务链**: `Engine` (挂载 `Stock` 并持续拉取/订阅) -> 产生 `Signal` -> 触发 `SignalHandler` (如 `notify` 或本地风控)。
+5. **隔离性**: 策略逻辑运行在 QuickJS 沙盒中，默认无任何 I/O 能力，所有平台能力通过 `host` 对象显式注入。
 
 ## 5. 技术特性
 - **运行时**: `tokio`
@@ -101,7 +118,7 @@ graph TB
 
 ## 6. 代码组织规范 (Code Organization)
 
-项目遵循 **单模块单目录 (Single Module per Directory)** 的拆分原则，杜绝“上帝文件”。
+项目遵循 **单模块单目录 (Single Module per Directory)** 的拆分原则，杜绝"上帝文件"。
 
 ### Core 领域层目录结构
 `crates/core` 必须按照**业务子域**进行垂直切分，每个子域拥有独立的目录和 `mod.rs` 入口。接口定义文件统一命名为 `port.rs`。
@@ -110,6 +127,10 @@ graph TB
     *   包含: `Stock`, `TimeFrame`
 *   **`market/`**: 行情相关业务。
     *   包含: `entity.rs` (Candle), `port.rs` (MarketDataProvider, Market & Stock Traits), `error.rs` (MarketError)
+*   **`strategy/`**: 策略生命周期管理。
+    *   包含: `entity.rs` (StrategyInstance, EngineType, StrategyStatus), `port.rs` (StrategyStore)
+*   **`engine/`**: 引擎相关抽象。
+    *   包含: `entity.rs` (Signal), `port.rs` (SignalHandler, EngineBuilder), `error.rs` (EngineError)
 *   **`store/`**: 持久化相关业务。
     *   包含: `port.rs` (MarketStore), `error.rs` (StoreError)
 *   **`notify/`**: 通知相关业务。
