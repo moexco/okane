@@ -1,0 +1,18 @@
+[package]
+name = "okane-trade"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1.89"
+chrono = "0.4.44"
+dashmap = "6.1.0"
+okane-core = { version = "0.1.0", path = "../core" }
+rust_decimal = "1.40.0"
+thiserror = "2.0.18"
+tokio = { version = "1.49.0", features = ["sync"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+rust_decimal_macros = "1.40.0"
+tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "time"] }

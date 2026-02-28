@@ -13,8 +13,9 @@ graph TB
     end
 
     subgraph "领域实现层 (Domain Implementation)"
-        MarketImpl[crates/market]
-        Engine[crates/engine]
+        MarketImpl[crates/market - 行情聚合]
+        TradeImpl[crates/trade - 交易与账户 OMS]
+        Engine[crates/engine - 策略沙盒运行时]
     end
 
     subgraph "领域层 (Domain)"
@@ -22,7 +23,8 @@ graph TB
     end
 
     subgraph "基础设施层 (Infrastructure)"
-        Feed[crates/feed]
+        Feed[crates/feed - 实时行情接入]
+        Broker[crates/broker - 券商交易通道]
         Store[crates/store]
         Notify[crates/notify]
         Cache[crates/cache]
@@ -33,9 +35,11 @@ graph TB
     App --> Manager
     App --> Engine
     App --> Feed
+    App --> Broker
     App --> Store
     App --> Notify
     App --> MarketImpl
+    App --> TradeImpl
     App --> Cache
     App --> Core
 
@@ -45,7 +49,9 @@ graph TB
     %% 所有实现层编译期仅依赖 Core
     Engine --> Core
     MarketImpl --> Core
+    TradeImpl --> Core
     Feed --> Core
+    Broker --> Core
     Store --> Core
     Notify --> Core
     Cache --> Core
@@ -135,6 +141,8 @@ graph TB
     *   包含: `port.rs` (MarketStore), `error.rs` (StoreError)
 *   **`notify/`**: 通知相关业务。
     *   包含: `port.rs` (Notifier), `error.rs` (NotifyError)
+*   **`trade/`**: 交易与账户体系 (OMS) 相关业务。
+    *   包含: `entity.rs` (Order, Position, Account, Trade), `port.rs` (TradePort), `error.rs` (TradeError)
 
 ### 设计原则
 1.  **高内聚**：相关联的 Entity, Error, Port 必须在逻辑上归属于同一个业务子域。
@@ -150,3 +158,23 @@ Cache 被定义为一个**业务无关的异步 KV 存储接口**。它仅作为
 - **标准操作**：必须实现 `set`、`get`、`del` 三个核心方法。
 - **泛型支持**：接口应支持通过序列化/反序列化进行强类型数据的存取。
 - **管理策略**：Cache 内部不提供 TTL (过期时间) 或容量淘汰机制。数据的新鲜度维护与版本管理完全由上游业务逻辑自行实现。
+
+## 8. OMS 与券商多维账户映射体系 (规划中)
+
+为了支持“多平台账号跑同一策略”或“一账号跑多个股票/策略”的灵活量化需求，系统对“账户”进行了**逻辑与物理隔离**。
+
+### 8.1 DDD 职责边界 (Feed vs Trade)
+在现实中，某个“券商 (Broker)”往往既提供行情又提供交易。但在本系统的领域中，它们被拆分为两个高内聚的界限上下文：
+- **`crates/feed` (行情层)**: 负责高频、无状态、重 IO 的实时数据流（WebSocket）。
+- **`crates/trade` (交易与账户层)**: 负责强状态、重写互斥、重安全事务的订单清算与余额管理。这是系统内部的 OMS。
+- **`crates/broker` (基础实施适配层)**: 提供对物理券商 API 的对接实现，仅仅作为满足 `TradePort` 的具体 Adapter。
+
+### 8.2 核心多对多路由体系
+- **系统账户 (System Account)**:
+  系统内部的逻辑资金/结算单位。`Strategy` 实例运行时只绑定且**只知道系统账户**。策略下达的买卖意图属于逻辑 `Order`。
+- **物理通道 (Physical Broker Channel)**:
+  真实存在的券商账号，如 IB、Futu。
+- **路由分配器 (Binding Router)**:
+  位于 `Trade` 层内部，接收来自策略逻辑订单后，经过风控审查（Risk Control），根据用户设置的资金划拨比例或下发规则，将逻辑单实时拆分为一单或多单物理委托（Broker Order），下发到基础设施层的不同 Broker Adapter 执行。清算时，再将多通道的回报平账至所属的 System Account 中。
+
+**安全机制**：账户等强状态聚合根的内存修改，采用最直接的读写锁 (`RwLock`) 或 `Mutex` 保护，拒绝并发数据竞争。金额计算必须使用 `rust_decimal::Decimal`，禁止直接使用浮点数模糊运算。

@@ -5,3 +5,4 @@ pub mod market;
 pub mod notify;
 pub mod store;
 pub mod strategy;
+pub mod trade;
