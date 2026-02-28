@@ -6,6 +6,7 @@ use okane_manager::strategy::StrategyManager;
 use okane_market::manager::MarketImpl;
 use okane_store::market::SqliteMarketStore;
 use okane_store::strategy::SqliteStrategyStore;
+use okane_store::system::SqliteSystemStore;
 use okane_trade::account::AccountManager;
 use okane_trade::service::TradeService;
 use okane_core::trade::port::TradePort;
@@ -39,6 +40,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Okane Engine starting...");
 
+    // 1.5 加载全局配置
+    let config_val = config::Config::builder()
+        .add_source(config::File::with_name("config").required(false))
+        .add_source(config::Environment::with_prefix("OKANE").separator("_"))
+        .build()?;
+    let app_config: okane_core::config::AppConfig = config_val.try_deserialize().unwrap_or_default();
+
+    info!("Configuration loaded: {:?}", app_config);
+
+    // 设置全局数据目录 (为 Store 层提供根路径)
+    okane_store::config::set_root_dir(std::path::PathBuf::from(app_config.database.data_dir.clone()));
+
     // 2. 实例化基础设施层
     let feed = Arc::new(YahooProvider::new());
     let market_store = Arc::new(SqliteMarketStore::new()?);
@@ -56,11 +69,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let trade_service: Arc<dyn TradePort> = Arc::new(TradeService::new(account_manager, matcher, market.clone()));
 
     // 6. 构造应用服务层（注入 Core Trait 抽象）
-    let _manager = StrategyManager::new(strategy_store, engine_builder, trade_service);
+    let manager = StrategyManager::new(
+        strategy_store,
+        engine_builder,
+        trade_service.clone(),
+    );
 
-    info!("StrategyManager initialized. Waiting for signals...");
+    info!("StrategyManager initialized.");
 
-    // 7. 挂起主线程，等待外部退出信号
+    // 7. 实例化系统级存储，提供给鉴权系统、配置下发
+    let system_store: Arc<dyn okane_core::store::port::SystemStore> =
+        Arc::new(SqliteSystemStore::new().await?);
+
+    // 8. 挂载 API 服务
+    let app_state = okane_api::server::AppState {
+        strategy_manager: manager.clone(),
+        trade_port: trade_service,
+        system_store,
+    };
+
+    let bind_addr = format!("{}:{}", app_config.server.host, app_config.server.port);
+    let bind_addr_clone = bind_addr.clone();
+    tokio::spawn(async move {
+        if let Err(e) = okane_api::server::start_server(app_state, &bind_addr_clone).await {
+            tracing::error!("API server failed: {}", e);
+        }
+    });
+
+    // 9. 挂起主线程，等待外部退出信号
+    info!("Engine and API gateways are fully running. Waiting for signals...");
     tokio::signal::ctrl_c().await?;
     info!("Shutdown signal received. Exiting...");
 

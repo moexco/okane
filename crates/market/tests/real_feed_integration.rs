@@ -8,6 +8,9 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn test_market_with_real_yahoo_feed() {
+    let tmp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    okane_store::config::set_root_dir(tmp_dir.path().to_path_buf());
+
     // 1. 初始化真实的 Yahoo 数据源
     let yahoo_provider = Arc::new(YahooProvider::new());
 
@@ -55,6 +58,9 @@ async fn test_market_with_real_yahoo_feed() {
 
 #[tokio::test]
 async fn test_market_broadcast_with_real_feed() {
+    let tmp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    okane_store::config::set_root_dir(tmp_dir.path().to_path_buf());
+
     let yahoo_provider = Arc::new(YahooProvider::new());
     let store = Arc::new(SqliteMarketStore::new().expect("Failed to create real store"));
     let market = MarketImpl::new(yahoo_provider, store);

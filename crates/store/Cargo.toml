@@ -5,13 +5,16 @@ edition = "2024"
 
 [dependencies]
 async-trait = "0.1.89"
+bcrypt = "0.18.0"
 chrono = { version = "0.4.43", features = ["serde"] }
 dashmap = "6.1.0"
 okane-core = { version = "0.1.0", path = "../core" }
+rand = "0.10.0"
 rust_decimal = "1.40.0"
 sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "sqlite", "chrono"] }
 thiserror = "2.0.18"
 tracing = "0.1.44"
+uuid = { version = "1.21.0", features = ["v4"] }
 
 [dev-dependencies]
 rust_decimal_macros = "1.40.0"

@@ -23,6 +23,9 @@ async fn test_store_full_integration() {
     let user = User {
         id: "u1".to_string(),
         name: "Tester".to_string(),
+        password_hash: "dummy_hash".to_string(),
+        role: okane_core::store::port::UserRole::Standard,
+        force_password_change: false,
         created_at: Utc::now(),
     };
     system_store.save_user(&user).await.unwrap();

@@ -33,5 +33,5 @@ pub(crate) fn get_root_dir() -> PathBuf {
     ROOT_DIR
         .get()
         .cloned()
-        .unwrap_or_else(|| PathBuf::from("data"))
+        .expect("ROOT_DIR is not set. Must strictly call okane_store::config::set_root_dir() during App/Test Init to avoid leaking Db files!")
 }

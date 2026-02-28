@@ -61,6 +61,9 @@ impl SqliteSystemStore {
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'Standard',
+                force_password_change BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at DATETIME NOT NULL
             );
 
@@ -92,6 +95,37 @@ impl SqliteSystemStore {
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?;
 
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or((0,));
+
+        if count.0 == 0 {
+            // 生成 12 位随机密码
+            let pwd: String = uuid::Uuid::new_v4().to_string()[..12].to_string();
+            
+            let hashed = bcrypt::hash(&pwd, bcrypt::DEFAULT_COST)
+                .map_err(|e| StoreError::Database(format!("Failed to hash password: {}", e)))?;
+            
+            sqlx::query("INSERT INTO users (id, name, password_hash, role, force_password_change, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+                .bind("admin")
+                .bind("System Administrator")
+                .bind(hashed)
+                .bind("Admin")
+                .bind(true) // 首次登录强制修改密码
+                .bind(Utc::now())
+                .execute(&pool)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+                
+            tracing::warn!("=====================================================");
+            tracing::warn!("🔒 CRITICAL: INITIALIZED SYSTEM ADMIN ACCOUNT 🔒");
+            tracing::warn!("Username: admin");
+            tracing::warn!("Password: {}", pwd);
+            tracing::warn!("⚠️ PLEASE CHANGE THIS PASSWORD UPON FIRST LOGIN ⚠️");
+            tracing::warn!("=====================================================");
+        }
+
         Ok(Self { pool })
     }
 }
@@ -110,21 +144,28 @@ impl SystemStore for SqliteSystemStore {
     /// # Returns
     /// * `Result<Option<User>, StoreError>` - 匹配的用户或 None。
     async fn get_user(&self, id: &str) -> Result<Option<User>, StoreError> {
-        sqlx::query_as::<_, (String, String, DateTime<Utc>)>(
-            "SELECT id, name, created_at FROM users WHERE id = ?",
+        let result = sqlx::query_as::<_, (String, String, String, String, bool, DateTime<Utc>)>(
+            "SELECT id, name, password_hash, role, force_password_change, created_at FROM users WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
-        .map(|r| {
-            Ok(User {
-                id: r.0,
-                name: r.1,
-                created_at: r.2,
-            })
-        })
-        .transpose()
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        match result {
+            Some(r) => {
+                let role = r.3.parse().map_err(|e| StoreError::Database(format!("Invalid role: {}", e)))?;
+                Ok(Some(User {
+                    id: r.0,
+                    name: r.1,
+                    password_hash: r.2,
+                    role,
+                    force_password_change: r.4,
+                    created_at: r.5,
+                }))
+            }
+            None => Ok(None),
+        }
     }
 
     /// # Summary
@@ -139,9 +180,12 @@ impl SystemStore for SqliteSystemStore {
     /// # Returns
     /// * `Result<(), StoreError>`
     async fn save_user(&self, user: &User) -> Result<(), StoreError> {
-        sqlx::query("INSERT OR REPLACE INTO users (id, name, created_at) VALUES (?, ?, ?)")
+        sqlx::query("INSERT OR REPLACE INTO users (id, name, password_hash, role, force_password_change, created_at) VALUES (?, ?, ?, ?, ?, ?)")
             .bind(&user.id)
             .bind(&user.name)
+            .bind(&user.password_hash)
+            .bind(user.role.to_string())
+            .bind(user.force_password_change)
             .bind(user.created_at)
             .execute(&self.pool)
             .await

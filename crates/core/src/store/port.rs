@@ -5,6 +5,32 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum UserRole {
+    Admin,
+    Standard,
+}
+
+impl std::str::FromStr for UserRole {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Admin" => Ok(UserRole::Admin),
+            "Standard" => Ok(UserRole::Standard),
+            _ => Err(format!("Unknown role: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for UserRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UserRole::Admin => write!(f, "Admin"),
+            UserRole::Standard => write!(f, "Standard"),
+        }
+    }
+}
+
 /// # Summary
 /// 用户实体，代表系统的使用者。
 ///
@@ -12,10 +38,16 @@ use serde::{Deserialize, Serialize};
 /// - `id` 必须全局唯一。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
-    // 用户唯一标识
+    // 用户唯一标识/用户名
     pub id: String,
     // 用户显示名称
     pub name: String,
+    // 密码哈希值
+    pub password_hash: String,
+    // 用户角色
+    pub role: UserRole,
+    // 是否强制在下次登录时修改密码
+    pub force_password_change: bool,
     // 注册时间
     pub created_at: DateTime<Utc>,
 }

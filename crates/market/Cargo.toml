@@ -19,3 +19,4 @@ tracing = "0.1.44"
 
 [dev-dependencies]
 okane-feed = { path = "../feed" }
+tempfile = "3.26.0"

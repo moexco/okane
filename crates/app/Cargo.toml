@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+config = "0.15.19"
+okane-api = { version = "0.1.0", path = "../api" }
 okane-core = { version = "0.1.0", path = "../core" }
 okane-engine = { version = "0.1.0", path = "../engine" }
 okane-feed = { version = "0.1.0", path = "../feed" }
