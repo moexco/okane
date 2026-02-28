@@ -9,7 +9,7 @@ use sqlx::{
 use std::fs;
 
 /// 默认系统数据库存储路径
-const DEFAULT_SYSTEM_DB: &str = "app.db";
+const DEFAULT_SYSTEM_DB: &str = "system.db";
 
 /// SystemStore 的 SQLite 实现。
 ///
@@ -45,7 +45,10 @@ impl SqliteSystemStore {
         // 使用官方推荐的配置方式，确保自动创建数据库文件
         let options = SqliteConnectOptions::new()
             .filename(db_path)
-            .create_if_missing(true);
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+            .busy_timeout(std::time::Duration::from_secs(5));
 
         let pool = SqlitePoolOptions::new()
             .connect_with(options)

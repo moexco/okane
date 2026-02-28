@@ -10,6 +10,7 @@ use okane_trade::account::AccountManager;
 use okane_trade::service::TradeService;
 use okane_core::trade::port::TradePort;
 use tracing::info;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 /// # Summary
 /// 应用启动入口，纯粹的 DI 容器。
@@ -23,8 +24,19 @@ use tracing::info;
 /// 5. 挂起等待外部信号退出。
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. 初始化日志
-    tracing_subscriber::fmt::init();
+    // 1. 初始化两路输出日志 (控制台 + 滚动文件)
+    let file_appender = tracing_appender::rolling::daily("logs", "okane-engine.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
+        .with_writer(
+            std::io::stdout.with_max_level(tracing::Level::INFO)
+            .and(non_blocking.with_max_level(tracing::Level::DEBUG))
+        )
+        .with_ansi(true) // 保持控制台颜色，如果嫌麻烦可以拆分 layer
+        .init();
+
     info!("Okane Engine starting...");
 
     // 2. 实例化基础设施层

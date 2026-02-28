@@ -37,7 +37,7 @@ async fn test_market_with_real_yahoo_feed() {
 
     match first_candle {
         Ok(Some(candle)) => {
-            println!("Received real candle from Yahoo: {:?}", candle);
+            tracing::info!("Received real candle from Yahoo: {:?}", candle);
             assert!(candle.close > 0.0);
 
             // 6. 验证聚合根的同步快照是否已更新
@@ -48,7 +48,7 @@ async fn test_market_with_real_yahoo_feed() {
         Err(_) => {
             // 如果是在离线环境或 CI 中，这可能会超时
             // 在集成测试中，我们至少期望它能走到这一步而不崩溃
-            eprintln!("Warning: Timeout waiting for Yahoo real data. Check internet connection.");
+            tracing::warn!("Warning: Timeout waiting for Yahoo real data. Check internet connection.");
         }
     }
 }
@@ -90,6 +90,6 @@ async fn test_market_broadcast_with_real_feed() {
         .await
         .is_err()
     {
-        eprintln!("Broadcast integration test timed out (normal if market is closed or no trades)");
+        tracing::warn!("Broadcast integration test timed out (normal if market is closed or no trades)");
     }
 }

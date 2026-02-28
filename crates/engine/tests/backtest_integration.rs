@@ -99,5 +99,5 @@ async fn test_end_to_end_backtest_with_time_travel() {
 
     // 检查最终账户流水状态
     let snapshot = account_manager.snapshot(&account_id).await.unwrap();
-    println!("Final snapshot: {:?}", snapshot);
+    tracing::info!("Final snapshot: {:?}", snapshot);
 }

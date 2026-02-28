@@ -13,4 +13,5 @@ okane-store = { version = "0.1.0", path = "../store" }
 okane-trade = { version = "0.1.0", path = "../trade" }
 tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "signal"] }
 tracing = "0.1.43"
-tracing-subscriber = "0.3.19"
+tracing-appender = "0.2.4"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }

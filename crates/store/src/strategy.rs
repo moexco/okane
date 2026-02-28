@@ -40,10 +40,13 @@ impl SqliteStrategyStore {
             return Ok(pool.clone());
         }
 
-        let db_path = self.base_path.join(format!("{}.db", user_id));
+        let db_path = self.base_path.join(format!("strategy_{}.db", user_id));
         let options = SqliteConnectOptions::new()
             .filename(db_path)
-            .create_if_missing(true);
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+            .busy_timeout(std::time::Duration::from_secs(5));
 
         let pool = SqlitePoolOptions::new()
             .connect_with(options)

@@ -87,3 +87,21 @@ pub trait MatcherPort: Send + Sync {
     /// 执行/评估一张尚未完结的订单 (市场价或现价单，与当前 K 线价位对比)。
     fn execute_order(&self, order: &mut Order, current_price: rust_decimal::Decimal, timestamp: i64) -> Option<Trade>;
 }
+
+/// # Summary
+/// 物理券商网关对接端口 (Broker Gateway Port)。
+/// 用于定义与外部真实交易所 (IB, Futu, Binance 等) 进行交互的标准接口。
+/// 未来的实盘组件将实现此接口。
+#[async_trait]
+pub trait BrokerPort: Send + Sync {
+    /// 向外部网关发送一笔真实物理订单
+    async fn send_order(&self, order: &Order) -> Result<String, TradeError>;
+    
+    /// 向外部网关请求取消某笔尚未成交的单子
+    async fn cancel_order(&self, external_order_id: &str) -> Result<(), TradeError>;
+    
+    /// 主动同步/查询某笔外发订单的最新网关状态 (如是否部分成交)
+    async fn query_order_status(&self, external_order_id: &str) -> Result<(), TradeError>;
+    
+    // TODO: 未来还会增加类似 subscribe_execution_report 的流式回报接口
+}
