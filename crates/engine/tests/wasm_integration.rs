@@ -1,6 +1,7 @@
 pub mod mock_trade;
 use async_trait::async_trait;
 use chrono::Utc;
+use okane_core::common::time::FakeClockProvider;
 use okane_core::common::{Stock as StockIdentity, TimeFrame};
 use okane_core::engine::entity::{Signal, SignalKind};
 use okane_core::engine::error::EngineError;
@@ -123,7 +124,8 @@ async fn test_wasm_strategy_dummy_signal() {
         rx: Arc::new(tokio::sync::Mutex::new(rx)),
     });
     let market = Arc::new(MockMarket { stock: mock_stock });
-    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort); let mut engine = WasmEngine::new(market, trade);
+    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort);
+    let mut engine = WasmEngine::new(market, trade, Arc::new(FakeClockProvider::new(Utc::now())));
     let captured = Arc::new(Mutex::new(Vec::new()));
     engine.register_handler(Box::new(MockHandler {
         captured: captured.clone(),
@@ -171,7 +173,8 @@ async fn test_wasm_strategy_dummy_no_signal() {
         rx: Arc::new(tokio::sync::Mutex::new(rx)),
     });
     let market = Arc::new(MockMarket { stock: mock_stock });
-    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort); let mut engine = WasmEngine::new(market, trade);
+    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort);
+    let mut engine = WasmEngine::new(market, trade, Arc::new(FakeClockProvider::new(Utc::now())));
     let captured = Arc::new(Mutex::new(Vec::new()));
     engine.register_handler(Box::new(MockHandler {
         captured: captured.clone(),

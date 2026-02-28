@@ -1,28 +1,32 @@
-use crate::account::AccountManager;
-use crate::matcher::LocalMatchEngine;
 use async_trait::async_trait;
+use okane_core::market::entity::Candle;
 use okane_core::market::port::Market;
 use okane_core::trade::entity::{AccountId, AccountSnapshot, Order, OrderDirection, OrderId, OrderStatus};
-use okane_core::trade::port::{TradeError, TradePort};
+use okane_core::trade::port::{AccountPort, BacktestTradePort, MatcherPort, TradeError, TradePort};
 use rust_decimal::Decimal;
+use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// # Summary
 /// `TradeService` 是纸面交易环境和内盘 OMS 的入口调度者，
 /// 实现了 `TradePort`，对接着最原始的逻辑 AccountManager 和 LocalMatchEngine。
 pub struct TradeService {
-    account_manager: Arc<AccountManager>,
-    matcher: LocalMatchEngine,
+    account_port: Arc<dyn AccountPort>,
+    matcher: Arc<dyn MatcherPort>,
     /// 用于获取当前标的市场行情的抽象指针 (用于模拟成交)
     market: Arc<dyn Market>,
+    /// 回测/模拟环境的暂存订单池
+    pending_orders: RwLock<HashMap<OrderId, Order>>,
 }
 
 impl TradeService {
-    pub fn new(account_manager: Arc<AccountManager>, market: Arc<dyn Market>) -> Self {
+    pub fn new(account_port: Arc<dyn AccountPort>, matcher: Arc<dyn MatcherPort>, market: Arc<dyn Market>) -> Self {
         Self {
-            account_manager,
-            matcher: LocalMatchEngine::new(),
+            account_port,
+            matcher,
             market,
+            pending_orders: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -30,17 +34,13 @@ impl TradeService {
 #[async_trait]
 impl TradePort for TradeService {
     /// # Logic
-    /// 1. 获取目标账户锁。
-    /// 2. 如果是买单，计算所需的预估冻结金额 (如果市价单且没有预估金额，则按最新价 * 倍数 兜底)。
-    /// 3. 从账户扣划并冻结。如果可用金额不足抛错。
-    /// 4. 提交订单到本地撮合器（由于是模拟回测环境，直接触发立即执行）。
-    /// 5. 撮合器吐出 Trade，账户按 Trade 真实价格和数量扣减冻结资金及更新持仓。
+    /// 1. 如果是买单，计算所需的预估冻结金额 (如果市价单且没有预估金额，则按最新价 * 倍数 兜底)。
+    /// 2. 从账户端口请求冻结。如果可用金额不足抛错。
+    /// 3. 提交订单到本地撮合端口（由于是模拟回测环境，直接触发立即执行）。
+    /// 4. 撮合器吐出 Trade，账户端口按 Trade 真实价格和数量扣减冻结资金及更新持仓。
     async fn submit_order(&self, mut order: Order) -> Result<OrderId, TradeError> {
         let order_id = order.id.clone();
         
-        let account_lock = self.account_manager.get_account(&order.account_id)?;
-        let mut acct = account_lock.write().await;
-
         let stock = self.market.get_stock(&order.symbol).await.map_err(|e| {
             TradeError::BrokerIntegrationError(format!("无法获取行情: {}", e))
         })?;
@@ -56,51 +56,87 @@ impl TradePort for TradeService {
 
         // 如果是多头买单，先冻结需要的总现金款
         if order.direction == OrderDirection::Buy {
-            acct.freeze_funds(est_req_funds)?;
+            self.account_port.freeze_funds(&order.account_id, est_req_funds).await?;
         }
 
-        // 发向撮合引擎模拟立刻触发
-        // (在真实的系统中，这一步是将订单投递到异步 Channel，但回测沙盒为了防止乱序支持同步吃单)
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        order.status = OrderStatus::Submitted;
-        
-        if let Some(trade) = self.matcher.execute_order(&mut order, latest_price, now_ms) {
-            // 收到正式的成交流水，释放多余的冻结款并做真正的扣减
+        // 如果是市价单 (price == None)，立刻尝试撮合。
+        // 如果是限价单，先放入 Pending 队列等待下一个 Tick。
+        if order.price.is_none() {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            order.status = OrderStatus::Submitted;
             
-            // 粗略模拟：
-            // 如果是买单，扣除对应成交额与手续费；并由于成交了释放占用的冻结锁定
-            if trade.direction == OrderDirection::Buy {
-                let actual_cost = trade.price * trade.volume + trade.commission;
-                // 注意这里只扣除了这笔成交占用的逻辑金额，其余解冻
-                acct.deduct_funds(actual_cost);
-                let over_frozen = est_req_funds - actual_cost;
-                if over_frozen > Decimal::ZERO {
-                    acct.unfreeze_funds(over_frozen);
-                }
-            } else {
-                // 如果是卖空，得到现金，并扣除手续费
-                let actual_gain = trade.price * trade.volume - trade.commission;
-                acct.add_funds(actual_gain);
+            if let Some(trade) = self.matcher.execute_order(&mut order, latest_price, now_ms) {
+                self.account_port.process_trade(&order.account_id, &trade, est_req_funds).await?;
             }
-
-            // 更新账户的对应持仓数量及均价（买入+，卖出-）
-            let position_delta = if trade.direction == OrderDirection::Buy {
-                trade.volume
-            } else {
-                -trade.volume
-            };
-            acct.update_position(&trade.symbol, position_delta, trade.price);
+        } else {
+            // 限价单，等待未来穿越
+            order.status = OrderStatus::Pending;
+            let mut pending = self.pending_orders.write().await;
+            pending.insert(order.id.clone(), order);
         }
 
         Ok(order_id)
     }
 
-    async fn cancel_order(&self, _order_id: OrderId) -> Result<(), TradeError> {
-        // 本地环境由于所有单子目前都是同步立即戳合的，所以撤单在此简易版中通常为已完成抛错
-        Err(TradeError::InvalidOrderStatus)
+    async fn cancel_order(&self, order_id: OrderId) -> Result<(), TradeError> {
+        let mut pending = self.pending_orders.write().await;
+        if let Some(mut order) = pending.remove(&order_id) {
+            order.status = OrderStatus::Canceled;
+            // 还需要退回冻结资金
+            if order.direction == OrderDirection::Buy && let Some(price) = order.price {
+                let amount = price * (order.volume - order.filled_volume);
+                self.account_port.unfreeze_funds(&order.account_id, amount).await?;
+            }
+            Ok(())
+        } else {
+            Err(TradeError::OrderNotFound("Order not found or already filled".into()))
+        }
     }
 
     async fn get_account(&self, account_id: AccountId) -> Result<AccountSnapshot, TradeError> {
-        self.account_manager.snapshot(&account_id).await
+        self.account_port.snapshot(&account_id).await
+    }
+}
+
+#[async_trait]
+impl BacktestTradePort for TradeService {
+    async fn tick(&self, symbol: &str, candle: &Candle) -> Result<(), TradeError> {
+        let mut pending = self.pending_orders.write().await;
+        let mut filled_orders = Vec::new();
+
+        let high = rust_decimal::Decimal::from_f64_retain(candle.high).unwrap_or(rust_decimal::Decimal::ZERO);
+        let low = rust_decimal::Decimal::from_f64_retain(candle.low).unwrap_or(rust_decimal::Decimal::ZERO);
+
+        for (id, order) in pending.iter_mut() {
+            if order.symbol != symbol {
+                continue;
+            }
+
+            if let Some(limit_price) = order.price {
+                // 击穿判定
+                let is_hit = (order.direction == OrderDirection::Buy && low <= limit_price) || 
+                             (order.direction == OrderDirection::Sell && high >= limit_price);
+                
+                if is_hit {
+                    // 成交取限价或者由于跳空引起的开盘价劣势
+                    let exec_price = limit_price;
+                    let now_ms = candle.time.timestamp_millis();
+                    
+                    if let Some(trade) = self.matcher.execute_order(order, exec_price, now_ms) {
+                        let est_req_funds = limit_price * trade.volume; // 原本冻结的总数
+                        if let Err(e) = self.account_port.process_trade(&order.account_id, &trade, est_req_funds).await {
+                            tracing::warn!("Backtest tick: Failed process trade on account {}: {}", id.0, e);
+                        }
+                    }
+                    filled_orders.push(id.clone());
+                }
+            }
+        }
+
+        for id in filled_orders {
+            pending.remove(&id);
+        }
+
+        Ok(())
     }
 }

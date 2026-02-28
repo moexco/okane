@@ -1,6 +1,7 @@
 pub mod mock_trade;
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
+use okane_core::common::time::FakeClockProvider;
 use okane_core::common::{Stock as StockIdentity, TimeFrame};
 use okane_core::engine::entity::Signal;
 use okane_core::engine::error::EngineError;
@@ -124,7 +125,10 @@ async fn test_host_functions_from_js() {
         rx: Arc::new(tokio::sync::Mutex::new(rx)),
     });
     let market = Arc::new(MockMarket { stock: mock_stock });
-    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort); let mut engine = JsEngine::new(market, trade);
+    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort);
+    let time_provider = Arc::new(FakeClockProvider::new(Utc::now()));
+    let time_provider_clone = time_provider.clone();
+    let mut engine = JsEngine::new(market, trade, time_provider);
     let captured = Arc::new(Mutex::new(Vec::new()));
     engine.register_handler(Box::new(MockHandler {
         captured: captured.clone(),
@@ -141,6 +145,7 @@ async fn test_host_functions_from_js() {
     local
         .run_until(async {
             let test_time = Utc.with_ymd_and_hms(2026, 2, 2, 10, 0, 0).unwrap();
+            time_provider_clone.set_time(test_time);
             tx.send(Candle {
                 time: test_time,
                 open: 150.0,

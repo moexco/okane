@@ -1,4 +1,5 @@
 use crate::runtime::{EngineBase, PluginContext};
+use okane_core::common::time::TimeProvider;
 use futures::StreamExt;
 use okane_core::common::TimeFrame;
 use okane_core::engine::entity::Signal;
@@ -18,6 +19,7 @@ use wasmtime::*;
 pub struct WasmEngine {
     pub base: EngineBase,
     trade_port: Arc<dyn okane_core::trade::port::TradePort>,
+    time_provider: Arc<dyn TimeProvider>,
 }
 
 impl WasmEngine {
@@ -32,10 +34,12 @@ impl WasmEngine {
     pub fn new(
         market: Arc<dyn Market>,
         trade_port: Arc<dyn okane_core::trade::port::TradePort>,
+        time_provider: Arc<dyn TimeProvider>,
     ) -> Self {
         Self {
             base: EngineBase::new(market),
             trade_port,
+            time_provider,
         }
     }
 
@@ -90,7 +94,7 @@ impl WasmEngine {
             market: self.base.market.clone(),
             trade_port: self.trade_port.clone(),
             account_id: account_id.to_string(),
-            current_time: None,
+            time_provider: self.time_provider.clone(),
         }));
 
         let mut store = Store::new(&engine, plugin_ctx.clone());
@@ -135,13 +139,7 @@ impl WasmEngine {
 
         // 核心执行循环
         while let Some(candle) = stream.next().await {
-            // 更新上下文时间
-            {
-                let mut ctx = plugin_ctx
-                    .lock()
-                    .map_err(|_| EngineError::Plugin("Lock failed".to_string()))?;
-                ctx.current_time = Some(candle.time);
-            }
+            // 注意: 在回测模式中 time_provider 应当由外部循环驱动，实盘中时间自动流逝
 
             // 重置 fuel
             store
@@ -239,10 +237,8 @@ impl WasmEngine {
                 "host_now",
                 |caller: Caller<'_, Arc<Mutex<PluginContext>>>| -> i64 {
                     let plugin_ctx = caller.data();
-                    let ctx = plugin_ctx.lock().unwrap();
-                    ctx.current_time
-                        .unwrap_or_else(chrono::Utc::now)
-                        .timestamp_millis()
+                    let ctx = plugin_ctx.lock().unwrap_or_else(|e| e.into_inner());
+                    ctx.time_provider.now().timestamp_millis()
                 },
             )
             .map_err(|e| EngineError::Plugin(e.to_string()))?;
@@ -294,8 +290,8 @@ impl WasmEngine {
                     // 获取上下文数据
                     let plugin_ctx = caller.data().clone();
                     let (end_at, market) = {
-                        let ctx = plugin_ctx.lock().unwrap();
-                        (ctx.current_time, ctx.market.clone())
+                        let ctx = plugin_ctx.lock().unwrap_or_else(|e| e.into_inner());
+                        (Some(ctx.time_provider.now()), ctx.market.clone())
                     };
 
                     // 阻塞式桥接异步调用
@@ -366,7 +362,7 @@ impl WasmEngine {
             // 获取 trade_port 和 account_id
             let plugin_ctx = caller.data().clone();
             let (trade_port, account_id) = {
-                let ctx = plugin_ctx.lock().unwrap();
+                let ctx = plugin_ctx.lock().unwrap_or_else(|e| e.into_inner());
                 (ctx.trade_port.clone(), ctx.account_id.clone())
             };
 

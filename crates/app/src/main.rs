@@ -40,7 +40,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 5. 实例化交易服务（目前使用本地撮合和内存账户）
     let account_manager = Arc::new(AccountManager::default());
-    let trade_service: Arc<dyn TradePort> = Arc::new(TradeService::new(account_manager, market.clone()));
+    let matcher = std::sync::Arc::new(okane_trade::matcher::LocalMatchEngine::default());
+    let trade_service: Arc<dyn TradePort> = Arc::new(TradeService::new(account_manager, matcher, market.clone()));
 
     // 6. 构造应用服务层（注入 Core Trait 抽象）
     let _manager = StrategyManager::new(strategy_store, engine_builder, trade_service);

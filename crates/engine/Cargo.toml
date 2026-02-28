@@ -18,3 +18,4 @@ wasmtime = { version = "41.0.3", features = ["async"] }
 
 [dev-dependencies]
 async-stream = "0.3.6"
+okane-trade = { path = "../trade" }

@@ -38,7 +38,7 @@ impl YahooProvider {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::USER_AGENT,
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36".parse().unwrap()
+            reqwest::header::HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
         );
 
         Self {
@@ -46,7 +46,7 @@ impl YahooProvider {
                 .timeout(Duration::from_secs(10))
                 .default_headers(headers)
                 .build()
-                .expect("Failed to build HTTP client"),
+                .unwrap_or_else(|_| Client::new()),
         }
     }
 }
@@ -232,7 +232,7 @@ impl MarketDataProvider for YahooProvider {
                 let adj_c = adj_close_list.and_then(|list| list.get(i)).and_then(|x| *x);
 
                 candles.push(Candle {
-                    time: Utc.timestamp_opt(ts, 0).unwrap(),
+                    time: Utc.timestamp_opt(ts, 0).single().ok_or_else(|| MarketError::Parse("Invalid timestamp".into()))?,
                     open: o,
                     high: h,
                     low: l,

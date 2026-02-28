@@ -174,7 +174,7 @@ impl StockInner {
             });
         }
 
-        let channels = self.channels.lock().unwrap();
+        let channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(tx) = channels.get(&timeframe) {
             let _ = tx.send(candle);
         }
@@ -284,7 +284,7 @@ impl Stock for StockInner {
     /// # Returns
     /// 异步行情流。
     fn subscribe(&self, timeframe: TimeFrame) -> CandleStream {
-        let mut channels = self.channels.lock().unwrap();
+        let mut channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
         let tx = channels.entry(timeframe).or_insert_with(|| {
             let (tx, _) = broadcast::channel(128);
             tx

@@ -38,6 +38,7 @@ async fn test_strategy_lifecycle() {
     let user_id = "test_user";
     let req = StartRequest {
         symbol: "AAPL".to_string(),
+        account_id: "SystemDefault_01".to_string(),
         timeframe: TimeFrame::Minute1,
         engine_type: EngineType::JavaScript,
         source: b"console.log('hello')".to_vec(),
@@ -71,6 +72,7 @@ async fn test_strategy_lifecycle() {
     let manager = StrategyManager::new(Arc::new(SqliteStrategyStore::new().unwrap()), Arc::new(InfiniteEngineBuilder), Arc::new(mock_trade::MockTradePort));
     let req = StartRequest {
         symbol: "AAPL".to_string(),
+        account_id: "SystemDefault_01".to_string(),
         timeframe: TimeFrame::Minute1,
         engine_type: EngineType::JavaScript,
         source: b"loop".to_vec(),

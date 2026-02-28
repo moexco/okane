@@ -68,7 +68,7 @@ impl EngineBuilder for EngineFactory {
 
                         let local = tokio::task::LocalSet::new();
                         local.block_on(&rt, async move {
-                            let mut engine = JsEngine::new(market, params.trade_port);
+                            let mut engine = JsEngine::new(market, params.trade_port, params.time_provider);
                             for handler in params.handlers {
                                 engine.register_handler(handler);
                             }
@@ -87,7 +87,7 @@ impl EngineBuilder for EngineFactory {
             EngineType::Wasm => {
                 // WasmEngine 的 Future 是 Send 的，可以直接包装
                 Ok(Box::pin(async move {
-                    let mut engine = WasmEngine::new(market, params.trade_port);
+                    let mut engine = WasmEngine::new(market, params.trade_port, params.time_provider);
                     for handler in params.handlers {
                         engine.register_handler(handler);
                     }

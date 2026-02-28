@@ -1,4 +1,5 @@
 use chrono::Utc;
+use okane_core::common::time::RealTimeProvider;
 use dashmap::DashMap;
 use okane_core::common::TimeFrame;
 use okane_core::engine::error::EngineError;
@@ -31,6 +32,8 @@ pub enum ManagerError {
 pub struct StartRequest {
     // 目标证券代码
     pub symbol: String,
+    // 资金划转账户或策略关联主账户
+    pub account_id: String,
     // K 线时间周期
     pub timeframe: TimeFrame,
     // 引擎类型
@@ -109,7 +112,7 @@ impl StrategyManager {
         let instance = StrategyInstance {
             id: instance_id.clone(),
             symbol: req.symbol.clone(),
-            account_id: String::from("SystemDefault_01"), // 默认分配一个本地账号作为兜底
+            account_id: req.account_id.clone(),
             timeframe: req.timeframe,
             engine_type: req.engine_type.clone(),
             source: req.source.clone(),
@@ -129,6 +132,7 @@ impl StrategyManager {
             source: req.source,
             handlers: Vec::new(), // TODO: 外部注入 SignalHandler 列表
             trade_port: self.trade_port.clone(),
+            time_provider: Arc::new(RealTimeProvider),
         })?;
 
         // 更新状态为 Running

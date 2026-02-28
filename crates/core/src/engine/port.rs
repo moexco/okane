@@ -57,6 +57,7 @@ pub struct EngineBuildParams {
     pub source: Vec<u8>,
     pub handlers: Vec<Box<dyn SignalHandler>>,
     pub trade_port: std::sync::Arc<dyn crate::trade::port::TradePort>,
+    pub time_provider: std::sync::Arc<dyn crate::common::time::TimeProvider>,
 }
 
 /// # Summary

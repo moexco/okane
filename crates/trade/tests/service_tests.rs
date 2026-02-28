@@ -65,7 +65,8 @@ async fn test_high_concurrency_order_execution() {
     
     let market = Arc::new(MockMarket);
     // 用 Arc 包裹 TradeService 供多线程闭包移动
-    let trade_service = Arc::new(TradeService::new(account_manager.clone(), market));
+    let matcher = std::sync::Arc::new(okane_trade::matcher::LocalMatchEngine::default());
+    let trade_service = Arc::new(TradeService::new(account_manager.clone(), matcher, market));
     
     // 测试：并发抛入 100 张限价买单和 50 张市价卖单。
     // 单张买单需要金额: volume(10) * price(150) = 1500
@@ -90,7 +91,7 @@ async fn test_high_concurrency_order_execution() {
                 aid,
                 "AAPL".to_string(),
                 OrderDirection::Buy,
-                Some(dec!(150.0)),
+                None, // 修改为市价单以触发立即撮合，修复原版遗留 Bug
                 dec!(10.0),
                 0,
             );
@@ -149,7 +150,8 @@ async fn test_insufficient_funds_rejection() {
     account_manager.ensure_account_exists(acct_id.clone(), dec!(10.0));
     
     let market = Arc::new(MockMarket);
-    let trade_service = Arc::new(TradeService::new(account_manager.clone(), market));
+    let matcher = std::sync::Arc::new(okane_trade::matcher::LocalMatchEngine::default());
+    let trade_service = Arc::new(TradeService::new(account_manager.clone(), matcher, market));
     
     // 购买 1 股 AAPL, 价格 150，理应风控拒绝并无法入队撮合
     let order = Order::new(

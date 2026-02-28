@@ -1,5 +1,6 @@
-use okane_core::trade::entity::{AccountId, AccountSnapshot, Position};
-use okane_core::trade::port::TradeError;
+use okane_core::trade::entity::{AccountId, AccountSnapshot, Position, Trade, OrderDirection};
+use okane_core::trade::port::{AccountPort, TradeError};
+use async_trait::async_trait;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -175,9 +176,47 @@ impl AccountManager {
             .ok_or_else(|| TradeError::AccountNotFound(id.0.clone()))
     }
 
-    /// 获取对外账户快照。
-    pub async fn snapshot(&self, id: &AccountId) -> Result<AccountSnapshot, TradeError> {
-        let acct_lock = self.get_account(id)?;
+}
+
+#[async_trait]
+impl AccountPort for AccountManager {
+    async fn freeze_funds(&self, account_id: &AccountId, amount: rust_decimal::Decimal) -> Result<(), TradeError> {
+        let account_lock = self.get_account(account_id)?;
+        let mut acct = account_lock.write().await;
+        acct.freeze_funds(amount)
+    }
+
+    async fn unfreeze_funds(&self, account_id: &AccountId, amount: rust_decimal::Decimal) -> Result<(), TradeError> {
+        let account_lock = self.get_account(account_id)?;
+        let mut acct = account_lock.write().await;
+        acct.unfreeze_funds(amount);
+        Ok(())
+    }
+
+    async fn process_trade(&self, account_id: &AccountId, trade: &Trade, est_req_funds: rust_decimal::Decimal) -> Result<(), TradeError> {
+        let account_lock = self.get_account(account_id)?;
+        let mut acct = account_lock.write().await;
+
+        if trade.direction == OrderDirection::Buy {
+            let actual_cost = trade.price * trade.volume + trade.commission;
+            acct.deduct_funds(actual_cost);
+            let over_frozen = est_req_funds - actual_cost;
+            if over_frozen > rust_decimal::Decimal::ZERO {
+                acct.unfreeze_funds(over_frozen);
+            }
+        } else {
+            let actual_gain = trade.price * trade.volume - trade.commission;
+            acct.add_funds(actual_gain);
+        }
+
+        let position_delta = if trade.direction == OrderDirection::Buy { trade.volume } else { -trade.volume };
+        acct.update_position(&trade.symbol, position_delta, trade.price);
+
+        Ok(())
+    }
+
+    async fn snapshot(&self, account_id: &AccountId) -> Result<AccountSnapshot, TradeError> {
+        let acct_lock = self.get_account(account_id)?;
         let state = acct_lock.read().await;
         Ok(state.to_snapshot())
     }

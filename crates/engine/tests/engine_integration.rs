@@ -1,6 +1,7 @@
 pub mod mock_trade;
 use async_trait::async_trait;
 use chrono::Utc;
+use okane_core::common::time::FakeClockProvider;
 use okane_core::common::{Stock as StockIdentity, TimeFrame};
 use okane_core::engine::entity::{Signal, SignalKind};
 use okane_core::engine::error::EngineError;
@@ -114,7 +115,8 @@ async fn test_js_strategy_integration() {
         stock: mock_stock.clone(),
     });
 
-    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort); let mut engine = JsEngine::new(market, trade);
+    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort);
+    let mut engine = JsEngine::new(market, trade, Arc::new(FakeClockProvider::new(Utc::now())));
     let captured_signals = Arc::new(Mutex::new(Vec::new()));
     engine.register_handler(Box::new(MockHandler {
         captured: captured_signals.clone(),
@@ -172,7 +174,8 @@ async fn test_js_strategy_no_signal_when_below_threshold() {
         stock: mock_stock.clone(),
     });
 
-    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort); let mut engine = JsEngine::new(market, trade);
+    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort);
+    let mut engine = JsEngine::new(market, trade, Arc::new(FakeClockProvider::new(Utc::now())));
     let captured_signals = Arc::new(Mutex::new(Vec::new()));
     engine.register_handler(Box::new(MockHandler {
         captured: captured_signals.clone(),

@@ -1,7 +1,7 @@
 use crate::runtime::{EngineBase, PluginContext};
-use chrono::Utc;
 use futures::StreamExt;
 use okane_core::common::TimeFrame;
+use okane_core::common::time::TimeProvider;
 use okane_core::engine::entity::Signal;
 use okane_core::engine::error::EngineError;
 use okane_core::market::port::Market;
@@ -19,6 +19,7 @@ use tracing::{error, info, warn};
 pub struct JsEngine {
     pub base: EngineBase,
     trade_port: Arc<dyn okane_core::trade::port::TradePort>,
+    time_provider: Arc<dyn TimeProvider>,
 }
 
 impl JsEngine {
@@ -33,10 +34,12 @@ impl JsEngine {
     pub fn new(
         market: Arc<dyn Market>,
         trade_port: Arc<dyn okane_core::trade::port::TradePort>,
+        time_provider: Arc<dyn TimeProvider>,
     ) -> Self {
         Self {
             base: EngineBase::new(market),
             trade_port,
+            time_provider,
         }
     }
 
@@ -95,7 +98,7 @@ impl JsEngine {
             market: self.base.market.clone(),
             trade_port: self.trade_port.clone(),
             account_id: account_id.to_string(),
-            current_time: None,
+            time_provider: self.time_provider.clone(),
         }));
 
         // 在 JS 全局注入 host 对象并加载策略源码
@@ -114,13 +117,7 @@ impl JsEngine {
 
         // 核心执行循环
         while let Some(candle) = stream.next().await {
-            // 更新上下文时间
-            {
-                let mut plugin = plugin_ctx
-                    .lock()
-                    .map_err(|_| EngineError::Plugin("Lock failed".to_string()))?;
-                plugin.current_time = Some(candle.time);
-            }
+            // 注意: 在回测模式中 time_provider 应当由外部循环驱动，实盘中时间自动流逝
 
             // 序列化 K 线数据
             let candle_json = serde_json::to_string(&candle)
@@ -184,10 +181,8 @@ impl JsEngine {
         host.set(
             "now",
             Function::new(ctx.clone(), move || -> i64 {
-                let ctx = ctx_for_now.lock().unwrap();
-                ctx.current_time
-                    .unwrap_or_else(Utc::now)
-                    .timestamp_millis()
+                let ctx = ctx_for_now.lock().unwrap_or_else(|e| e.into_inner());
+                ctx.time_provider.now().timestamp_millis()
             })
             .map_err(|e| EngineError::Plugin(e.to_string()))?,
         )
@@ -198,8 +193,8 @@ impl JsEngine {
         host.set(
             "fetchHistory",
             Function::new(ctx.clone(), move |symbol: String, tf: String, limit: i32| -> String {
-                let ctx_mutex = ctx_for_fetch.lock().unwrap();
-                let end_at = ctx_mutex.current_time;
+                let ctx_mutex = ctx_for_fetch.lock().unwrap_or_else(|e| e.into_inner());
+                let end_at = Some(ctx_mutex.time_provider.now());
                 let market = ctx_mutex.market.clone();
                 drop(ctx_mutex);
 
@@ -231,7 +226,7 @@ impl JsEngine {
         host.set(
             "buy",
             Function::new(ctx.clone(), move |symbol: String, price: Option<f64>, volume: f64| -> String {
-                let ctx_mutex = ctx_for_buy.lock().unwrap();
+                let ctx_mutex = ctx_for_buy.lock().unwrap_or_else(|e| e.into_inner());
                 let trade_port = ctx_mutex.trade_port.clone();
                 let account_id = ctx_mutex.account_id.clone();
                 drop(ctx_mutex);
@@ -265,7 +260,7 @@ impl JsEngine {
         host.set(
             "sell",
             Function::new(ctx.clone(), move |symbol: String, price: Option<f64>, volume: f64| -> String {
-                let ctx_mutex = ctx_for_sell.lock().unwrap();
+                let ctx_mutex = ctx_for_sell.lock().unwrap_or_else(|e| e.into_inner());
                 let trade_port = ctx_mutex.trade_port.clone();
                 let account_id = ctx_mutex.account_id.clone();
                 drop(ctx_mutex);

@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+pub mod time;
+pub use time::*;
+
 /// # Summary
 /// 证券标的实体，代表系统关注的特定股票或资产。
 ///

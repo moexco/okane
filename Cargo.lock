@@ -1930,6 +1930,7 @@ dependencies = [
  "chrono",
  "futures",
  "okane-core",
+ "okane-trade",
  "rquickjs",
  "rust_decimal",
  "serde_json",
