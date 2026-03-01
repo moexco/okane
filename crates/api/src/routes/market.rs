@@ -21,6 +21,7 @@ pub struct SearchQuery {
     get,
     path = "/api/v1/market/search",
     tag = "行情 (Market)",
+    security(("bearer_jwt" = [])),
     params(
         ("q" = String, Query, description = "搜索关键字")
     ),
@@ -57,6 +58,7 @@ pub struct CandlesQuery {
     get,
     path = "/api/v1/market/candles/{symbol}",
     tag = "行情 (Market)",
+    security(("bearer_jwt" = [])),
     params(
         ("symbol" = String, Path, description = "股票代码"),
         ("tf" = String, Query, description = "Timeframe (e.g., 1m, 1h, 1d)"),

@@ -108,14 +108,14 @@ impl Modify for SecurityAddon {
 pub async fn start_server(state: AppState, bind_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
     // 1. 无需鉴权的公开路由
     let public_router = OpenApiRouter::new()
-        .routes(routes!(auth::login))
-        .routes(routes!(market::search_stocks))
-        .routes(routes!(market::get_candles));
+        .routes(routes!(auth::login));
 
     // 2. 只需要合法 JWT 鉴权的路由 (普通用户)
     let user_protected_router = OpenApiRouter::new()
         .routes(routes!(auth::change_password))
         .routes(routes!(account::get_account_snapshot))
+        .routes(routes!(market::search_stocks))
+        .routes(routes!(market::get_candles))
         .routes(routes!(strategy::list_strategies))
         .routes(routes!(strategy::get_strategy))
         .routes(routes!(strategy::deploy_strategy))
