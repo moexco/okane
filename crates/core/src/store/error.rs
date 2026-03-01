@@ -16,4 +16,7 @@ pub enum StoreError {
     /// 未知或未分类的错误
     #[error("Unknown error: {0}")]
     Unknown(String),
+    /// 初始化存储失败
+    #[error("Initialization error: {0}")]
+    InitError(String),
 }

@@ -37,7 +37,7 @@ impl SqliteMarketStore {
     /// # Returns
     /// * `Result<Self, StoreError>` - 存储实例或错误。
     pub fn new() -> Result<Self, StoreError> {
-        let base_path = crate::config::get_root_dir().join("market");
+        let base_path = crate::config::get_root_dir()?.join("market");
         if !base_path.exists() {
             std::fs::create_dir_all(&base_path).map_err(|e| StoreError::Database(e.to_string()))?;
         }

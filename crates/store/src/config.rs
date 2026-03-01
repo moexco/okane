@@ -18,6 +18,8 @@ pub fn set_root_dir(path: PathBuf) {
     let _ = ROOT_DIR.set(path);
 }
 
+use okane_core::store::error::StoreError;
+
 /// 获取当前配置的数据根目录。
 ///
 /// # Logic
@@ -29,9 +31,9 @@ pub fn set_root_dir(path: PathBuf) {
 ///
 /// # Returns
 /// * 返回配置的根目录路径。
-pub(crate) fn get_root_dir() -> PathBuf {
+pub(crate) fn get_root_dir() -> Result<PathBuf, StoreError> {
     ROOT_DIR
         .get()
         .cloned()
-        .expect("ROOT_DIR is not set. Must strictly call okane_store::config::set_root_dir() during App/Test Init to avoid leaking Db files!")
+        .ok_or_else(|| StoreError::InitError("ROOT_DIR is not set. Must strictly call okane_store::config::set_root_dir() during App/Test Init to avoid leaking Db files!".into()))
 }

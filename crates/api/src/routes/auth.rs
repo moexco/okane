@@ -12,7 +12,6 @@ use crate::error::ApiError;
 use crate::middleware::auth::CurrentUser;
 use crate::server::AppState;
 
-const JWT_SECRET: &str = "YOUR_SUPER_SECRET_KEY"; // TODO: 从配置中获取
 const JWT_EXPIRES_IN: u64 = 86400 * 7; // 7 days
 
 /// 用户登录
@@ -63,7 +62,7 @@ pub async fn login(
     let token = encode(
         &Header::default(),
         &claims,
-        &EncodingKey::from_secret(JWT_SECRET.as_ref()),
+        &EncodingKey::from_secret(state.app_config.server.jwt_secret.as_ref()),
     )
     .map_err(|_| ApiError::Internal("Failed to generate token".into()))?;
 

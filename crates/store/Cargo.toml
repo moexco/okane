@@ -15,8 +15,8 @@ sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "sqlite", "chron
 thiserror = "2.0.18"
 tracing = "0.1.44"
 uuid = { version = "1.21.0", features = ["v4"] }
+tokio = { version = "1.49.0", features = ["sync", "macros", "rt-multi-thread"] }
 
 [dev-dependencies]
 rust_decimal_macros = "1.40.0"
 tempfile = "3.24.0"
-tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }

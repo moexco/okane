@@ -63,6 +63,18 @@ pub trait TradePort: Send + Sync {
 }
 
 /// # Summary
+/// 管理系统内待撮合活动订单的仓储端口。
+#[async_trait]
+pub trait PendingOrderPort: Send + Sync {
+    async fn save(&self, order: Order) -> Result<(), TradeError>;
+    async fn remove(&self, order_id: &OrderId) -> Result<Option<Order>, TradeError>;
+    async fn get(&self, order_id: &OrderId) -> Result<Option<Order>, TradeError>;
+    async fn get_by_account(&self, account_id: &AccountId) -> Result<Vec<Order>, TradeError>;
+    async fn get_by_symbol(&self, symbol: &str) -> Result<Vec<Order>, TradeError>;
+    async fn update_status(&self, order_id: &OrderId, status: crate::trade::entity::OrderStatus) -> Result<(), TradeError>;
+}
+
+/// # Summary
 /// 针对回测环境扩展的方法，允许时间驱动器推进撮合进度。
 #[async_trait]
 pub trait BacktestTradePort: TradePort {

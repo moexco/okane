@@ -9,12 +9,6 @@ pub struct LocalMatchEngine {
     commission_rate: Decimal,
 }
 
-impl Default for LocalMatchEngine {
-    fn default() -> Self {
-        Self::new(Decimal::from_str_exact("0.0001").unwrap())
-    }
-}
-
 impl LocalMatchEngine {
     pub fn new(commission_rate: Decimal) -> Self {
         Self { commission_rate }

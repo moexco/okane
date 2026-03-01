@@ -61,10 +61,17 @@ impl EngineBuilder for EngineFactory {
                     let (tx, rx) = tokio::sync::oneshot::channel();
 
                     std::thread::spawn(move || {
-                        let rt = tokio::runtime::Builder::new_current_thread()
+                        let rt_res = tokio::runtime::Builder::new_current_thread()
                             .enable_all()
-                            .build()
-                            .expect("Failed to build tokio current_thread runtime");
+                            .build();
+
+                        let rt = match rt_res {
+                            Ok(rt) => rt,
+                            Err(e) => {
+                                let _ = tx.send(Err(EngineError::Plugin(format!("Failed to build tokio current_thread runtime: {}", e))));
+                                return;
+                            }
+                        };
 
                         let local = tokio::task::LocalSet::new();
                         local.block_on(&rt, async move {

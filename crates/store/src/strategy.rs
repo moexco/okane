@@ -25,7 +25,7 @@ impl SqliteStrategyStore {
     /// # Summary
     /// 创建新的 SqliteStrategyStore 实例。
     pub fn new() -> Result<Self, StoreError> {
-        let base_path = crate::config::get_root_dir().join("strategy");
+        let base_path = crate::config::get_root_dir()?.join("strategy");
         if !base_path.exists() {
             std::fs::create_dir_all(&base_path).map_err(|e| StoreError::Database(e.to_string()))?;
         }

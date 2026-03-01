@@ -13,8 +13,6 @@ use crate::error::ApiError;
 use crate::server::AppState;
 use okane_core::store::port::UserRole;
 
-const JWT_SECRET: &str = "YOUR_SUPER_SECRET_KEY"; // TODO: 生产环境应从配置读取
-
 /// 提取并验证 Authorization: Bearer <token>
 pub async fn auth_middleware(
     State(state): State<AppState>,
@@ -38,7 +36,7 @@ pub async fn auth_middleware(
         }
     };
 
-    let claims = match verify_jwt(&token) {
+    let claims = match verify_jwt(&token, &state.app_config.server.jwt_secret) {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!("JWT verification failed: {:?}", e);
@@ -86,13 +84,13 @@ pub async fn require_admin(
 }
 
 /// 验证 JWT 返回强类型 Claims
-pub fn verify_jwt(token: &str) -> Result<Claims, ApiError> {
+pub fn verify_jwt(token: &str, secret: &str) -> Result<Claims, ApiError> {
     let mut validation = Validation::default();
     validation.set_required_spec_claims(&["exp", "sub"]);
 
     let token_data = decode::<Claims>(
         token,
-        &DecodingKey::from_secret(JWT_SECRET.as_ref()),
+        &DecodingKey::from_secret(secret.as_ref()),
         &validation,
     )
     .map_err(|_| ApiError::Unauthorized("Invalid or expired token".into()))?;

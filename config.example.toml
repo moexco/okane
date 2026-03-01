@@ -1,0 +1,16 @@
+# Okane Engine Configuration (example)
+
+[server]
+# API server listening address
+host = "0.0.0.0"
+
+# API server port
+port = 8080
+
+# JWT secret key for signing authentication tokens
+# MUST BE CHANGED in production environments for security!
+jwt_secret = "YOUR_SUPER_SECRET_KEY"
+
+[database]
+# The root directory for storing Okane data (SQLite files, accounts, strategies, logic traces)
+data_dir = "data"

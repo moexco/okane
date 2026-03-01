@@ -2,11 +2,9 @@ use async_trait::async_trait;
 use okane_core::market::entity::Candle;
 use okane_core::market::port::Market;
 use okane_core::trade::entity::{AccountId, AccountSnapshot, Order, OrderDirection, OrderId, OrderStatus};
-use okane_core::trade::port::{AccountPort, BacktestTradePort, MatcherPort, TradeError, TradePort};
+use okane_core::trade::port::{AccountPort, BacktestTradePort, MatcherPort, TradeError, TradePort, PendingOrderPort};
 use rust_decimal::Decimal;
-use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 /// # Summary
 /// `TradeService` 是纸面交易环境和内盘 OMS 的入口调度者，
@@ -16,17 +14,17 @@ pub struct TradeService {
     matcher: Arc<dyn MatcherPort>,
     /// 用于获取当前标的市场行情的抽象指针 (用于模拟成交)
     market: Arc<dyn Market>,
-    /// 回测/模拟环境的暂存订单池
-    pending_orders: RwLock<HashMap<OrderId, Order>>,
+    /// 活动订单持久化端口
+    pending_port: Arc<dyn PendingOrderPort>,
 }
 
 impl TradeService {
-    pub fn new(account_port: Arc<dyn AccountPort>, matcher: Arc<dyn MatcherPort>, market: Arc<dyn Market>) -> Self {
+    pub fn new(account_port: Arc<dyn AccountPort>, matcher: Arc<dyn MatcherPort>, market: Arc<dyn Market>, pending_port: Arc<dyn PendingOrderPort>) -> Self {
         Self {
             account_port,
             matcher,
             market,
-            pending_orders: RwLock::new(HashMap::new()),
+            pending_port,
         }
     }
 }
@@ -71,16 +69,14 @@ impl TradePort for TradeService {
         } else {
             // 限价单，等待未来穿越
             order.status = OrderStatus::Pending;
-            let mut pending = self.pending_orders.write().await;
-            pending.insert(order.id.clone(), order);
+            self.pending_port.save(order).await?;
         }
 
         Ok(order_id)
     }
 
     async fn cancel_order(&self, order_id: OrderId) -> Result<(), TradeError> {
-        let mut pending = self.pending_orders.write().await;
-        if let Some(mut order) = pending.remove(&order_id) {
+        if let Some(mut order) = self.pending_port.remove(&order_id).await? {
             order.status = OrderStatus::Canceled;
             // 还需要退回冻结资金
             if order.direction == OrderDirection::Buy && let Some(price) = order.price {
@@ -98,30 +94,21 @@ impl TradePort for TradeService {
     }
 
     async fn get_orders(&self, account_id: &AccountId) -> Result<Vec<Order>, TradeError> {
-        let pending = self.pending_orders.read().await;
-        // 过滤出属于该 account_id 的活动订单
-        let orders = pending.values()
-            .filter(|o| o.account_id == *account_id)
-            .cloned()
-            .collect();
-        Ok(orders)
+        self.pending_port.get_by_account(account_id).await
     }
 }
 
 #[async_trait]
 impl BacktestTradePort for TradeService {
     async fn tick(&self, symbol: &str, candle: &Candle) -> Result<(), TradeError> {
-        let mut pending = self.pending_orders.write().await;
         let mut filled_orders = Vec::new();
 
         let high = rust_decimal::Decimal::from_f64_retain(candle.high).unwrap_or(rust_decimal::Decimal::ZERO);
         let low = rust_decimal::Decimal::from_f64_retain(candle.low).unwrap_or(rust_decimal::Decimal::ZERO);
 
-        for (id, order) in pending.iter_mut() {
-            if order.symbol != symbol {
-                continue;
-            }
+        let pending = self.pending_port.get_by_symbol(symbol).await?;
 
+        for mut order in pending {
             if let Some(limit_price) = order.price {
                 // 击穿判定
                 let is_hit = (order.direction == OrderDirection::Buy && low <= limit_price) || 
@@ -132,19 +119,19 @@ impl BacktestTradePort for TradeService {
                     let exec_price = limit_price;
                     let now_ms = candle.time.timestamp_millis();
                     
-                    if let Some(trade) = self.matcher.execute_order(order, exec_price, now_ms) {
+                    if let Some(trade) = self.matcher.execute_order(&mut order, exec_price, now_ms) {
                         let est_req_funds = limit_price * trade.volume; // 原本冻结的总数
                         if let Err(e) = self.account_port.process_trade(&order.account_id, &trade, est_req_funds).await {
-                            tracing::warn!("Backtest tick: Failed process trade on account {}: {}", id.0, e);
+                            tracing::warn!("Backtest tick: Failed process trade on account {}: {}", order.id.0, e);
                         }
                     }
-                    filled_orders.push(id.clone());
+                    filled_orders.push(order.id.clone());
                 }
             }
         }
 
         for id in filled_orders {
-            pending.remove(&id);
+            self.pending_port.remove(&id).await?;
         }
 
         Ok(())

@@ -49,8 +49,9 @@ async fn spawn_test_server() -> (String, Arc<dyn SystemStore>, tempfile::TempDir
         okane_core::trade::entity::AccountId("SysAcct_1".to_string()),
         rust_decimal::Decimal::new(10_000_000, 2), // $100k test money
     );
-    let matcher = std::sync::Arc::new(LocalMatchEngine::default());
-    let trade_service = Arc::new(TradeService::new(account_manager, matcher, market.clone()));
+    let pending_port = Arc::new(okane_store::pending_order::MemoryPendingOrderStore::new());
+    let matcher = std::sync::Arc::new(LocalMatchEngine::new(rust_decimal::Decimal::ZERO));
+    let trade_service = Arc::new(TradeService::new(account_manager, matcher, market.clone(), pending_port));
 
     let strategy_manager = StrategyManager::new(
         strategy_store,
@@ -58,11 +59,14 @@ async fn spawn_test_server() -> (String, Arc<dyn SystemStore>, tempfile::TempDir
         trade_service.clone(),
     );
 
+    let app_config = Arc::new(okane_core::config::AppConfig::default());
+
     let state = AppState {
         strategy_manager,
         trade_port: trade_service,
         system_store: system_store.clone(),
         market_port: market,
+        app_config,
     };
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

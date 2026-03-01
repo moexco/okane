@@ -38,9 +38,8 @@ impl FakeClockProvider {
 
     /// 强制修改时钟的当前时间
     pub fn set_time(&self, new_time: DateTime<Utc>) {
-        if let Ok(mut time) = self.current_time.write() {
-            *time = new_time;
-        }
+        let mut time = self.current_time.write().unwrap();
+        *time = new_time;
     }
 }
 

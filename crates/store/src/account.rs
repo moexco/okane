@@ -22,7 +22,9 @@ pub struct SqliteAccountStore {
 
 impl SqliteAccountStore {
     pub fn new() -> Result<Self, TradeError> {
-        let base_path = crate::config::get_root_dir().join("accounts");
+        let base_path = crate::config::get_root_dir()
+            .map_err(|e| TradeError::InternalError(e.to_string()))?
+            .join("accounts");
         if !base_path.exists() {
             std::fs::create_dir_all(&base_path)
                 .map_err(|e| TradeError::InternalError(format!("Failed to create account dir: {}", e)))?;

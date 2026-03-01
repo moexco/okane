@@ -37,7 +37,7 @@ impl SqliteSystemStore {
     /// # Returns
     /// * `Result<Self, StoreError>` - 存储实例 or 数据库错误。
     pub async fn new() -> Result<Self, StoreError> {
-        let root = crate::config::get_root_dir();
+        let root = crate::config::get_root_dir()?;
         fs::create_dir_all(&root).map_err(|e| StoreError::Database(e.to_string()))?;
 
         let db_path = root.join(DEFAULT_SYSTEM_DB);

@@ -38,6 +38,8 @@ pub struct AppState {
     pub system_store: Arc<dyn SystemStore>,
     /// 行情数据入口 (查询K线与状态)
     pub market_port: Arc<dyn Market>,
+    /// 应用全局配置
+    pub app_config: Arc<okane_core::config::AppConfig>,
 }
 
 // ============================================================

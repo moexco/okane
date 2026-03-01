@@ -41,11 +41,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Okane Engine starting...");
 
     // 1.5 加载全局配置
-    let config_val = config::Config::builder()
-        .add_source(config::File::with_name("config").required(false))
-        .add_source(config::Environment::with_prefix("OKANE").separator("_"))
-        .build()?;
-    let app_config: okane_core::config::AppConfig = config_val.try_deserialize().unwrap_or_default();
+    let config_file_path = std::path::Path::new("config.toml");
+    let mut builder = config::Config::builder();
+    
+    if config_file_path.exists() {
+        builder = builder.add_source(config::File::from(config_file_path).required(true));
+    } else if std::path::Path::new("config").exists() {
+        // Support legacy no-extension 'config' file
+        builder = builder.add_source(config::File::with_name("config").required(true));
+    }
+    
+    builder = builder.add_source(config::Environment::with_prefix("OKANE").separator("_"));
+
+    let config_val = builder.build()?;
+    
+    // 如果配置了解析失败应当报错退出，否则在完全无配置的情况下回退 Default
+    let app_config: okane_core::config::AppConfig = if config_file_path.exists() || std::path::Path::new("config").exists() || std::env::var("OKANE_SERVER_PORT").is_ok() {
+        config_val.try_deserialize()?
+    } else {
+        okane_core::config::AppConfig::default()
+    };
 
     info!("Configuration loaded: {:?}", app_config);
 
@@ -65,8 +80,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 5. 实例化交易服务（目前使用本地撮合和内存账户）
     let account_manager = Arc::new(AccountManager::default());
-    let matcher = std::sync::Arc::new(okane_trade::matcher::LocalMatchEngine::default());
-    let trade_service: Arc<dyn TradePort> = Arc::new(TradeService::new(account_manager, matcher, market.clone()));
+    let pending_port = Arc::new(okane_store::pending_order::MemoryPendingOrderStore::new());
+    let matcher = std::sync::Arc::new(okane_trade::matcher::LocalMatchEngine::new(rust_decimal::Decimal::ZERO));
+    let trade_service: Arc<dyn TradePort> = Arc::new(TradeService::new(account_manager, matcher, market.clone(), pending_port));
 
     // 6. 构造应用服务层（注入 Core Trait 抽象）
     let manager = StrategyManager::new(
@@ -87,6 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         trade_port: trade_service,
         system_store,
         market_port: market.clone(),
+        app_config: Arc::new(app_config.clone()),
     };
 
     let bind_addr = format!("{}:{}", app_config.server.host, app_config.server.port);

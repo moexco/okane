@@ -86,8 +86,9 @@ async fn test_end_to_end_backtest_with_time_travel() {
     let account_id = AccountId("test-account".to_string());
     account_manager.ensure_account_exists(account_id.clone(), Decimal::from_str_exact("10000.0").unwrap());
 
-    let matcher = std::sync::Arc::new(okane_trade::matcher::LocalMatchEngine::default());
-    let trade_service = Arc::new(TradeService::new(account_manager.clone(), matcher, market.clone()));
+    let pending_port = Arc::new(okane_store::pending_order::MemoryPendingOrderStore::new());
+    let matcher = std::sync::Arc::new(okane_trade::matcher::LocalMatchEngine::new(Decimal::ZERO));
+    let trade_service = Arc::new(TradeService::new(account_manager.clone(), matcher, market.clone(), pending_port));
     let fake_clock = Arc::new(FakeClockProvider::new(base_time));
     
 

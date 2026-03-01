@@ -6,6 +6,9 @@ use tokio::time::Instant;
 
 #[tokio::test]
 async fn test_sqlite_account_high_concurrency() {
+    let tmp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    okane_store::config::set_root_dir(tmp_dir.path().to_path_buf());
+
     let store = SqliteAccountStore::new().expect("Failed to create store");
     
     // Create an isolated account for db test

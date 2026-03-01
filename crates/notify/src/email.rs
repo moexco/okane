@@ -36,21 +36,21 @@ impl EmailNotifier {
     /// * `to` - The recipient's email address.
     ///
     /// # Returns
-    /// * A new instance of `EmailNotifier`.
-    pub fn new(host: &str, user: &str, pass: &str, from: &str, to: &str) -> Self {
+    /// * A new instance of `EmailNotifier` or `NotifyError`.
+    pub fn new(host: &str, user: &str, pass: &str, from: &str, to: &str) -> Result<Self, NotifyError> {
         let creds = Credentials::new(user.to_string(), pass.to_string());
 
         // Use default submission port 587 with STARTTLS
         let mailer = AsyncSmtpTransport::<Tokio1Executor>::relay(host)
-            .expect("Invalid SMTP host")
+            .map_err(|e| NotifyError::Config(format!("Invalid SMTP host: {}", e)))?
             .credentials(creds)
             .build();
 
-        Self {
+        Ok(Self {
             mailer,
             from: from.to_string(),
             to: to.to_string(),
-        }
+        })
     }
 }
 
