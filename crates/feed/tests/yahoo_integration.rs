@@ -77,3 +77,33 @@ async fn test_yahoo_stream_subscribe() {
     );
     assert!(candle.close > 0.0);
 }
+
+/// # Summary
+/// 雅虎财经证券搜索的集成测试。
+///
+/// # Logic
+/// 1. 初始化 YahooProvider。
+/// 2. 搜索关键词 "Apple"。
+/// 3. 断言返回结果中包含 "AAPL" 股票。
+#[tokio::test]
+async fn test_yahoo_search_symbols() {
+    let provider = YahooProvider::new();
+    let query = "Apple";
+
+    println!("正在搜索关键词: {}...", query);
+    let result = provider.search_symbols(query).await;
+
+    assert!(result.is_ok(), "搜索符号失败: {:?}", result.err());
+    let symbols = result.unwrap();
+
+    assert!(!symbols.is_empty(), "搜索结果不应为空");
+    
+    println!("找到 {} 个匹配项:", symbols.len());
+    for s in &symbols {
+        println!("- {} ({}): {} {}", s.symbol, s.exchange, s.name, s.currency);
+    }
+
+    // 检查是否包含 AAPL
+    let has_aapl = symbols.iter().any(|s| s.symbol == "AAPL");
+    assert!(has_aapl, "搜索结果应包含 AAPL");
+}
