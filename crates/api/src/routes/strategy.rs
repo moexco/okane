@@ -3,7 +3,8 @@
 //! 实现 `/api/v1/user/strategies` 路径下的 REST 接口。
 //! 对应 UI 原型中的策略列表、部署/停止、以及 Strategy Lab 的代码保存逻辑。
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
+use serde::Deserialize;
 use axum::Json;
 
 use crate::types::{ApiResponse, StartStrategyRequest, StrategyResponse};
@@ -15,6 +16,12 @@ use crate::server::AppState;
 //  Handler 实现
 // ============================================================
 
+#[derive(Deserialize, utoipa::ToSchema)]
+pub struct ListStrategiesQuery {
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
 /// 列出当前用户的所有策略实例
 ///
 /// 返回该用户名下的全量策略列表及其运行状态。
@@ -24,6 +31,10 @@ use crate::server::AppState;
     path = "/api/v1/user/strategies",
     tag = "策略 (Strategy)",
     security(("bearer_jwt" = [])),
+    params(
+        ("limit" = Option<usize>, Query, description = "返回数量限制，默认 50"),
+        ("offset" = Option<usize>, Query, description = "跳过的记录数，默认 0")
+    ),
     responses(
         (status = 200, description = "策略列表获取成功", body = ApiResponse<Vec<StrategyResponse>>),
         (status = 401, description = "未认证")
@@ -32,9 +43,22 @@ use crate::server::AppState;
 pub async fn list_strategies(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
+    Query(query): Query<ListStrategiesQuery>,
 ) -> Result<Json<ApiResponse<Vec<StrategyResponse>>>, ApiError> {
-    let instances = state.strategy_manager.list_strategies(&user.id).await?;
-    let responses: Vec<StrategyResponse> = instances.iter().map(StrategyResponse::from).collect();
+    let mut instances = state.strategy_manager.list_strategies(&user.id).await?;
+    
+    // Sort by created_at descending (newest first)
+    instances.sort_by_key(|b| std::cmp::Reverse(b.created_at));
+    
+    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.unwrap_or(50);
+    
+    let paginated_instances: Vec<_> = instances.into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect();
+
+    let responses: Vec<StrategyResponse> = paginated_instances.iter().map(StrategyResponse::from).collect();
 
     Ok(Json(ApiResponse::ok(responses)))
 }
@@ -105,6 +129,12 @@ pub async fn deploy_strategy(
     // Base64 解码源码
     let source = base64_decode(&req.source_base64)
         .map_err(|e| ApiError::BadRequest(format!("Base64 解码失败: {}", e)))?;
+
+    // IDOR Check: Ensure the strategy binds to an account owner by this user
+    if req.account_id != user.id && !req.account_id.starts_with(&format!("{}_", user.id)) {
+        tracing::warn!("IDOR attempt: user {} tried to deploy strategy on account {}", user.id, req.account_id);
+        return Err(ApiError::Forbidden(format!("Account {} does not belong to user {}", req.account_id, user.id)));
+    }
 
     let start_req = StartRequest {
         symbol: req.symbol,

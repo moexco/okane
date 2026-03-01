@@ -51,6 +51,10 @@ impl Market for MockMarket {
             },
         }))
     }
+
+    async fn search_symbols(&self, _query: &str) -> Result<Vec<okane_core::store::port::StockMetadata>, MarketError> {
+        Ok(vec![])
+    }
 }
 
 #[tokio::test]

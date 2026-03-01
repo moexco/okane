@@ -70,6 +70,13 @@ impl MarketDataProvider for MockProvider {
         };
         Ok(Box::pin(s))
     }
+
+    async fn search_symbols(
+        &self,
+        _query: &str,
+    ) -> Result<Vec<okane_core::store::port::StockMetadata>, MarketError> {
+        Ok(vec![])
+    }
 }
 
 /// # Summary

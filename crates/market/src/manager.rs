@@ -122,4 +122,22 @@ impl Market for MarketImpl {
             .insert(symbol.to_string(), Arc::downgrade(&arc_stock));
         Ok(arc_stock)
     }
+
+    /// # Summary
+    /// 在全局市场中通过数据源搜索股票元数据。
+    ///
+    /// # Logic
+    /// 1. 直接调用底层 provider 的 search_symbols 方法。
+    ///
+    /// # Arguments
+    /// * `query`: 搜索关键词。
+    ///
+    /// # Returns
+    /// 成功返回匹配的元数据列表。
+    async fn search_symbols(
+        &self,
+        query: &str,
+    ) -> Result<Vec<okane_core::store::port::StockMetadata>, MarketError> {
+        self.provider.search_symbols(query).await
+    }
 }

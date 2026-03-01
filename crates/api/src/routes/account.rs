@@ -31,9 +31,15 @@ use crate::server::AppState;
 )]
 pub async fn get_account_snapshot(
     State(state): State<AppState>,
-    CurrentUser(_user): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(account_id): Path<String>,
 ) -> Result<Json<ApiResponse<AccountSnapshotResponse>>, ApiError> {
+    // IDOR Check: Ensures the user owns this account
+    if account_id != user.id && !account_id.starts_with(&format!("{}_", user.id)) {
+        tracing::warn!("IDOR attempt: user {} tried to access account {}", user.id, account_id);
+        return Err(ApiError::Forbidden(format!("Account {} does not belong to user {}", account_id, user.id)));
+    }
+
     let account_id_val = okane_core::trade::entity::AccountId(account_id);
     let snapshot = state.trade_port.get_account(account_id_val).await?;
 

@@ -33,12 +33,13 @@ pub async fn search_stocks(
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<ApiResponse<Vec<StockMetadataResponse>>>, Json<ApiErrorResponse>> {
-    match state.system_store.search_stocks(&query.q).await {
-        Ok(results) => {
-            let dtos = results.into_iter().map(Into::into).collect();
+    // 模糊搜索直接路由到上游数据源，不走本地数据库
+    match state.market_port.search_symbols(&query.q).await {
+        Ok(upstream_results) => {
+            let dtos = upstream_results.into_iter().map(Into::into).collect();
             Ok(Json(ApiResponse::ok(dtos)))
         }
-        Err(e) => Err(Json(ApiErrorResponse::from_msg(format!("Store error: {}", e)))),
+        Err(e) => Err(Json(ApiErrorResponse::from_msg(format!("Upstream search error: {}", e)))),
     }
 }
 

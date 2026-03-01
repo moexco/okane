@@ -18,11 +18,11 @@ pub struct PositionResponse {
     #[schema(example = "AAPL")]
     pub symbol: String,
     /// 持仓数量 (正=多头, 负=空头)
-    #[schema(value_type = String, example = "100")]
-    pub volume: Decimal,
+    #[schema(example = "100.00")]
+    pub volume: String,
     /// 持仓均价
-    #[schema(value_type = String, example = "175.50")]
-    pub average_price: Decimal,
+    #[schema(example = "175.50")]
+    pub average_price: String,
 }
 
 /// 账户快照 DTO - 对应 UI 顶部 Key Metrics 区域
@@ -32,14 +32,14 @@ pub struct AccountSnapshotResponse {
     #[schema(example = "SysAcct_Alpha_01")]
     pub account_id: String,
     /// 可用资金余额
-    #[schema(value_type = String, example = "312980.50")]
-    pub available_balance: Decimal,
+    #[schema(example = "312980.50")]
+    pub available_balance: String,
     /// 冻结资金 (挂单中)
-    #[schema(value_type = String, example = "15000.00")]
-    pub frozen_balance: Decimal,
+    #[schema(example = "15000.00")]
+    pub frozen_balance: String,
     /// 总权益
-    #[schema(value_type = String, example = "1245670.32")]
-    pub total_equity: Decimal,
+    #[schema(example = "1245670.32")]
+    pub total_equity: String,
     /// 当前持仓列表
     pub positions: Vec<PositionResponse>,
 }
@@ -60,14 +60,14 @@ pub struct OrderResponse {
     #[schema(example = "Buy")]
     pub direction: String,
     /// 限价 (市价单为 null)
-    #[schema(value_type = Option<f64>, example = 120.5)]
-    pub price: Option<f64>,
+    #[schema(example = "120.50")]
+    pub price: Option<String>,
     /// 委托数量
-    #[schema(value_type = f64, example = 100.0)]
-    pub volume: f64,
+    #[schema(example = "100")]
+    pub volume: String,
     /// 已成交数量
-    #[schema(value_type = f64, example = 50.0)]
-    pub filled_volume: f64,
+    #[schema(example = "50")]
+    pub filled_volume: String,
     /// 状态 (Pending, Filled, Canceled 等)
     #[schema(example = "Pending")]
     pub status: String,
@@ -107,20 +107,20 @@ pub struct CandleResponse {
     #[schema(example = "2026-03-01T10:00:00Z")]
     pub time: String,
     /// 开盘价
-    #[schema(value_type = f64, example = 150.5)]
-    pub open: f64,
+    #[schema(example = "150.5")]
+    pub open: String,
     /// 最高价
-    #[schema(value_type = f64, example = 152.0)]
-    pub high: f64,
+    #[schema(example = "152.0")]
+    pub high: String,
     /// 最低价
-    #[schema(value_type = f64, example = 149.0)]
-    pub low: f64,
+    #[schema(example = "149.0")]
+    pub low: String,
     /// 收盘价
-    #[schema(value_type = f64, example = 151.0)]
-    pub close: f64,
+    #[schema(example = "151.0")]
+    pub close: String,
     /// 成交量
-    #[schema(value_type = f64, example = 1000000.0)]
-    pub volume: f64,
+    #[schema(example = "1000000")]
+    pub volume: String,
     /// 是否已完结
     #[schema(example = true)]
     pub is_final: bool,
@@ -319,8 +319,8 @@ impl From<okane_core::trade::entity::Position> for PositionResponse {
     fn from(p: okane_core::trade::entity::Position) -> Self {
         Self {
             symbol: p.symbol,
-            volume: p.volume,
-            average_price: p.average_price,
+            volume: p.volume.to_string(),
+            average_price: p.average_price.to_string(),
         }
     }
 }
@@ -329,9 +329,9 @@ impl From<okane_core::trade::entity::AccountSnapshot> for AccountSnapshotRespons
     fn from(s: okane_core::trade::entity::AccountSnapshot) -> Self {
         Self {
             account_id: s.account_id.0,
-            available_balance: s.available_balance,
-            frozen_balance: s.frozen_balance,
-            total_equity: s.total_equity,
+            available_balance: s.available_balance.to_string(),
+            frozen_balance: s.frozen_balance.to_string(),
+            total_equity: s.total_equity.to_string(),
             positions: s.positions.into_iter().map(Into::into).collect(),
         }
     }
@@ -378,11 +378,11 @@ impl From<okane_core::market::entity::Candle> for CandleResponse {
     fn from(c: okane_core::market::entity::Candle) -> Self {
         Self {
             time: c.time.to_rfc3339(),
-            open: c.open,
-            high: c.high,
-            low: c.low,
-            close: c.close,
-            volume: c.volume,
+            open: Decimal::from_f64_retain(c.open).unwrap_or(Decimal::ZERO).to_string(),
+            high: Decimal::from_f64_retain(c.high).unwrap_or(Decimal::ZERO).to_string(),
+            low: Decimal::from_f64_retain(c.low).unwrap_or(Decimal::ZERO).to_string(),
+            close: Decimal::from_f64_retain(c.close).unwrap_or(Decimal::ZERO).to_string(),
+            volume: Decimal::from_f64_retain(c.volume).unwrap_or(Decimal::ZERO).to_string(),
             is_final: c.is_final,
         }
     }
@@ -390,15 +390,14 @@ impl From<okane_core::market::entity::Candle> for CandleResponse {
 
 impl From<okane_core::trade::entity::Order> for OrderResponse {
     fn from(o: okane_core::trade::entity::Order) -> Self {
-        use rust_decimal::prelude::ToPrimitive;
         Self {
             id: o.id.0,
             account_id: o.account_id.0,
             symbol: o.symbol,
             direction: format!("{:?}", o.direction),
-            price: o.price.and_then(|p| p.to_f64()),
-            volume: o.volume.to_f64().unwrap_or(0.0),
-            filled_volume: o.filled_volume.to_f64().unwrap_or(0.0),
+            price: o.price.map(|p| p.to_string()),
+            volume: o.volume.to_string(),
+            filled_volume: o.filled_volume.to_string(),
             status: format!("{:?}", o.status),
             created_at: o.created_at,
         }

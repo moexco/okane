@@ -95,10 +95,14 @@ pub async fn create_user(
     )
 )]
 pub async fn update_settings(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(req): Json<UpdateSettingsRequest>,
-) -> Json<ApiResponse<String>> {
+) -> Result<Json<ApiResponse<String>>, ApiError> {
     tracing::info!("Admin updating setting '{}' to '{}'", req.setting_key, req.setting_value);
-    // TODO: Connect this to actual config hot-reloading or SystemStore key-value settings table
-    Json(ApiResponse::ok("ok".to_string()))
+    
+    state.system_store.set_setting(&req.setting_key, &req.setting_value).await
+        .map_err(|e| ApiError::Internal(format!("Failed to save setting: {}", e)))?;
+        
+    // TODO: Broadcast event to Engine for hot-reloading if applicable
+    Ok(Json(ApiResponse::ok("ok".to_string())))
 }

@@ -89,6 +89,12 @@ impl SqliteSystemStore {
                 sector TEXT,
                 currency TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at DATETIME NOT NULL
+            );
             "#,
         )
         .execute(&pool)
@@ -371,6 +377,25 @@ impl SystemStore for SqliteSystemStore {
         .execute(&self.pool)
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn get_setting(&self, key: &str) -> Result<Option<String>, StoreError> {
+        sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))
+    }
+
+    async fn set_setting(&self, key: &str, value: &str) -> Result<(), StoreError> {
+        sqlx::query("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)")
+            .bind(key)
+            .bind(value)
+            .bind(Utc::now())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
         Ok(())
     }
 }

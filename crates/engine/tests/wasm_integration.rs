@@ -61,6 +61,10 @@ impl Market for MockMarket {
     async fn get_stock(&self, _: &str) -> Result<Arc<dyn Stock>, MarketError> {
         Ok(self.stock.clone())
     }
+
+    async fn search_symbols(&self, _query: &str) -> Result<Vec<okane_core::store::port::StockMetadata>, MarketError> {
+        Ok(vec![])
+    }
 }
 
 struct MockHandler {

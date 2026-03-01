@@ -96,6 +96,10 @@ impl TradePort for TradeService {
     async fn get_orders(&self, account_id: &AccountId) -> Result<Vec<Order>, TradeError> {
         self.pending_port.get_by_account(account_id).await
     }
+
+    async fn get_order(&self, order_id: &OrderId) -> Result<Option<Order>, TradeError> {
+        self.pending_port.get(order_id).await
+    }
 }
 
 #[async_trait]

@@ -273,4 +273,27 @@ pub trait SystemStore: Send + Sync {
     /// # Returns
     /// 操作结果。
     async fn save_stock_metadata(&self, metadata: &StockMetadata) -> Result<(), StoreError>;
+
+    // --- 系统配置域 ---
+
+    /// # Summary
+    /// 获取全局配置项。
+    ///
+    /// # Arguments
+    /// * `key`: 配置键名。
+    ///
+    /// # Returns
+    /// * `Result<Option<String>, StoreError>` - 配置值或 None。
+    async fn get_setting(&self, key: &str) -> Result<Option<String>, StoreError>;
+
+    /// # Summary
+    /// 保存全局配置项。
+    ///
+    /// # Arguments
+    /// * `key`: 配置键名。
+    /// * `value`: 配置值。
+    ///
+    /// # Returns
+    /// * `Result<(), StoreError>`
+    async fn set_setting(&self, key: &str, value: &str) -> Result<(), StoreError>;
 }

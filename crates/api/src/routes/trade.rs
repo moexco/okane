@@ -4,7 +4,7 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 use chrono::Utc;
 use rust_decimal::Decimal;
-use rust_decimal::prelude::FromPrimitive;
+use std::str::FromStr;
 
 use okane_core::trade::entity::{AccountId, Order, OrderDirection, OrderId};
 use crate::types::{ApiErrorResponse, ApiResponse, OrderResponse};
@@ -14,6 +14,8 @@ use crate::server::AppState;
 #[derive(Deserialize, ToSchema)]
 pub struct GetOrdersQuery {
     pub account_id: String,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 /// 查询当前账户的活动订单
@@ -25,7 +27,9 @@ pub struct GetOrdersQuery {
     tag = "订单交易 (Trade)",
     security(("bearer_jwt" = [])),
     params(
-        ("account_id" = String, Query, description = "系统账户 ID")
+        ("account_id" = String, Query, description = "系统账户 ID"),
+        ("limit" = Option<usize>, Query, description = "返回数量限制，默认 50"),
+        ("offset" = Option<usize>, Query, description = "跳过的记录数，默认 0")
     ),
     responses(
         (status = 200, description = "获取成功", body = ApiResponse<Vec<OrderResponse>>),
@@ -34,13 +38,30 @@ pub struct GetOrdersQuery {
 )]
 pub async fn get_orders(
     State(state): State<AppState>,
-    CurrentUser(_user): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Query(query): Query<GetOrdersQuery>,
 ) -> Result<Json<ApiResponse<Vec<OrderResponse>>>, Json<ApiErrorResponse>> {
     let account = AccountId(query.account_id);
+    
+    // IDOR Check
+    if account.0 != user.id && !account.0.starts_with(&format!("{}_", user.id)) {
+        return Err(Json(ApiErrorResponse::from_msg("Forbidden: Account does not belong to you")));
+    }
+
     match state.trade_port.get_orders(&account).await {
-        Ok(orders) => {
-            let dtos = orders.into_iter().map(Into::into).collect();
+        Ok(mut orders) => {
+            // Sort by created_at descending (newest first)
+            orders.sort_by_key(|b| std::cmp::Reverse(b.created_at));
+            
+            let offset = query.offset.unwrap_or(0);
+            let limit = query.limit.unwrap_or(50);
+            
+            let paginated_orders: Vec<_> = orders.into_iter()
+                .skip(offset)
+                .take(limit)
+                .collect();
+                
+            let dtos = paginated_orders.into_iter().map(Into::into).collect();
             Ok(Json(ApiResponse::ok(dtos)))
         }
         Err(e) => Err(Json(ApiErrorResponse::from_msg(format!("Trade error: {}", e)))),
@@ -51,9 +72,9 @@ pub async fn get_orders(
 pub struct PlaceOrderRequest {
     pub account_id: String,
     pub symbol: String,
-    pub volume: f64,
-    pub price: Option<f64>,
-    pub order_type: String,
+    pub volume: String,
+    pub price: Option<String>,
+    pub direction: String,
 }
 
 /// 提交新订单
@@ -73,20 +94,28 @@ pub struct PlaceOrderRequest {
 )]
 pub async fn place_order(
     State(state): State<AppState>,
-    CurrentUser(_user): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Json(req): Json<PlaceOrderRequest>,
 ) -> Result<Json<ApiResponse<String>>, Json<ApiErrorResponse>> {
-    let direction = match req.order_type.to_uppercase().as_str() {
+    // IDOR Check
+    if req.account_id != user.id && !req.account_id.starts_with(&format!("{}_", user.id)) {
+        return Err(Json(ApiErrorResponse::from_msg("Forbidden: Account does not belong to you")));
+    }
+
+    let direction = match req.direction.to_uppercase().as_str() {
         "BUY" => OrderDirection::Buy,
         "SELL" => OrderDirection::Sell,
-        _ => return Err(Json(ApiErrorResponse::from_msg("Invalid order_type, expected Buy or Sell"))),
+        _ => return Err(Json(ApiErrorResponse::from_msg("Invalid direction, expected Buy or Sell"))),
     };
     
-    let volume = Decimal::from_f64(req.volume)
-        .ok_or_else(|| Json(ApiErrorResponse::from_msg("Invalid volume precision")))?;
+    let volume = Decimal::from_str(&req.volume)
+        .map_err(|_| Json(ApiErrorResponse::from_msg("Invalid volume precision")))?;
+    if volume <= Decimal::ZERO {
+        return Err(Json(ApiErrorResponse::from_msg("Volume must be greater than zero")));
+    }
         
     let price = match req.price {
-        Some(p) => Some(Decimal::from_f64(p).ok_or_else(|| Json(ApiErrorResponse::from_msg("Invalid price precision")))?),
+        Some(p) => Some(Decimal::from_str(&p).map_err(|_| Json(ApiErrorResponse::from_msg("Invalid price precision")))?),
         None => None,
     };
     
@@ -125,10 +154,24 @@ pub async fn place_order(
 )]
 pub async fn cancel_order(
     State(state): State<AppState>,
-    CurrentUser(_user): CurrentUser,
+    CurrentUser(user): CurrentUser,
     Path(order_id): Path<String>,
 ) -> Result<Json<ApiResponse<String>>, Json<ApiErrorResponse>> {
-    match state.trade_port.cancel_order(OrderId(order_id)).await {
+    let order_id = OrderId(order_id);
+    
+    // 1. 获取订单以验证归属权
+    let order = state.trade_port.get_order(&order_id)
+        .await
+        .map_err(|e| Json(ApiErrorResponse::from_msg(format!("Failed to fetch order: {}", e))))?
+        .ok_or_else(|| Json(ApiErrorResponse::from_msg("Order not found".to_string())))?;
+
+    // 2. IDOR Check: Ensures the user owns the account associated with the order
+    if order.account_id.0 != user.id && !order.account_id.0.starts_with(&format!("{}_", user.id)) {
+        tracing::warn!("IDOR attempt: user {} tried to cancel order {} belonging to account {}", user.id, order.id.0, order.account_id.0);
+        return Err(Json(ApiErrorResponse::from_msg("Forbidden: Order does not belong to you")));
+    }
+
+    match state.trade_port.cancel_order(order_id).await {
         Ok(_) => Ok(Json(ApiResponse::ok("ok".to_string()))),
         Err(e) => Err(Json(ApiErrorResponse::from_msg(format!("Failed to cancel order: {}", e)))),
     }

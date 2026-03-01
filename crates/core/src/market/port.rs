@@ -170,6 +170,22 @@ pub trait MarketDataProvider: Send + Sync {
         stock: &StockIdentity,
         timeframe: TimeFrame,
     ) -> Result<CandleStream, MarketError>;
+
+    /// # Summary
+    /// 搜索股票元数据。
+    ///
+    /// # Logic
+    /// 1. 请求数据源提供的股票搜索接口。
+    ///
+    /// # Arguments
+    /// * `query`: 搜索关键词（匹配 symbol 或 name）。
+    ///
+    /// # Returns
+    /// 匹配的元数据列表（这里复用 Store 层的 StockMetadata）。
+    async fn search_symbols(
+        &self,
+        query: &str,
+    ) -> Result<Vec<crate::store::port::StockMetadata>, MarketError>;
 }
 
 /// # Summary
@@ -194,4 +210,20 @@ pub trait Market: Send + Sync {
     /// # Returns
     /// 成功返回 Stock 聚合根。
     async fn get_stock(&self, symbol: &str) -> Result<Arc<dyn Stock>, MarketError>;
+
+    /// # Summary
+    /// 在全局市场中通过数据源搜索股票元数据。
+    ///
+    /// # Logic
+    /// 1. 直接调用底层 provider 的 search_symbols 方法。
+    ///
+    /// # Arguments
+    /// * `query`: 搜索关键词。
+    ///
+    /// # Returns
+    /// 成功返回匹配的元数据列表。
+    async fn search_symbols(
+        &self,
+        query: &str,
+    ) -> Result<Vec<crate::store::port::StockMetadata>, MarketError>;
 }

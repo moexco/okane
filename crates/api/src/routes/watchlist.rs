@@ -8,7 +8,6 @@ use crate::middleware::auth::CurrentUser;
 
 /// 获取自选股列表 (占位)
 /// 
-/// # TODO
 /// 获取当前用户的关注列表
 #[utoipa::path(
     get,
@@ -37,7 +36,6 @@ pub struct WatchlistRequest {
 
 /// 添加自选股 (占位)
 /// 
-/// # TODO
 /// 将股票添加到自选
 #[utoipa::path(
     post,
@@ -55,6 +53,28 @@ pub async fn add_to_watchlist(
     CurrentUser(user): CurrentUser,
     Json(req): Json<WatchlistRequest>,
 ) -> Result<Json<ApiResponse<String>>, Json<ApiErrorResponse>> {
+    // 1. 验证目标证券是否存在
+    // 首先看本地有没有
+    let symbol_exists = match state.system_store.search_stocks(&req.symbol).await {
+        Ok(results) => results.iter().any(|m| m.symbol == req.symbol),
+        Err(_) => false,
+    };
+
+    // 如果本地没有，去上游查
+    let is_valid = if symbol_exists {
+        true
+    } else {
+        match state.market_port.search_symbols(&req.symbol).await {
+            Ok(upstream) => upstream.iter().any(|m| m.symbol == req.symbol),
+            Err(_) => false,
+        }
+    };
+
+    if !is_valid {
+        return Err(Json(ApiErrorResponse::from_msg("404 / 400 Invalid Symbol: Stock not found")));
+    }
+
+    // 2. 插入自选股表
     match state.system_store.add_to_watchlist(&user.id, &req.symbol).await {
         Ok(_) => Ok(Json(ApiResponse::ok("ok".to_string()))),
         Err(e) => Err(Json(ApiErrorResponse::from_msg(format!("Store error: {}", e)))),
@@ -63,7 +83,6 @@ pub async fn add_to_watchlist(
 
 /// 删除自选股 (占位)
 /// 
-/// # TODO
 /// 将股票从自选移除
 #[utoipa::path(
     delete,

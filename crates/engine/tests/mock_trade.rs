@@ -21,4 +21,8 @@ impl TradePort for MockTradePort {
     async fn get_orders(&self, _account_id: &AccountId) -> Result<Vec<Order>, TradeError> {
         Ok(vec![])
     }
+
+    async fn get_order(&self, _order_id: &OrderId) -> Result<Option<Order>, TradeError> {
+        Ok(None)
+    }
 }

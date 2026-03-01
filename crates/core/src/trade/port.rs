@@ -60,6 +60,12 @@ pub trait TradePort: Send + Sync {
     /// # Arguments
     /// * `account_id` - 系统级 Account ID
     async fn get_orders(&self, account_id: &AccountId) -> Result<Vec<Order>, TradeError>;
+
+    /// 查询单笔订单详情
+    ///
+    /// # Arguments
+    /// * `order_id` - 系统级 Order ID
+    async fn get_order(&self, order_id: &OrderId) -> Result<Option<Order>, TradeError>;
 }
 
 /// # Summary

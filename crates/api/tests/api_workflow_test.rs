@@ -49,6 +49,10 @@ async fn spawn_test_server() -> (String, Arc<dyn SystemStore>, tempfile::TempDir
         okane_core::trade::entity::AccountId("SysAcct_1".to_string()),
         rust_decimal::Decimal::new(10_000_000, 2), // $100k test money
     );
+    account_manager.ensure_account_exists(
+        okane_core::trade::entity::AccountId("trader_01".to_string()),
+        rust_decimal::Decimal::new(10_000_000, 2), // $100k test money
+    );
     let pending_port = Arc::new(okane_store::pending_order::MemoryPendingOrderStore::new());
     let matcher = std::sync::Arc::new(LocalMatchEngine::new(rust_decimal::Decimal::ZERO));
     let trade_service = Arc::new(TradeService::new(account_manager, matcher, market.clone(), pending_port));
@@ -268,7 +272,7 @@ async fn test_full_api_workflow() {
         .bearer_auth(&trader_token)
         .json(&StartStrategyRequest {
             symbol: "AAPL".to_string(),
-            account_id: "SysAcct_1".to_string(),
+            account_id: "trader_01".to_string(),
             timeframe: "1m".to_string(),
             engine_type: "JavaScript".to_string(),
             source_base64: "Y29uc29sZS5sb2coJ2hlbGxvJyk7".to_string(), // console.log('hello');
@@ -297,7 +301,7 @@ async fn test_full_api_workflow() {
     // Case 8: 账户快照获取
     // ============================================
     let acc_res = client
-        .get(format!("{}/api/v1/user/account/SysAcct_1", base_url))
+        .get(format!("{}/api/v1/user/account/trader_01", base_url))
         .bearer_auth(&trader_token)
         .send()
         .await

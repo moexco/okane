@@ -333,9 +333,23 @@ impl Stock for StockInner {
         }
 
         // 本地缺失则拉取远端数据
-        self.provider
+        let upstream = self.provider
             .fetch_candles(&self.identity, timeframe, start, end)
-            .await
+            .await?;
+
+        // 异步存入本地数据库作为缓存
+        if !upstream.is_empty() {
+            let store = self.store.clone();
+            let identity_clone = self.identity.clone();
+            let candles_clone = upstream.clone();
+            tokio::spawn(async move {
+                if let Err(e) = store.save_candles(&identity_clone, timeframe, &candles_clone).await {
+                    tracing::error!("Failed to cache K-line data for {}: {}", identity_clone.symbol, e);
+                }
+            });
+        }
+
+        Ok(upstream)
     }
 
     /// # Summary
@@ -459,6 +473,13 @@ mod tests {
             Ok(Box::pin(stream::unfold(rx, |mut rx| async move {
                 rx.recv().await.map(|c| (c, rx))
             })))
+        }
+
+        async fn search_symbols(
+            &self,
+            _query: &str,
+        ) -> Result<Vec<okane_core::store::port::StockMetadata>, MarketError> {
+            Ok(vec![])
         }
     }
 

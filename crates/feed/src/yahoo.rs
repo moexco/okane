@@ -326,4 +326,69 @@ impl MarketDataProvider for YahooProvider {
 
         Ok(Box::pin(ReceiverStream::new(rx)))
     }
+
+    /// # Summary
+    /// 在 Yahoo Finance 搜索股票
+    ///
+    /// # Logic
+    /// 调用 https://query2.finance.yahoo.com/v1/finance/search 接口进行模糊搜索。
+    ///
+    /// # Arguments
+    /// * `query`: 搜索关键词
+    ///
+    /// # Returns
+    /// 匹配的股票列表
+    async fn search_symbols(
+        &self,
+        query: &str,
+    ) -> Result<Vec<okane_core::store::port::StockMetadata>, MarketError> {
+        let url = "https://query2.finance.yahoo.com/v1/finance/search";
+        
+        let resp = self
+            .client
+            .get(url)
+            .query(&[("q", query), ("quotesCount", "10")])
+            .send()
+            .await
+            .map_err(|e| MarketError::Network(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            return Err(MarketError::Network(format!("HTTP {}", resp.status())));
+        }
+
+        #[derive(Deserialize, Debug)]
+        struct YahooSearchQuote {
+            symbol: String,
+            longname: Option<String>,
+            shortname: Option<String>,
+            exchange: Option<String>,
+            industry: Option<String>,
+        }
+
+        #[derive(Deserialize, Debug)]
+        struct YahooSearchResponse {
+            quotes: Vec<YahooSearchQuote>,
+        }
+
+        let json: YahooSearchResponse = resp
+            .json()
+            .await
+            .map_err(|e| MarketError::Parse(e.to_string()))?;
+
+        let results = json.quotes.into_iter().filter(|q| {
+            // 只保留具有 symbol 和 name 的结果，并且通常只寻找真正的股票或ETF
+            !q.symbol.is_empty() && (q.longname.is_some() || q.shortname.is_some())
+        }).map(|q| {
+            let name = q.longname.or(q.shortname).unwrap_or_else(|| "Unknown".to_string());
+            okane_core::store::port::StockMetadata {
+                symbol: q.symbol,
+                name,
+                exchange: q.exchange.unwrap_or_else(|| "Unknown".to_string()),
+                sector: q.industry,
+                currency: "USD".to_string(), // Yahoo Search 中可能没有 currency, 默认给 USD 或从其他 API 拿
+            }
+        }).collect();
+
+        Ok(results)
+    }
 }
