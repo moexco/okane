@@ -1,5 +1,5 @@
 use chrono::Utc;
-use okane_core::common::time::RealTimeProvider;
+use okane_core::common::time::TimeProvider;
 use dashmap::DashMap;
 use okane_core::common::TimeFrame;
 use okane_core::engine::error::EngineError;
@@ -56,6 +56,8 @@ pub struct StrategyManager {
     engine_builder: Arc<dyn EngineBuilder>,
     // 交易服务通道
     trade_port: Arc<dyn okane_core::trade::port::TradePort>,
+    // 时间提供者，允许在回测中被替换
+    time_provider: Arc<dyn TimeProvider>,
     // 运行中的策略协程句柄，Key 为 "{user_id}_{instance_id}"
     running_tasks: DashMap<String, AbortHandle>,
 }
@@ -74,11 +76,13 @@ impl StrategyManager {
         store: Arc<dyn StrategyStore>,
         engine_builder: Arc<dyn EngineBuilder>,
         trade_port: Arc<dyn okane_core::trade::port::TradePort>,
+        time_provider: Arc<dyn TimeProvider>,
     ) -> Arc<Self> {
         Arc::new(Self {
             store,
             engine_builder,
             trade_port,
+            time_provider,
             running_tasks: DashMap::new(),
         })
     }
@@ -132,7 +136,7 @@ impl StrategyManager {
             source: req.source,
             handlers: Vec::new(), // TODO: 外部注入 SignalHandler 列表
             trade_port: self.trade_port.clone(),
-            time_provider: Arc::new(RealTimeProvider),
+            time_provider: self.time_provider.clone(),
         })?;
 
         // 更新状态为 Running
@@ -163,9 +167,12 @@ impl StrategyManager {
                 }
             };
 
-            let _ = store_clone
-                .update_status(&user_id_owned, &id_owned, new_status)
-                .await;
+            if let Err(e) = store_clone
+                .update_status(&user_id_owned, &id_owned, new_status.clone())
+                .await
+            {
+                error!("Failed to update strategy {} status to {:?}: {}", id_owned, new_status, e);
+            }
 
             // 清理句柄
             running_tasks.remove(&task_key_clone);

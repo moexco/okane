@@ -61,6 +61,7 @@ async fn spawn_test_server() -> (String, Arc<dyn SystemStore>, tempfile::TempDir
         strategy_store,
         engine_builder,
         trade_service.clone(),
+        Arc::new(okane_core::common::time::RealTimeProvider),
     );
 
     let app_config = Arc::new(okane_core::config::AppConfig::default());
@@ -89,11 +90,21 @@ async fn spawn_test_server() -> (String, Arc<dyn SystemStore>, tempfile::TempDir
     .merge(
         utoipa_axum::router::OpenApiRouter::new()
             .routes(utoipa_axum::routes!(okane_api::routes::auth::change_password))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                okane_api::middleware::auth::auth_middleware,
+            )),
+    )
+    .merge(
+        utoipa_axum::router::OpenApiRouter::new()
             .routes(utoipa_axum::routes!(okane_api::routes::account::get_account_snapshot))
             .routes(utoipa_axum::routes!(okane_api::routes::strategy::list_strategies))
             .routes(utoipa_axum::routes!(okane_api::routes::strategy::get_strategy))
             .routes(utoipa_axum::routes!(okane_api::routes::strategy::deploy_strategy))
             .routes(utoipa_axum::routes!(okane_api::routes::strategy::stop_strategy))
+            .layer(axum::middleware::from_fn(
+                okane_api::middleware::auth::require_password_changed,
+            ))
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 okane_api::middleware::auth::auth_middleware,
@@ -125,7 +136,7 @@ async fn spawn_test_server() -> (String, Arc<dyn SystemStore>, tempfile::TempDir
 
 #[tokio::test]
 async fn test_full_api_workflow() {
-    let _ = tracing_subscriber::fmt().with_env_filter("debug").try_init();
+    tracing_subscriber::fmt().with_env_filter("debug").try_init().ok();
     
     let (base_url, _store, _tmp) = spawn_test_server().await;
     let client = reqwest::Client::new();

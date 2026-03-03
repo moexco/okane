@@ -3,6 +3,7 @@ use crate::market::entity::Candle;
 use crate::market::error::MarketError;
 use async_trait::async_trait;
 use futures::Stream;
+use rust_decimal::Decimal;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -36,7 +37,7 @@ pub trait Stock: Send + Sync {
     ///
     /// # Returns
     /// 若有价格则返回成交价，否则返回 None。
-    fn current_price(&self) -> Option<f64>;
+    fn current_price(&self) -> Option<Decimal>;
 
     /// # Summary
     /// 获取特定周期下正在形成中的最新 K 线快照。

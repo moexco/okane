@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 /// # Summary
@@ -11,17 +12,17 @@ pub struct Candle {
     // K 线开始时间
     pub time: DateTime<Utc>,
     // 开盘价
-    pub open: f64,
+    pub open: Decimal,
     // 最高价
-    pub high: f64,
+    pub high: Decimal,
     // 最低价
-    pub low: f64,
+    pub low: Decimal,
     // 收盘价
-    pub close: f64,
+    pub close: Decimal,
     // 调整后收盘价 (用于处理分红、拆股等复权情况)
-    pub adj_close: Option<f64>,
+    pub adj_close: Option<Decimal>,
     // 成交量
-    pub volume: f64,
+    pub volume: Decimal,
     // 是否为最终数据 (即该周期已收盘)
     pub is_final: bool,
 }

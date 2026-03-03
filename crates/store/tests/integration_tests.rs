@@ -2,6 +2,7 @@ use chrono::{TimeZone, Utc};
 use okane_core::common::{Stock, TimeFrame};
 use okane_core::market::entity::Candle;
 use okane_core::store::port::{MarketStore, Position, StockMetadata, SystemStore, User};
+use rust_decimal_macros::dec;
 use okane_store::config::set_root_dir;
 use okane_store::market::SqliteMarketStore;
 use okane_store::system::SqliteSystemStore;
@@ -44,13 +45,13 @@ async fn test_store_full_integration() {
     // 持仓
     let pos = Position {
         symbol: "AAPL".to_string(),
-        quantity: 100.0,
-        avg_price: 150.0,
+        quantity: dec!(100.0),
+        avg_price: dec!(150.0),
         last_updated: Utc::now(),
     };
     system_store.update_position("u1", &pos).await.unwrap();
     let positions = system_store.get_positions("u1").await.unwrap();
-    assert_eq!(positions[0].quantity, 100.0);
+    assert_eq!(positions[0].quantity, dec!(100.0));
 
     // 股票搜索
     let meta = StockMetadata {
@@ -72,12 +73,12 @@ async fn test_store_full_integration() {
     };
     let candles = vec![Candle {
         time: Utc.with_ymd_and_hms(2026, 2, 1, 10, 0, 0).unwrap(),
-        open: 150.0,
-        high: 155.0,
-        low: 149.0,
-        close: 152.0,
-        adj_close: Some(152.0),
-        volume: 10000.0,
+        open: dec!(150.0),
+        high: dec!(155.0),
+        low: dec!(149.0),
+        close: dec!(152.0),
+        adj_close: Some(dec!(152.0)),
+        volume: dec!(10000.0),
         is_final: true,
     }];
 
@@ -98,7 +99,7 @@ async fn test_store_full_integration() {
         .await
         .unwrap();
     assert_eq!(loaded.len(), 1);
-    assert_eq!(loaded[0].close, 152.0);
-    assert_eq!(loaded[0].adj_close, Some(152.0));
+    assert_eq!(loaded[0].close, dec!(152.0));
+    assert_eq!(loaded[0].adj_close, Some(dec!(152.0)));
     assert!(loaded[0].is_final);
 }

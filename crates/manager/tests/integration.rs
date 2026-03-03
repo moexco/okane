@@ -33,7 +33,7 @@ async fn test_strategy_lifecycle() {
     let store = Arc::new(SqliteStrategyStore::new().unwrap());
     let engine_builder = Arc::new(MockEngineBuilder);
     let trade_port = Arc::new(mock_trade::MockTradePort);
-    let manager = StrategyManager::new(store, engine_builder, trade_port);
+    let manager = StrategyManager::new(store, engine_builder, trade_port, Arc::new(okane_core::common::time::RealTimeProvider));
 
     let user_id = "test_user";
     let req = StartRequest {
@@ -69,7 +69,7 @@ async fn test_strategy_lifecycle() {
         }
     }
     
-    let manager = StrategyManager::new(Arc::new(SqliteStrategyStore::new().unwrap()), Arc::new(InfiniteEngineBuilder), Arc::new(mock_trade::MockTradePort));
+    let manager = StrategyManager::new(Arc::new(SqliteStrategyStore::new().unwrap()), Arc::new(InfiniteEngineBuilder), Arc::new(mock_trade::MockTradePort), Arc::new(okane_core::common::time::RealTimeProvider));
     let req = StartRequest {
         symbol: "AAPL".to_string(),
         account_id: "SystemDefault_01".to_string(),

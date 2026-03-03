@@ -53,14 +53,28 @@ pub async fn auth_middleware(
         .map_err(|e| ApiError::Internal(format!("DB Error: {}", e)))?
         .ok_or_else(|| ApiError::Unauthorized("User not found".into()))?;
 
-    if user.force_password_change && req.uri().path() != "/api/v1/auth/change_password" {
-        return Err(ApiError::Forbidden("You must change your password before using the API".into()));
-    }
-
     // 将用户信息注入 request extensions
     // 以便 downstream handlers 用 `Extension<User>` 提取
     req.extensions_mut().insert(user);
     req.extensions_mut().insert(claims);
+
+    Ok(next.run(req).await)
+}
+
+/// 检查用户是否需要强制修改密码
+/// 必须在 `auth_middleware` 之后应用！
+pub async fn require_password_changed(
+    req: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let user = req
+        .extensions()
+        .get::<okane_core::store::port::User>()
+        .ok_or_else(|| ApiError::Unauthorized("User context not found".into()))?;
+
+    if user.force_password_change {
+        return Err(ApiError::Forbidden("You must change your password before using the API".into()));
+    }
 
     Ok(next.run(req).await)
 }

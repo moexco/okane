@@ -110,9 +110,16 @@ pub async fn start_server(state: AppState, bind_addr: &str) -> Result<(), Box<dy
     let public_router = OpenApiRouter::new()
         .routes(routes!(auth::login));
 
-    // 2. 只需要合法 JWT 鉴权的路由 (普通用户)
-    let user_protected_router = OpenApiRouter::new()
+    // 2. 需要 JWT 鉴权，但允许在强制改密码状态下访问的路由
+    let auth_only_router = OpenApiRouter::new()
         .routes(routes!(auth::change_password))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::auth::auth_middleware,
+        ));
+
+    // 3. 只需要合法 JWT 鉴权且要求已经改过密码的路由 (普通用户)
+    let user_protected_router = OpenApiRouter::new()
         .routes(routes!(account::get_account_snapshot))
         .routes(routes!(market::search_stocks))
         .routes(routes!(market::get_candles))
@@ -126,26 +133,33 @@ pub async fn start_server(state: AppState, bind_addr: &str) -> Result<(), Box<dy
         .routes(routes!(trade::get_orders))
         .routes(routes!(trade::place_order))
         .routes(routes!(trade::cancel_order))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            crate::middleware::auth::auth_middleware,
-        ));
-
-    // 3. 需要 Admin 角色鉴权的路由
-    let admin_protected_router = OpenApiRouter::new()
-        .routes(routes!(admin::create_user))
-        .routes(routes!(admin::update_settings))
         .layer(axum::middleware::from_fn(
-            crate::middleware::auth::require_admin,
+            crate::middleware::auth::require_password_changed,
         ))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::middleware::auth::auth_middleware,
         ));
 
-    // 4. 合并所有路由与自动收集的 OpenAPI Doc
+    // 4. 需要 Admin 角色鉴权的路由
+    let admin_protected_router = OpenApiRouter::new()
+        .routes(routes!(admin::create_user))
+        .routes(routes!(admin::update_settings))
+        .layer(axum::middleware::from_fn(
+            crate::middleware::auth::require_admin,
+        ))
+        .layer(axum::middleware::from_fn(
+            crate::middleware::auth::require_password_changed,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::auth::auth_middleware,
+        ));
+
+    // 5. 合并所有路由与自动收集的 OpenAPI Doc
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .merge(public_router)
+        .merge(auth_only_router)
         .merge(user_protected_router)
         .merge(admin_protected_router)
         .with_state(state)

@@ -22,6 +22,9 @@ pub struct JsEngine {
     time_provider: Arc<dyn TimeProvider>,
 }
 
+const JS_MEM_LIMIT: usize = 32 * 1024 * 1024;
+const JS_STACK_SIZE: usize = 1024 * 1024;
+
 impl JsEngine {
     /// # Summary
     /// 创建 JsEngine 实例。
@@ -84,10 +87,10 @@ impl JsEngine {
         let rt = AsyncRuntime::new().map_err(|e| EngineError::Plugin(e.to_string()))?;
 
         // 设置内存限制：32MB
-        rt.set_memory_limit(32 * 1024 * 1024).await;
+        rt.set_memory_limit(JS_MEM_LIMIT).await;
 
         // 设置最大栈大小：1MB
-        rt.set_max_stack_size(1024 * 1024).await;
+        rt.set_max_stack_size(JS_STACK_SIZE).await;
 
         let ctx = AsyncContext::full(&rt)
             .await

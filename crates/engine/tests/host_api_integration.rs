@@ -12,6 +12,7 @@ use okane_core::market::port::{CandleStream, Market, Stock, StockStatus};
 use okane_engine::quickjs::JsEngine;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
+use rust_decimal_macros::dec;
 
 struct MockStock {
     identity: StockIdentity,
@@ -23,7 +24,7 @@ impl Stock for MockStock {
     fn identity(&self) -> &StockIdentity {
         &self.identity
     }
-    fn current_price(&self) -> Option<f64> {
+    fn current_price(&self) -> Option<rust_decimal::Decimal> {
         None
     }
     fn latest_candle(&self, _: TimeFrame) -> Option<Candle> {
@@ -54,12 +55,12 @@ impl Stock for MockStock {
         for i in 0..5 { // 测试逻辑中期望是 5 根
             candles.push(Candle {
                 time: base_time - chrono::Duration::minutes(i as i64),
-                open: 100.0,
-                high: 100.0,
-                low: 100.0,
-                close: 100.0,
+                open: dec!(100.0),
+                high: dec!(100.0),
+                low: dec!(100.0),
+                close: dec!(100.0),
                 adj_close: None,
-                volume: 0.0,
+                volume: dec!(0.0),
                 is_final: true,
             });
         }
@@ -152,12 +153,12 @@ async fn test_host_functions_from_js() {
             time_provider_clone.set_time(test_time);
             tx.send(Candle {
                 time: test_time,
-                open: 150.0,
-                high: 150.0,
-                low: 150.0,
-                close: 150.0,
+                open: dec!(150.0),
+                high: dec!(150.0),
+                low: dec!(150.0),
+                close: dec!(150.0),
                 adj_close: None,
-                volume: 0.0,
+                volume: dec!(0.0),
                 is_final: true,
             })
             .unwrap();

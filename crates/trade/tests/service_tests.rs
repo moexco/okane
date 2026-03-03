@@ -21,8 +21,8 @@ impl Stock for DummyStock {
     fn identity(&self) -> &StockIdentity {
         &self.identity
     }
-    fn current_price(&self) -> Option<f64> {
-        Some(150.0) // Mock 固定的市场价用于本地测试撮合
+    fn current_price(&self) -> Option<rust_decimal::Decimal> {
+        Some(dec!(150.0)) // Mock 固定的市场价用于本地测试撮合
     }
     fn latest_candle(&self, _timeframe: TimeFrame) -> Option<Candle> { None }
     fn last_closed_candle(&self, _timeframe: TimeFrame) -> Option<Candle> { None }

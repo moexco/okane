@@ -12,6 +12,7 @@ use okane_core::market::port::{CandleStream, Market, Stock, StockStatus};
 use okane_engine::quickjs::JsEngine;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
+use rust_decimal_macros::dec;
 
 struct MockStock {
     identity: StockIdentity,
@@ -23,7 +24,7 @@ impl Stock for MockStock {
     fn identity(&self) -> &StockIdentity {
         &self.identity
     }
-    fn current_price(&self) -> Option<f64> {
+    fn current_price(&self) -> Option<rust_decimal::Decimal> {
         None
     }
     fn latest_candle(&self, _: TimeFrame) -> Option<Candle> {
@@ -54,12 +55,12 @@ impl Stock for MockStock {
         for i in 0..10 {
             candles.push(Candle {
                 time: end - chrono::Duration::minutes(i as i64),
-                open: 100.0,
-                high: 100.0,
-                low: 100.0,
-                close: 100.0,
+                open: dec!(100.0),
+                high: dec!(100.0),
+                low: dec!(100.0),
+                close: dec!(100.0),
                 adj_close: None,
-                volume: 0.0,
+                volume: dec!(0.0),
                 is_final: true,
             });
         }
@@ -141,12 +142,12 @@ async fn test_js_example_strategy_signal() {
             // close=150.0 > SMA10(100.0), volume=1000 > 500, is_final=true → 触发
             tx.send(Candle {
                 time: Utc::now(),
-                open: 100.0,
-                high: 155.0,
-                low: 95.0,
-                close: 150.0,
+                open: dec!(100.0),
+                high: dec!(155.0),
+                low: dec!(95.0),
+                close: dec!(150.0),
                 adj_close: None,
-                volume: 1000.0,
+                volume: dec!(1000.0),
                 is_final: true,
             })
             .unwrap();
@@ -196,12 +197,12 @@ async fn test_js_example_strategy_skip_non_final() {
             // is_final=false → JS 策略直接返回 "null"
             tx.send(Candle {
                 time: Utc::now(),
-                open: 100.0,
-                high: 155.0,
-                low: 95.0,
-                close: 150.0,
+                open: dec!(100.0),
+                high: dec!(155.0),
+                low: dec!(95.0),
+                close: dec!(150.0),
                 adj_close: None,
-                volume: 1000.0,
+                volume: dec!(1000.0),
                 is_final: false,
             })
             .unwrap();

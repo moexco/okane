@@ -10,6 +10,7 @@ use okane_store::system::SqliteSystemStore;
 use okane_trade::account::AccountManager;
 use okane_trade::service::TradeService;
 use okane_core::trade::port::TradePort;
+use okane_core::common::time::RealTimeProvider;
 use tracing::info;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
@@ -89,6 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         strategy_store,
         engine_builder,
         trade_service.clone(),
+        Arc::new(RealTimeProvider),
     );
 
     info!("StrategyManager initialized.");

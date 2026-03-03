@@ -7,6 +7,7 @@ use okane_core::market::port::{CandleStream, MarketDataProvider};
 use reqwest::Client;
 use serde::Deserialize;
 use std::time::Duration;
+use rust_decimal::Decimal;
 use tokio_stream::wrappers::ReceiverStream;
 
 /// # Summary
@@ -233,12 +234,12 @@ impl MarketDataProvider for YahooProvider {
 
                 candles.push(Candle {
                     time: Utc.timestamp_opt(ts, 0).single().ok_or_else(|| MarketError::Parse("Invalid timestamp".into()))?,
-                    open: o,
-                    high: h,
-                    low: l,
-                    close: c,
-                    adj_close: adj_c,
-                    volume: v,
+                    open: Decimal::from_f64_retain(o).unwrap_or_default(),
+                    high: Decimal::from_f64_retain(h).unwrap_or_default(),
+                    low: Decimal::from_f64_retain(l).unwrap_or_default(),
+                    close: Decimal::from_f64_retain(c).unwrap_or_default(),
+                    adj_close: adj_c.and_then(Decimal::from_f64_retain),
+                    volume: Decimal::from_f64_retain(v).unwrap_or_default(),
                     is_final: true, // 历史数据默认为最终态
                 });
             }

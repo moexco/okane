@@ -12,6 +12,7 @@ use okane_core::market::port::{CandleStream, Market, Stock, StockStatus};
 use okane_engine::quickjs::JsEngine;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
+use rust_decimal_macros::dec;
 
 struct MockStock {
     identity: StockIdentity,
@@ -23,7 +24,7 @@ impl Stock for MockStock {
     fn identity(&self) -> &StockIdentity {
         &self.identity
     }
-    fn current_price(&self) -> Option<f64> {
+    fn current_price(&self) -> Option<rust_decimal::Decimal> {
         None
     }
     fn latest_candle(&self, _: TimeFrame) -> Option<Candle> {
@@ -140,12 +141,12 @@ async fn test_js_strategy_integration() {
             // 推送触发信号的数据 (close > 150.0)
             tx.send(Candle {
                 time: Utc::now(),
-                open: 100.0,
-                high: 160.0,
-                low: 90.0,
-                close: 155.0,
+                open: dec!(100.0),
+                high: dec!(160.0),
+                low: dec!(90.0),
+                close: dec!(155.0),
                 adj_close: None,
-                volume: 1000.0,
+                volume: dec!(1000.0),
                 is_final: true,
             })
             .unwrap();
@@ -197,12 +198,12 @@ async fn test_js_strategy_no_signal_when_below_threshold() {
         .run_until(async {
             tx.send(Candle {
                 time: Utc::now(),
-                open: 100.0,
-                high: 105.0,
-                low: 95.0,
-                close: 100.0,
+                open: dec!(100.0),
+                high: dec!(105.0),
+                low: dec!(95.0),
+                close: dec!(100.0),
                 adj_close: None,
-                volume: 500.0,
+                volume: dec!(500.0),
                 is_final: true,
             })
             .unwrap();

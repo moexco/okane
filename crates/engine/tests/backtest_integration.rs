@@ -11,6 +11,7 @@ use okane_engine::backtest::BacktestDriver;
 use okane_trade::account::AccountManager;
 use okane_trade::service::TradeService;
 use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use async_trait::async_trait;
@@ -25,7 +26,7 @@ impl Stock for HistoricalMockStock {
     fn identity(&self) -> &StockIdentity {
         &self.identity
     }
-    fn current_price(&self) -> Option<f64> {
+    fn current_price(&self) -> Option<Decimal> {
         self.history.last().map(|c| c.close)
     }
     fn latest_candle(&self, _: TimeFrame) -> Option<Candle> { None }
@@ -74,9 +75,9 @@ async fn test_end_to_end_backtest_with_time_travel() {
     // T1: 开盘 110，最高 150，收盘 120
     // T2: 开盘 120，最高 190 (将击穿止盈限价单)，收盘 180
     let history = vec![
-        Candle { time: base_time, open: 100.0, high: 110.0, low: 100.0, close: 110.0, adj_close: None, volume: 1000.0, is_final: true },
-        Candle { time: base_time + chrono::Duration::minutes(1), open: 110.0, high: 150.0, low: 110.0, close: 120.0, adj_close: None, volume: 1000.0, is_final: true },
-        Candle { time: base_time + chrono::Duration::minutes(2), open: 120.0, high: 190.0, low: 120.0, close: 180.0, adj_close: None, volume: 1000.0, is_final: true },
+        Candle { time: base_time, open: dec!(100.0), high: dec!(110.0), low: dec!(100.0), close: dec!(110.0), adj_close: None, volume: dec!(1000.0), is_final: true },
+        Candle { time: base_time + chrono::Duration::minutes(1), open: dec!(110.0), high: dec!(150.0), low: dec!(110.0), close: dec!(120.0), adj_close: None, volume: dec!(1000.0), is_final: true },
+        Candle { time: base_time + chrono::Duration::minutes(2), open: dec!(120.0), high: dec!(190.0), low: dec!(120.0), close: dec!(180.0), adj_close: None, volume: dec!(1000.0), is_final: true },
     ];
     
     let mock_stock = Arc::new(HistoricalMockStock {

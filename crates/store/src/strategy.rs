@@ -21,6 +21,34 @@ pub struct SqliteStrategyStore {
     pools: DashMap<String, SqlitePool>,
 }
 
+const SQL_INIT_TABLES: &str = r#"
+CREATE TABLE IF NOT EXISTS strategy_instances (
+    id TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    account_id TEXT NOT NULL DEFAULT '',
+    timeframe TEXT NOT NULL,
+    engine_type TEXT NOT NULL,
+    source BLOB NOT NULL,
+    status TEXT NOT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+);
+"#;
+
+const SQL_INSERT_STRATEGY: &str = r#"
+INSERT OR REPLACE INTO strategy_instances 
+(id, symbol, account_id, timeframe, engine_type, source, status, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+"#;
+
+const SQL_UPDATE_STATUS: &str = "UPDATE strategy_instances SET status = ?, updated_at = ? WHERE id = ?";
+
+const SQL_SELECT_STRATEGY: &str = "SELECT * FROM strategy_instances WHERE id = ?";
+
+const SQL_SELECT_ALL_STRATEGIES: &str = "SELECT * FROM strategy_instances";
+
+
+
 impl SqliteStrategyStore {
     /// # Summary
     /// 创建新的 SqliteStrategyStore 实例。
@@ -53,21 +81,7 @@ impl SqliteStrategyStore {
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS strategy_instances (
-                id TEXT PRIMARY KEY,
-                symbol TEXT NOT NULL,
-                account_id TEXT NOT NULL DEFAULT '',
-                timeframe TEXT NOT NULL,
-                engine_type TEXT NOT NULL,
-                source BLOB NOT NULL,
-                status TEXT NOT NULL,
-                created_at DATETIME NOT NULL,
-                updated_at DATETIME NOT NULL
-            );
-            "#,
-        )
+        sqlx::query(SQL_INIT_TABLES)
         .execute(&pool)
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -106,13 +120,7 @@ impl StrategyStore for SqliteStrategyStore {
         instance: &StrategyInstance,
     ) -> Result<(), StoreError> {
         let pool = self.get_or_init_pool(user_id).await?;
-        sqlx::query(
-            r#"
-            INSERT OR REPLACE INTO strategy_instances 
-            (id, symbol, account_id, timeframe, engine_type, source, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
+        sqlx::query(SQL_INSERT_STRATEGY)
         .bind(&instance.id)
         .bind(&instance.symbol)
         .bind(&instance.account_id)
@@ -131,7 +139,7 @@ impl StrategyStore for SqliteStrategyStore {
     async fn get_instance(&self, user_id: &str, id: &str) -> Result<StrategyInstance, StoreError> {
         let pool = self.get_or_init_pool(user_id).await?;
         let row = sqlx::query_as::<_, (String, String, String, String, String, Vec<u8>, String, DateTime<Utc>, DateTime<Utc>)>(
-            "SELECT id, symbol, account_id, timeframe, engine_type, source, status, created_at, updated_at FROM strategy_instances WHERE id = ?"
+            SQL_SELECT_STRATEGY
         )
         .bind(id)
         .fetch_optional(&pool)
@@ -154,7 +162,7 @@ impl StrategyStore for SqliteStrategyStore {
 
     async fn update_status(&self, user_id: &str, id: &str, status: StrategyStatus) -> Result<(), StoreError> {
         let pool = self.get_or_init_pool(user_id).await?;
-        sqlx::query("UPDATE strategy_instances SET status = ?, updated_at = ? WHERE id = ?")
+        sqlx::query(SQL_UPDATE_STATUS)
             .bind(status_to_str(&status))
             .bind(Utc::now())
             .bind(id)
@@ -167,7 +175,7 @@ impl StrategyStore for SqliteStrategyStore {
     async fn list_instances(&self, user_id: &str) -> Result<Vec<StrategyInstance>, StoreError> {
         let pool = self.get_or_init_pool(user_id).await?;
         let rows = sqlx::query_as::<_, (String, String, String, String, String, Vec<u8>, String, DateTime<Utc>, DateTime<Utc>)> (
-            "SELECT id, symbol, account_id, timeframe, engine_type, source, status, created_at, updated_at FROM strategy_instances ORDER BY created_at DESC"
+            SQL_SELECT_ALL_STRATEGIES
         )
         .fetch_all(&pool)
         .await

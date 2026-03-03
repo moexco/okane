@@ -7,8 +7,9 @@ use okane_core::store::error::StoreError;
 use okane_core::store::port::MarketStore;
 use sqlx::{
     SqlitePool,
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow},
 };
+use rust_decimal::Decimal;
 use std::path::PathBuf;
 
 /// MarketStore 的 SQLite 实现，采用“一库一股”策略。
@@ -23,6 +24,28 @@ pub struct SqliteMarketStore {
     base_path: PathBuf,
     pools: DashMap<String, SqlitePool>,
 }
+
+const SQL_INIT_TABLES: &str = r#"
+CREATE TABLE IF NOT EXISTS candles (
+    timeframe TEXT NOT NULL,
+    time DATETIME NOT NULL,
+    open TEXT NOT NULL,
+    high TEXT NOT NULL,
+    low TEXT NOT NULL,
+    close TEXT NOT NULL,
+    adj_close TEXT,
+    volume TEXT NOT NULL,
+    is_final INTEGER NOT NULL,
+    PRIMARY KEY (timeframe, time)
+);
+"#;
+
+const SQL_INSERT_CANDLE: &str = r#"
+INSERT OR REPLACE INTO candles (timeframe, time, open, high, low, close, adj_close, volume, is_final)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+"#;
+
+const SQL_SELECT_CANDLES: &str = "SELECT * FROM candles WHERE timeframe = ? AND time >= ? AND time <= ? ORDER BY time ASC";
 
 impl SqliteMarketStore {
     /// 创建新的 SqliteMarketStore 实例。
@@ -74,22 +97,7 @@ impl SqliteMarketStore {
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
         // 初始化个股 K 下表 (同步 Candle 最新结构)
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS candles (
-                timeframe TEXT NOT NULL,
-                time DATETIME NOT NULL,
-                open REAL NOT NULL,
-                high REAL NOT NULL,
-                low REAL NOT NULL,
-                close REAL NOT NULL,
-                adj_close REAL,
-                volume REAL NOT NULL,
-                is_final INTEGER NOT NULL,
-                PRIMARY KEY (timeframe, time)
-            );
-            "#,
-        )
+        sqlx::query(SQL_INIT_TABLES)
         .execute(&pool)
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -125,20 +133,15 @@ impl MarketStore for SqliteMarketStore {
         let timeframe_str = format!("{:?}", timeframe);
 
         for candle in candles {
-            sqlx::query(
-                r#"
-                INSERT OR REPLACE INTO candles (timeframe, time, open, high, low, close, adj_close, volume, is_final)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                "#,
-            )
+            sqlx::query(SQL_INSERT_CANDLE)
             .bind(&timeframe_str)
             .bind(candle.time)
-            .bind(candle.open)
-            .bind(candle.high)
-            .bind(candle.low)
-            .bind(candle.close)
-            .bind(candle.adj_close)
-            .bind(candle.volume)
+            .bind(candle.open.to_string())
+            .bind(candle.high.to_string())
+            .bind(candle.low.to_string())
+            .bind(candle.close.to_string())
+            .bind(candle.adj_close.map(|a| a.to_string()))
+            .bind(candle.volume.to_string())
             .bind(candle.is_final as i32)
             .execute(&pool)
             .await
@@ -173,15 +176,7 @@ impl MarketStore for SqliteMarketStore {
         let pool = self.get_or_init_pool(stock).await?;
         let timeframe_str = format!("{:?}", timeframe);
 
-        let records =
-            sqlx::query_as::<_, (DateTime<Utc>, f64, f64, f64, f64, Option<f64>, f64, bool)>(
-                r#"
-            SELECT time, open, high, low, close, adj_close, volume, is_final
-            FROM candles
-            WHERE timeframe = ? AND time >= ? AND time <= ?
-            ORDER BY time ASC
-            "#,
-            )
+        let rows: Vec<SqliteRow> = sqlx::query(SQL_SELECT_CANDLES)
             .bind(&timeframe_str)
             .bind(start)
             .bind(end)
@@ -189,18 +184,28 @@ impl MarketStore for SqliteMarketStore {
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
-        Ok(records
-            .into_iter()
-            .map(|r| Candle {
-                time: r.0,
-                open: r.1,
-                high: r.2,
-                low: r.3,
-                close: r.4,
-                adj_close: r.5,
-                volume: r.6,
-                is_final: r.7,
-            })
-            .collect())
+        let mut results = Vec::new();
+        for row in rows {
+            use sqlx::Row;
+            use std::str::FromStr;
+            let open_str: String = row.get("open");
+            let high_str: String = row.get("high");
+            let low_str: String = row.get("low");
+            let close_str: String = row.get("close");
+            let adj_close_str: Option<String> = row.get("adj_close");
+            let volume_str: String = row.get("volume");
+
+            results.push(Candle {
+                time: row.get("time"),
+                open: Decimal::from_str(&open_str).unwrap_or_default(),
+                high: Decimal::from_str(&high_str).unwrap_or_default(),
+                low: Decimal::from_str(&low_str).unwrap_or_default(),
+                close: Decimal::from_str(&close_str).unwrap_or_default(),
+                adj_close: adj_close_str.and_then(|s| Decimal::from_str(&s).ok()),
+                volume: Decimal::from_str(&volume_str).unwrap_or_default(),
+                is_final: row.get::<i32, _>("is_final") != 0,
+            });
+        }
+        Ok(results)
     }
 }

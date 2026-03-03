@@ -19,6 +19,19 @@ pub struct DatabaseConfig {
     pub data_dir: String,
 }
 
+impl AppConfig {
+    /// # Summary
+    /// 校验配置合法性与安全性。
+    /// 
+    /// # Logic
+    /// 如果 JWT 密钥仍为默认值，在非测试环境下发出警告。
+    pub fn validate(&self) {
+        if self.server.jwt_secret == "YOUR_SUPER_SECRET_KEY" {
+            tracing::warn!("⚠️  SECURITY WARNING: Using default JWT secret key. This is highly discouraged for production use.");
+        }
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {

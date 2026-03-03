@@ -15,7 +15,9 @@ static ROOT_DIR: OnceLock<PathBuf> = OnceLock::new();
 /// # Returns
 /// * None
 pub fn set_root_dir(path: PathBuf) {
-    let _ = ROOT_DIR.set(path);
+    if ROOT_DIR.set(path).is_err() {
+        tracing::warn!("ROOT_DIR is already configured");
+    }
 }
 
 use okane_core::store::error::StoreError;

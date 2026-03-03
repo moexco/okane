@@ -7,6 +7,7 @@ use okane_store::market::SqliteMarketStore;
 use std::sync::Arc;
 
 #[tokio::test]
+#[ignore]
 async fn test_market_with_real_yahoo_feed() {
     let tmp_dir = tempfile::tempdir().expect("Failed to create temp dir");
     okane_store::config::set_root_dir(tmp_dir.path().to_path_buf());
@@ -41,7 +42,7 @@ async fn test_market_with_real_yahoo_feed() {
     match first_candle {
         Ok(Some(candle)) => {
             tracing::info!("Received real candle from Yahoo: {:?}", candle);
-            assert!(candle.close > 0.0);
+            assert!(candle.close > rust_decimal::Decimal::ZERO);
 
             // 6. 验证聚合根的同步快照是否已更新
             assert!(stock.current_price().is_some());
@@ -57,6 +58,7 @@ async fn test_market_with_real_yahoo_feed() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_market_broadcast_with_real_feed() {
     let tmp_dir = tempfile::tempdir().expect("Failed to create temp dir");
     okane_store::config::set_root_dir(tmp_dir.path().to_path_buf());

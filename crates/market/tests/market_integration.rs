@@ -11,6 +11,7 @@ use okane_core::store::port::MarketStore;
 use okane_market::manager::MarketImpl;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use rust_decimal_macros::dec;
 
 /// # Summary
 /// 为测试提供的模拟行情驱动。
@@ -31,7 +32,9 @@ impl MockProvider {
     }
 
     fn push_candle(&self, candle: Candle) {
-        let _ = self.price_tx.send(candle);
+        if let Err(e) = self.price_tx.send(candle) {
+            tracing::error!("Test MockMarket send price failed: {}", e);
+        }
     }
 }
 
@@ -46,12 +49,12 @@ impl MarketDataProvider for MockProvider {
     ) -> Result<Vec<Candle>, MarketError> {
         Ok(vec![Candle {
             time: Utc::now(),
-            open: 150.0,
-            high: 155.0,
-            low: 149.0,
-            close: 152.0,
+            open: dec!(150.0),
+            high: dec!(155.0),
+            low: dec!(149.0),
+            close: dec!(152.0),
             adj_close: None,
-            volume: 1000.0,
+            volume: dec!(1000.0),
             is_final: true,
         }])
     }
@@ -165,18 +168,18 @@ async fn test_stock_current_price() {
     // 模拟推送价格
     provider.push_candle(Candle {
         time: Utc::now(),
-        open: 100.0,
-        high: 100.0,
-        low: 100.0,
-        close: 155.5,
+        open: dec!(100.0),
+        high: dec!(100.0),
+        low: dec!(100.0),
+        close: dec!(155.5),
         adj_close: None,
-        volume: 1.0,
+        volume: dec!(1.0),
         is_final: false,
     });
 
     // 等待 Fetcher 处理
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-    assert_eq!(stock.current_price(), Some(155.5));
+    assert_eq!(stock.current_price(), Some(dec!(155.5)));
 }
 
 #[tokio::test]
@@ -186,19 +189,19 @@ async fn test_stock_latest_candle() {
 
     provider.push_candle(Candle {
         time: Utc::now(),
-        open: 100.0,
-        high: 110.0,
-        low: 90.0,
-        close: 105.0,
+        open: dec!(100.0),
+        high: dec!(110.0),
+        low: dec!(90.0),
+        close: dec!(105.0),
         adj_close: None,
-        volume: 100.0,
+        volume: dec!(100.0),
         is_final: false,
     });
 
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     let candle = stock.latest_candle(TimeFrame::Minute1);
     assert!(candle.is_some());
-    assert_eq!(candle.unwrap().close, 105.0);
+    assert_eq!(candle.unwrap().close, dec!(105.0));
 }
 
 #[tokio::test]
@@ -209,12 +212,12 @@ async fn test_stock_last_closed_candle() {
     // 推送未闭合的
     provider.push_candle(Candle {
         time: Utc::now(),
-        open: 100.0,
-        high: 110.0,
-        low: 90.0,
-        close: 105.0,
+        open: dec!(100.0),
+        high: dec!(110.0),
+        low: dec!(90.0),
+        close: dec!(105.0),
         adj_close: None,
-        volume: 100.0,
+        volume: dec!(100.0),
         is_final: false,
     });
     tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
@@ -223,18 +226,18 @@ async fn test_stock_last_closed_candle() {
     // 推送已闭合的
     provider.push_candle(Candle {
         time: Utc::now(),
-        open: 100.0,
-        high: 110.0,
-        low: 90.0,
-        close: 108.0,
+        open: dec!(100.0),
+        high: dec!(110.0),
+        low: dec!(90.0),
+        close: dec!(108.0),
         adj_close: None,
-        volume: 100.0,
+        volume: dec!(100.0),
         is_final: true,
     });
     tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
     let closed = stock.last_closed_candle(TimeFrame::Minute1);
     assert!(closed.is_some());
-    assert_eq!(closed.unwrap().close, 108.0);
+    assert_eq!(closed.unwrap().close, dec!(108.0));
 }
 
 #[tokio::test]
@@ -245,18 +248,18 @@ async fn test_stock_subscribe() {
 
     provider.push_candle(Candle {
         time: Utc::now(),
-        open: 1.0,
-        high: 1.0,
-        low: 1.0,
-        close: 99.0,
+        open: dec!(1.0),
+        high: dec!(1.0),
+        low: dec!(1.0),
+        close: dec!(99.0),
         adj_close: None,
-        volume: 1.0,
+        volume: dec!(1.0),
         is_final: true,
     });
 
     let received = stream.next().await;
     assert!(received.is_some());
-    assert_eq!(received.unwrap().close, 99.0);
+    assert_eq!(received.unwrap().close, dec!(99.0));
 }
 
 #[tokio::test]

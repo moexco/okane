@@ -3,7 +3,6 @@
 //! 将内部领域模型转化为面向前端 JSON 输出的轻量结构体。
 //! 所有 DTO 必须派生 `utoipa::ToSchema` 以自动进入 Swagger 文档。
 
-use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -378,11 +377,11 @@ impl From<okane_core::market::entity::Candle> for CandleResponse {
     fn from(c: okane_core::market::entity::Candle) -> Self {
         Self {
             time: c.time.to_rfc3339(),
-            open: Decimal::from_f64_retain(c.open).unwrap_or(Decimal::ZERO).to_string(),
-            high: Decimal::from_f64_retain(c.high).unwrap_or(Decimal::ZERO).to_string(),
-            low: Decimal::from_f64_retain(c.low).unwrap_or(Decimal::ZERO).to_string(),
-            close: Decimal::from_f64_retain(c.close).unwrap_or(Decimal::ZERO).to_string(),
-            volume: Decimal::from_f64_retain(c.volume).unwrap_or(Decimal::ZERO).to_string(),
+            open: c.open.to_string(),
+            high: c.high.to_string(),
+            low: c.low.to_string(),
+            close: c.close.to_string(),
+            volume: c.volume.to_string(),
             is_final: c.is_final,
         }
     }

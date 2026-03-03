@@ -10,7 +10,8 @@ use okane_core::store::port::MarketStore;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::{broadcast, mpsc};
-use tracing::info;
+use rust_decimal::Decimal;
+use tracing::{error, info};
 
 /// # Summary
 /// Stock 聚合根的具体实现结构。
@@ -32,6 +33,8 @@ pub(crate) struct StockInner {
     // 数据源驱动
     provider: Arc<dyn MarketDataProvider>,
 }
+
+pub const DEFAULT_CANDLE_BUFFER_SIZE: usize = 200;
 
 impl StockInner {
     /// # Summary
@@ -150,8 +153,12 @@ impl StockInner {
     /// 无。
     pub async fn update_and_broadcast(&self, candle: Candle, timeframe: TimeFrame) {
         // 更新价格和快照
-        let _ = self.cache.set("p", &candle.close).await;
-        let _ = self.cache.set(Self::l_key(timeframe), &candle).await;
+        if let Err(e) = self.cache.set("p", &candle.close).await {
+            error!("Failed to cache price for {}: {}", self.identity.symbol, e);
+        }
+        if let Err(e) = self.cache.set(Self::l_key(timeframe), &candle).await {
+            error!("Failed to cache latest candle for {}: {}", self.identity.symbol, e);
+        }
 
         // 更新滚动缓冲区 (k:rollingbuff)
         let key = Self::k_key(timeframe);
@@ -160,23 +167,31 @@ impl StockInner {
             .get::<RollingBuffer<Candle>>(key)
             .await
             .unwrap_or_default()
-            .unwrap_or_else(|| RollingBuffer::new(200));
+            .unwrap_or_else(|| RollingBuffer::new(DEFAULT_CANDLE_BUFFER_SIZE));
         buffer.push(candle.clone());
-        let _ = self.cache.set(key, &buffer).await;
+        if let Err(e) = self.cache.set(key, &buffer).await {
+            error!("Failed to cache rolling buffer for {}: {}", self.identity.symbol, e);
+        }
 
         if candle.is_final {
-            let _ = self.cache.set(Self::lc_key(timeframe), &candle).await;
+            if let Err(e) = self.cache.set(Self::lc_key(timeframe), &candle).await {
+                error!("Failed to cache last closed candle for {}: {}", self.identity.symbol, e);
+            }
             let store = self.store.clone();
             let id = self.identity.clone();
             let c = candle.clone();
             tokio::spawn(async move {
-                let _ = store.save_candles(&id, timeframe, &[c]).await;
+                if let Err(e) = store.save_candles(&id, timeframe, &[c]).await {
+                    error!("Failed to persist candle for {}: {}", id.symbol, e);
+                }
             });
         }
 
         let channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(tx) = channels.get(&timeframe) {
-            let _ = tx.send(candle);
+        if let Some(tx) = channels.get(&timeframe)
+            && let Err(e) = tx.send(candle)
+        {
+            error!("Failed to send candle for timeframe {:?}: {}", timeframe, e);
         }
     }
 }
@@ -194,7 +209,9 @@ impl Drop for StockInner {
     /// # Returns
     /// 无。
     fn drop(&mut self) {
-        let _ = self.cleanup_tx.try_send(self.identity.symbol.clone());
+        if let Err(e) = self.cleanup_tx.try_send(self.identity.symbol.clone()) {
+            tracing::error!("Failed to send cleanup signal: {}", e);
+        }
     }
 }
 
@@ -226,8 +243,8 @@ impl Stock for StockInner {
     ///
     /// # Returns
     /// 价格选项。
-    fn current_price(&self) -> Option<f64> {
-        futures::executor::block_on(async { self.cache.get::<f64>("p").await.ok().flatten() })
+    fn current_price(&self) -> Option<Decimal> {
+        futures::executor::block_on(async { self.cache.get::<Decimal>("p").await.ok().flatten() })
     }
 
     /// # Summary
@@ -459,14 +476,15 @@ mod tests {
             _: TimeFrame,
         ) -> Result<CandleStream, MarketError> {
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            use rust_decimal_macros::dec;
             tx.send(Candle {
                 time: Utc::now(),
-                open: 1.0,
-                high: 2.0,
-                low: 0.5,
-                close: 1.5,
+                open: dec!(1.0),
+                high: dec!(2.0),
+                low: dec!(0.5),
+                close: dec!(1.5),
                 adj_close: None,
-                volume: 100.0,
+                volume: dec!(100.0),
                 is_final: true,
             })
             .ok();

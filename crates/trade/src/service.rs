@@ -3,7 +3,6 @@ use okane_core::market::entity::Candle;
 use okane_core::market::port::Market;
 use okane_core::trade::entity::{AccountId, AccountSnapshot, Order, OrderDirection, OrderId, OrderStatus};
 use okane_core::trade::port::{AccountPort, BacktestTradePort, MatcherPort, TradeError, TradePort, PendingOrderPort};
-use rust_decimal::Decimal;
 use std::sync::Arc;
 
 /// # Summary
@@ -44,9 +43,7 @@ impl TradePort for TradeService {
         })?;
         
         // FIXME: 如果是停牌、退市或者根本没有最新价，直接拒绝
-        let current_p = stock.current_price().ok_or_else(|| TradeError::InternalError("股票暂无最新报价".into()))?;
-        let latest_price = Decimal::from_f64_retain(current_p)
-            .ok_or_else(|| TradeError::InternalError("市价非有效精度数值".into()))?;
+        let latest_price = stock.current_price().ok_or_else(|| TradeError::InternalError("股票暂无最新报价".into()))?;
 
         // 预估单价 (限价取限价，市价取最新价)
         let est_price = order.price.unwrap_or(latest_price);
@@ -107,8 +104,8 @@ impl BacktestTradePort for TradeService {
     async fn tick(&self, symbol: &str, candle: &Candle) -> Result<(), TradeError> {
         let mut filled_orders = Vec::new();
 
-        let high = rust_decimal::Decimal::from_f64_retain(candle.high).unwrap_or(rust_decimal::Decimal::ZERO);
-        let low = rust_decimal::Decimal::from_f64_retain(candle.low).unwrap_or(rust_decimal::Decimal::ZERO);
+        let high = candle.high;
+        let low = candle.low;
 
         let pending = self.pending_port.get_by_symbol(symbol).await?;
 

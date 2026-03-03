@@ -6,6 +6,7 @@ use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+use rust_decimal::Decimal;
 use std::fs;
 
 /// 默认系统数据库存储路径
@@ -22,6 +23,72 @@ const DEFAULT_SYSTEM_DB: &str = "system.db";
 pub struct SqliteSystemStore {
     pool: SqlitePool,
 }
+
+const SQL_INIT_TABLES: &str = r#"
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'Standard',
+    force_password_change BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at DATETIME NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS watchlists (
+    user_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    PRIMARY KEY (user_id, symbol)
+);
+
+CREATE TABLE IF NOT EXISTS positions (
+    user_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    quantity TEXT NOT NULL,
+    avg_price TEXT NOT NULL,
+    last_updated DATETIME NOT NULL,
+    PRIMARY KEY (user_id, symbol)
+);
+
+CREATE TABLE IF NOT EXISTS stock_metadata (
+    symbol TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    exchange TEXT NOT NULL,
+    sector TEXT,
+    currency TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at DATETIME NOT NULL
+);
+"#;
+
+const SQL_SELECT_USER: &str = "SELECT * FROM users WHERE id = ?";
+const SQL_INSERT_USER: &str = r#"
+INSERT OR REPLACE INTO users (id, name, password_hash, role, force_password_change, created_at)
+VALUES (?, ?, ?, ?, ?, ?)
+"#;
+
+const SQL_SELECT_WATCHLIST: &str = "SELECT symbol FROM watchlists WHERE user_id = ?";
+const SQL_INSERT_WATCHLIST: &str = "INSERT OR IGNORE INTO watchlists (user_id, symbol) VALUES (?, ?)";
+const SQL_DELETE_WATCHLIST: &str = "DELETE FROM watchlists WHERE user_id = ? AND symbol = ?";
+
+const SQL_SELECT_POSITIONS: &str = "SELECT symbol, quantity, avg_price, last_updated FROM positions WHERE user_id = ?";
+const SQL_UPDATE_POSITION: &str = r#"
+INSERT OR REPLACE INTO positions (user_id, symbol, quantity, avg_price, last_updated)
+VALUES (?, ?, ?, ?, ?)
+"#;
+
+const SQL_SEARCH_STOCKS: &str = "SELECT * FROM stock_metadata WHERE symbol LIKE ? OR name LIKE ?";
+const SQL_INSERT_METADATA: &str = r#"
+INSERT OR REPLACE INTO stock_metadata (symbol, name, exchange, sector, currency)
+VALUES (?, ?, ?, ?, ?)
+"#;
+
+const SQL_SELECT_SETTING: &str = "SELECT value FROM settings WHERE key = ?";
+const SQL_INSERT_SETTING: &str = "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)";
+const SQL_COUNT_USERS: &str = "SELECT COUNT(*) FROM users";
 
 impl SqliteSystemStore {
     /// 创建新的 SqliteSystemStore 并初始化全局表结构。
@@ -56,52 +123,12 @@ impl SqliteSystemStore {
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
         // 初始化系统表
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                password_hash TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'Standard',
-                force_password_change BOOLEAN NOT NULL DEFAULT FALSE,
-                created_at DATETIME NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS watchlists (
-                user_id TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                PRIMARY KEY (user_id, symbol)
-            );
-
-            CREATE TABLE IF NOT EXISTS positions (
-                user_id TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                quantity REAL NOT NULL,
-                avg_price REAL NOT NULL,
-                last_updated DATETIME NOT NULL,
-                PRIMARY KEY (user_id, symbol)
-            );
-
-            CREATE TABLE IF NOT EXISTS stock_metadata (
-                symbol TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                exchange TEXT NOT NULL,
-                sector TEXT,
-                currency TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                updated_at DATETIME NOT NULL
-            );
-            "#,
-        )
+        sqlx::query(SQL_INIT_TABLES)
         .execute(&pool)
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?;
 
-        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
+        let count: (i64,) = sqlx::query_as(SQL_COUNT_USERS)
             .fetch_one(&pool)
             .await
             .unwrap_or((0,));
@@ -113,7 +140,7 @@ impl SqliteSystemStore {
             let hashed = bcrypt::hash(&pwd, bcrypt::DEFAULT_COST)
                 .map_err(|e| StoreError::Database(format!("Failed to hash password: {}", e)))?;
             
-            sqlx::query("INSERT INTO users (id, name, password_hash, role, force_password_change, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+            sqlx::query(SQL_INSERT_USER)
                 .bind("admin")
                 .bind("System Administrator")
                 .bind(hashed)
@@ -151,7 +178,7 @@ impl SystemStore for SqliteSystemStore {
     /// * `Result<Option<User>, StoreError>` - 匹配的用户或 None。
     async fn get_user(&self, id: &str) -> Result<Option<User>, StoreError> {
         let result = sqlx::query_as::<_, (String, String, String, String, bool, DateTime<Utc>)>(
-            "SELECT id, name, password_hash, role, force_password_change, created_at FROM users WHERE id = ?",
+            SQL_SELECT_USER,
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -186,7 +213,7 @@ impl SystemStore for SqliteSystemStore {
     /// # Returns
     /// * `Result<(), StoreError>`
     async fn save_user(&self, user: &User) -> Result<(), StoreError> {
-        sqlx::query("INSERT OR REPLACE INTO users (id, name, password_hash, role, force_password_change, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+        sqlx::query(SQL_INSERT_USER)
             .bind(&user.id)
             .bind(&user.name)
             .bind(&user.password_hash)
@@ -211,7 +238,7 @@ impl SystemStore for SqliteSystemStore {
     /// # Returns
     /// * `Result<Vec<String>, StoreError>`
     async fn get_watchlist(&self, user_id: &str) -> Result<Vec<String>, StoreError> {
-        sqlx::query_scalar::<_, String>("SELECT symbol FROM watchlists WHERE user_id = ?")
+        sqlx::query_scalar::<_, String>(SQL_SELECT_WATCHLIST)
             .bind(user_id)
             .fetch_all(&self.pool)
             .await
@@ -231,7 +258,7 @@ impl SystemStore for SqliteSystemStore {
     /// # Returns
     /// * `Result<(), StoreError>`
     async fn add_to_watchlist(&self, user_id: &str, symbol: &str) -> Result<(), StoreError> {
-        sqlx::query("INSERT OR IGNORE INTO watchlists (user_id, symbol) VALUES (?, ?)")
+        sqlx::query(SQL_INSERT_WATCHLIST)
             .bind(user_id)
             .bind(symbol)
             .execute(&self.pool)
@@ -253,7 +280,7 @@ impl SystemStore for SqliteSystemStore {
     /// # Returns
     /// * `Result<(), StoreError>`
     async fn remove_from_watchlist(&self, user_id: &str, symbol: &str) -> Result<(), StoreError> {
-        sqlx::query("DELETE FROM watchlists WHERE user_id = ? AND symbol = ?")
+        sqlx::query(SQL_DELETE_WATCHLIST)
             .bind(user_id)
             .bind(symbol)
             .execute(&self.pool)
@@ -274,21 +301,22 @@ impl SystemStore for SqliteSystemStore {
     /// # Returns
     /// * `Result<Vec<Position>, StoreError>`
     async fn get_positions(&self, user_id: &str) -> Result<Vec<Position>, StoreError> {
-        let records = sqlx::query_as::<_, (String, f64, f64, DateTime<Utc>)>(
-            "SELECT symbol, quantity, avg_price, last_updated FROM positions WHERE user_id = ?",
-        )
-        .bind(user_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))?;
+        let records = sqlx::query_as::<_, (String, String, String, DateTime<Utc>)>(SQL_SELECT_POSITIONS)
+            .bind(user_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
 
         Ok(records
             .into_iter()
-            .map(|r| Position {
-                symbol: r.0,
-                quantity: r.1,
-                avg_price: r.2,
-                last_updated: r.3,
+            .map(|r| {
+                use std::str::FromStr;
+                Position {
+                    symbol: r.0,
+                    quantity: Decimal::from_str(&r.1).unwrap_or_default(),
+                    avg_price: Decimal::from_str(&r.2).unwrap_or_default(),
+                    last_updated: r.3,
+                }
             })
             .collect())
     }
@@ -306,17 +334,15 @@ impl SystemStore for SqliteSystemStore {
     /// # Returns
     /// * `Result<(), StoreError>`
     async fn update_position(&self, user_id: &str, position: &Position) -> Result<(), StoreError> {
-        sqlx::query(
-            "INSERT OR REPLACE INTO positions (user_id, symbol, quantity, avg_price, last_updated) VALUES (?, ?, ?, ?, ?)"
-        )
-        .bind(user_id)
-        .bind(&position.symbol)
-        .bind(position.quantity)
-        .bind(position.avg_price)
-        .bind(position.last_updated)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))?;
+        sqlx::query(SQL_UPDATE_POSITION)
+            .bind(user_id)
+            .bind(&position.symbol)
+            .bind(position.quantity.to_string())
+            .bind(position.avg_price.to_string())
+            .bind(position.last_updated)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
         Ok(())
     }
 
@@ -333,14 +359,12 @@ impl SystemStore for SqliteSystemStore {
     /// * `Result<Vec<StockMetadata>, StoreError>` - 匹配的元数据列表。
     async fn search_stocks(&self, query: &str) -> Result<Vec<StockMetadata>, StoreError> {
         let like_query = format!("%{}%", query);
-        let records = sqlx::query_as::<_, (String, String, String, Option<String>, String)>(
-            "SELECT symbol, name, exchange, sector, currency FROM stock_metadata WHERE symbol LIKE ? OR name LIKE ?"
-        )
-        .bind(&like_query)
-        .bind(&like_query)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
+        let records = sqlx::query_as::<_, (String, String, String, Option<String>, String)>(SQL_SEARCH_STOCKS)
+            .bind(&like_query)
+            .bind(&like_query)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?
         .into_iter()
         .map(|r| StockMetadata {
             symbol: r.0,
@@ -366,14 +390,12 @@ impl SystemStore for SqliteSystemStore {
     /// # Returns
     /// * `Result<(), StoreError>`
     async fn save_stock_metadata(&self, metadata: &StockMetadata) -> Result<(), StoreError> {
-        sqlx::query(
-            "INSERT OR REPLACE INTO stock_metadata (symbol, name, exchange, sector, currency) VALUES (?, ?, ?, ?, ?)"
-        )
-        .bind(&metadata.symbol)
-        .bind(&metadata.name)
-        .bind(&metadata.exchange)
-        .bind(&metadata.sector)
-        .bind(&metadata.currency)
+        sqlx::query(SQL_INSERT_METADATA)
+            .bind(&metadata.symbol)
+            .bind(&metadata.name)
+            .bind(&metadata.exchange)
+            .bind(&metadata.sector)
+            .bind(&metadata.currency)
         .execute(&self.pool)
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -381,7 +403,7 @@ impl SystemStore for SqliteSystemStore {
     }
 
     async fn get_setting(&self, key: &str) -> Result<Option<String>, StoreError> {
-        sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
+        sqlx::query_scalar::<_, String>(SQL_SELECT_SETTING)
             .bind(key)
             .fetch_optional(&self.pool)
             .await
@@ -389,7 +411,7 @@ impl SystemStore for SqliteSystemStore {
     }
 
     async fn set_setting(&self, key: &str, value: &str) -> Result<(), StoreError> {
-        sqlx::query("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)")
+        sqlx::query(SQL_INSERT_SETTING)
             .bind(key)
             .bind(value)
             .bind(Utc::now())

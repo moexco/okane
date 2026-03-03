@@ -22,6 +22,8 @@ pub struct WasmEngine {
     time_provider: Arc<dyn TimeProvider>,
 }
 
+const WASM_FUEL_LIMIT: u64 = 1_000_000;
+
 impl WasmEngine {
     /// # Summary
     /// 创建 WasmEngine 实例。
@@ -100,7 +102,7 @@ impl WasmEngine {
         let mut store = Store::new(&engine, plugin_ctx.clone());
         // 设置执行 fuel 限制（每次 on_candle 调用前重置）
         store
-            .set_fuel(1_000_000)
+            .set_fuel(WASM_FUEL_LIMIT)
             .map_err(|e| EngineError::Plugin(e.to_string()))?;
 
         // 编译 WASM 模块
@@ -143,7 +145,7 @@ impl WasmEngine {
 
             // 重置 fuel
             store
-                .set_fuel(1_000_000)
+                .set_fuel(WASM_FUEL_LIMIT)
                 .map_err(|e| EngineError::Plugin(e.to_string()))?;
 
             // 序列化 K 线数据

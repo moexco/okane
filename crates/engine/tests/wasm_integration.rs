@@ -12,6 +12,7 @@ use okane_core::market::port::{CandleStream, Market, Stock, StockStatus};
 use okane_engine::wasm::WasmEngine;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
+use rust_decimal_macros::dec;
 
 struct MockStock {
     identity: StockIdentity,
@@ -23,7 +24,7 @@ impl Stock for MockStock {
     fn identity(&self) -> &StockIdentity {
         &self.identity
     }
-    fn current_price(&self) -> Option<f64> {
+    fn current_price(&self) -> Option<rust_decimal::Decimal> {
         None
     }
     fn latest_candle(&self, _: TimeFrame) -> Option<Candle> {
@@ -144,12 +145,12 @@ async fn test_wasm_strategy_dummy_signal() {
     // close=155.0 > 150.0 → 应触发 LongEntry
     tx.send(Candle {
         time: Utc::now(),
-        open: 150.0,
-        high: 160.0,
-        low: 140.0,
-        close: 155.0,
+        open: dec!(150.0),
+        high: dec!(160.0),
+        low: dec!(140.0),
+        close: dec!(155.0),
         adj_close: None,
-        volume: 1000.0,
+        volume: dec!(1000.0),
         is_final: true,
     })
     .unwrap();
@@ -193,12 +194,12 @@ async fn test_wasm_strategy_dummy_no_signal() {
     // close=100.0 <= 150.0 → 不应触发信号
     tx.send(Candle {
         time: Utc::now(),
-        open: 100.0,
-        high: 105.0,
-        low: 95.0,
-        close: 100.0,
+        open: dec!(100.0),
+        high: dec!(105.0),
+        low: dec!(95.0),
+        close: dec!(100.0),
         adj_close: None,
-        volume: 500.0,
+        volume: dec!(500.0),
         is_final: true,
     })
     .unwrap();

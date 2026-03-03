@@ -20,6 +20,43 @@ pub struct SqliteAccountStore {
     pools: DashMap<String, SqlitePool>,
 }
 
+const SQL_INIT_TABLES: &str = r#"
+CREATE TABLE IF NOT EXISTS asset_status (
+    id TEXT PRIMARY KEY,
+    available_balance TEXT NOT NULL,
+    frozen_balance TEXT NOT NULL,
+    updated_at DATETIME NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS positions (
+    symbol TEXT PRIMARY KEY,
+    quantity TEXT NOT NULL,
+    avg_price TEXT NOT NULL,
+    updated_at DATETIME NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS trade_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_type TEXT NOT NULL,
+    asset_change TEXT NOT NULL,
+    frozen_change TEXT NOT NULL,
+    created_at DATETIME NOT NULL
+);
+"#;
+
+const SQL_INSERT_ASSET_IGNORE: &str = r#"
+INSERT OR IGNORE INTO asset_status (id, available_balance, frozen_balance, updated_at)
+VALUES ('MAIN', '0', '0', ?)
+"#;
+
+const SQL_SELECT_ASSET: &str = "SELECT available_balance, frozen_balance FROM asset_status WHERE id = 'MAIN'";
+
+const SQL_UPDATE_ASSET_AVAIL: &str = "UPDATE asset_status SET available_balance = ?, updated_at = ? WHERE id = 'MAIN'";
+
+const SQL_UPDATE_ASSET_FULL: &str = "UPDATE asset_status SET available_balance = ?, frozen_balance = ?, updated_at = ? WHERE id = 'MAIN'";
+
+const SQL_INSERT_LEDGER: &str = "INSERT INTO trade_ledger (action_type, asset_change, frozen_change, created_at) VALUES (?, ?, ?, ?)";
+
 impl SqliteAccountStore {
     pub fn new() -> Result<Self, TradeError> {
         let base_path = crate::config::get_root_dir()
@@ -55,42 +92,13 @@ impl SqliteAccountStore {
             .await
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS asset_status (
-                id TEXT PRIMARY KEY,
-                available_balance TEXT NOT NULL,
-                frozen_balance TEXT NOT NULL,
-                updated_at DATETIME NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS positions (
-                symbol TEXT PRIMARY KEY,
-                quantity TEXT NOT NULL,
-                avg_price TEXT NOT NULL,
-                updated_at DATETIME NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS trade_ledger (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                action_type TEXT NOT NULL,
-                asset_change TEXT NOT NULL,
-                frozen_change TEXT NOT NULL,
-                created_at DATETIME NOT NULL
-            );
-            "#,
-        )
+        sqlx::query(SQL_INIT_TABLES)
         .execute(&pool)
         .await
         .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
         // 初始化默认的 MAIN 资产槽位
-        sqlx::query(
-            r#"
-            INSERT OR IGNORE INTO asset_status (id, available_balance, frozen_balance, updated_at)
-            VALUES ('MAIN', '0', '0', ?)
-            "#,
-        )
+        sqlx::query(SQL_INSERT_ASSET_IGNORE)
         .bind(Utc::now())
         .execute(&pool)
         .await
@@ -105,7 +113,7 @@ impl SqliteAccountStore {
         let pool = self.get_or_init_pool(&account_id.0).await?;
         let mut tx = pool.begin().await.map_err(|e| TradeError::InternalError(e.to_string()))?;
 
-        let row: (String, String) = sqlx::query_as("SELECT available_balance, frozen_balance FROM asset_status WHERE id = 'MAIN'")
+        let row: (String, String) = sqlx::query_as(SQL_SELECT_ASSET)
             .fetch_one(&mut *tx)
             .await
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
@@ -113,14 +121,14 @@ impl SqliteAccountStore {
         let mut avail = Decimal::from_str(&row.0).unwrap_or_default();
         avail += amount;
 
-        sqlx::query("UPDATE asset_status SET available_balance = ?, updated_at = ? WHERE id = 'MAIN'")
+        sqlx::query(SQL_UPDATE_ASSET_AVAIL)
             .bind(avail.to_string())
             .bind(Utc::now())
             .execute(&mut *tx)
             .await
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
-        sqlx::query("INSERT INTO trade_ledger (action_type, asset_change, frozen_change, created_at) VALUES (?, ?, ?, ?)")
+        sqlx::query(SQL_INSERT_LEDGER)
             .bind("Deposit")
             .bind(amount.to_string())
             .bind("0")
@@ -141,7 +149,7 @@ impl AccountPort for SqliteAccountStore {
         let pool = self.get_or_init_pool(&account_id.0).await?;
         let mut tx = pool.begin().await.map_err(|e| TradeError::InternalError(e.to_string()))?;
 
-        let row: (String, String) = sqlx::query_as("SELECT available_balance, frozen_balance FROM asset_status WHERE id = 'MAIN'")
+        let row: (String, String) = sqlx::query_as(SQL_SELECT_ASSET)
             .fetch_one(&mut *tx)
             .await
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
@@ -159,7 +167,7 @@ impl AccountPort for SqliteAccountStore {
         avail -= amount;
         frozen += amount;
 
-        sqlx::query("UPDATE asset_status SET available_balance = ?, frozen_balance = ?, updated_at = ? WHERE id = 'MAIN'")
+        sqlx::query(SQL_UPDATE_ASSET_FULL)
             .bind(avail.to_string())
             .bind(frozen.to_string())
             .bind(Utc::now())
@@ -167,7 +175,7 @@ impl AccountPort for SqliteAccountStore {
             .await
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
             
-        sqlx::query("INSERT INTO trade_ledger (action_type, asset_change, frozen_change, created_at) VALUES (?, ?, ?, ?)")
+        sqlx::query(SQL_INSERT_LEDGER)
             .bind("FreezeFunds")
             .bind((-amount).to_string())
             .bind(amount.to_string())
@@ -184,7 +192,7 @@ impl AccountPort for SqliteAccountStore {
         let pool = self.get_or_init_pool(&account_id.0).await?;
         let mut tx = pool.begin().await.map_err(|e| TradeError::InternalError(e.to_string()))?;
 
-        let row: (String, String) = sqlx::query_as("SELECT available_balance, frozen_balance FROM asset_status WHERE id = 'MAIN'")
+        let row: (String, String) = sqlx::query_as(SQL_SELECT_ASSET)
             .fetch_one(&mut *tx)
             .await
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
@@ -228,7 +236,7 @@ impl AccountPort for SqliteAccountStore {
         let mut tx = pool.begin().await.map_err(|e| TradeError::InternalError(e.to_string()))?;
 
         // 1. 获取账金
-        let row: (String, String) = sqlx::query_as("SELECT available_balance, frozen_balance FROM asset_status WHERE id = 'MAIN'")
+        let row: (String, String) = sqlx::query_as(SQL_SELECT_ASSET)
             .fetch_one(&mut *tx)
             .await
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
@@ -338,7 +346,7 @@ impl AccountPort for SqliteAccountStore {
     async fn snapshot(&self, account_id: &AccountId) -> Result<AccountSnapshot, TradeError> {
         let pool = self.get_or_init_pool(&account_id.0).await?;
         
-        let row: (String, String) = sqlx::query_as("SELECT available_balance, frozen_balance FROM asset_status WHERE id = 'MAIN'")
+        let row: (String, String) = sqlx::query_as(SQL_SELECT_ASSET)
             .fetch_one(&pool)
             .await
             .map_err(|e| TradeError::InternalError(e.to_string()))?;

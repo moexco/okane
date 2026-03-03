@@ -68,7 +68,10 @@ impl EngineBuilder for EngineFactory {
                         let rt = match rt_res {
                             Ok(rt) => rt,
                             Err(e) => {
-                                let _ = tx.send(Err(EngineError::Plugin(format!("Failed to build tokio current_thread runtime: {}", e))));
+                                let err = EngineError::Plugin(format!("Failed to build tokio current_thread runtime: {}", e));
+                                if let Err(send_err) = tx.send(Err(err)) {
+                                    tracing::warn!("Failed to send error back from JS engine thread: {:?}", send_err);
+                                }
                                 return;
                             }
                         };
@@ -82,7 +85,9 @@ impl EngineBuilder for EngineFactory {
                             let result = engine
                                 .run_strategy(&params.symbol, &params.account_id, params.timeframe, &js_source)
                                 .await;
-                            let _ = tx.send(result);
+                            if let Err(e) = tx.send(result) {
+                                tracing::warn!("Failed to send strategy result back from JS engine thread: {:?}", e);
+                            }
                         });
                     });
 

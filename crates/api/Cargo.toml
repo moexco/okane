@@ -27,7 +27,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # --- 鉴权 ---
-jsonwebtoken = "9"
+jsonwebtoken = { version = "10.3", default-features = false, features = ["rust_crypto"] }
 
 # --- 日志 ---
 tracing = "0.1"

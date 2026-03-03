@@ -14,6 +14,7 @@ use tokio::time::timeout;
 /// 2. 抓取 AAPL 过去 7 天的日线数据。
 /// 3. 断言数据非空且返回成功。
 #[tokio::test]
+#[ignore]
 async fn test_yahoo_real_fetch() {
     let provider = YahooProvider::new();
     let stock = Stock {
@@ -49,6 +50,7 @@ async fn test_yahoo_real_fetch() {
 /// 2. 验证流是否能产生至少一个数据点（初始订阅会触发一次即时抓取）。
 /// 3. 设置 30 秒超时以应对网络波动。
 #[tokio::test]
+#[ignore]
 async fn test_yahoo_stream_subscribe() {
     let provider = YahooProvider::new();
     let stock = Stock {
@@ -75,7 +77,7 @@ async fn test_yahoo_stream_subscribe() {
         "收到流式数据 -> 时间: {:?}, 收盘价: {}",
         candle.time, candle.close
     );
-    assert!(candle.close > 0.0);
+    assert!(candle.close > rust_decimal::Decimal::ZERO);
 }
 
 /// # Summary
@@ -86,6 +88,7 @@ async fn test_yahoo_stream_subscribe() {
 /// 2. 搜索关键词 "Apple"。
 /// 3. 断言返回结果中包含 "AAPL" 股票。
 #[tokio::test]
+#[ignore]
 async fn test_yahoo_search_symbols() {
     let provider = YahooProvider::new();
     let query = "Apple";

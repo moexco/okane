@@ -14,7 +14,7 @@ use std::env;
 #[tokio::test]
 #[ignore] // 默认忽略，仅在手动测试时通过环境变量开启
 async fn test_telegram_notification() {
-    let _ = dotenvy::dotenv();
+    dotenvy::dotenv().ok();
     let bot_token = env::var("OKANE_TG_BOT_TOKEN").expect("OKANE_TG_BOT_TOKEN must be set");
     let chat_id = env::var("OKANE_TG_CHAT_ID").expect("OKANE_TG_CHAT_ID must be set");
 
@@ -38,7 +38,7 @@ async fn test_telegram_notification() {
 #[tokio::test]
 #[ignore] // 默认忽略
 async fn test_email_notification() {
-    let _ = dotenvy::dotenv();
+    dotenvy::dotenv().ok();
     let host = env::var("OKANE_EMAIL_HOST").expect("OKANE_EMAIL_HOST must be set");
     let user = env::var("OKANE_EMAIL_USER").expect("OKANE_EMAIL_USER must be set");
     let pass = env::var("OKANE_EMAIL_PASS").expect("OKANE_EMAIL_PASS must be set");

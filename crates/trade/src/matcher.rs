@@ -1,4 +1,4 @@
-use okane_core::trade::entity::{Order, OrderStatus, Trade};
+use okane_core::trade::entity::{Order, OrderDirection, OrderStatus, Trade};
 use okane_core::trade::port::MatcherPort;
 use rust_decimal::Decimal;
 
@@ -26,7 +26,22 @@ impl MatcherPort for LocalMatchEngine {
             return None;
         }
 
-        let execute_price = order.price.unwrap_or(current_market_price);
+        if let Some(limit_price) = order.price {
+            match order.direction {
+                OrderDirection::Buy => {
+                    if current_market_price > limit_price {
+                        return None;
+                    }
+                }
+                OrderDirection::Sell => {
+                    if current_market_price < limit_price {
+                        return None;
+                    }
+                }
+            }
+        }
+
+        let execute_price = current_market_price;
         let executed_volume = order.volume - order.filled_volume;
         
         let transaction_val = execute_price * executed_volume;
@@ -47,5 +62,73 @@ impl MatcherPort for LocalMatchEngine {
         };
 
         Some(trade)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use okane_core::trade::entity::{AccountId, OrderDirection, OrderId};
+    use rust_decimal_macros::dec;
+
+    #[test]
+    fn test_execute_order_market_price() {
+        let matcher = LocalMatchEngine::new(dec!(0.001)); // 0.1% commission
+        let mut order = Order::new(
+            OrderId("order1".to_string()),
+            AccountId("acc1".to_string()),
+            "AAPL".to_string(),
+            OrderDirection::Buy,
+            None,
+            dec!(100),
+            1000,
+        );
+
+        let trade = matcher.execute_order(&mut order, dec!(150.0), 1001).unwrap();
+
+        assert_eq!(trade.price, dec!(150.0));
+        assert_eq!(trade.volume, dec!(100));
+        assert_eq!(trade.commission, dec!(15.0)); // 150 * 100 * 0.001 = 15
+        assert_eq!(order.status, OrderStatus::Filled);
+        assert_eq!(order.filled_volume, dec!(100));
+    }
+
+    #[test]
+    fn test_execute_order_limit_price() {
+        let matcher = LocalMatchEngine::new(dec!(0.001));
+        let mut order = Order::new(
+            OrderId("order1".to_string()),
+            AccountId("acc1".to_string()),
+            "AAPL".to_string(),
+            OrderDirection::Buy,
+            Some(dec!(145.0)),
+            dec!(100),
+            1000,
+        );
+
+        // Since market price is lower (better) than limit price, it will execute at market price.
+        let trade = matcher.execute_order(&mut order, dec!(140.0), 1001).unwrap();
+
+        assert_eq!(trade.price, dec!(140.0));
+        assert_eq!(trade.volume, dec!(100));
+        assert_eq!(order.status, OrderStatus::Filled);
+    }
+
+    #[test]
+    fn test_already_filled_order() {
+        let matcher = LocalMatchEngine::new(dec!(0.001));
+        let mut order = Order::new(
+            OrderId("order1".to_string()),
+            AccountId("acc1".to_string()),
+            "AAPL".to_string(),
+            OrderDirection::Buy,
+            None,
+            dec!(100),
+            1000,
+        );
+        order.status = OrderStatus::Filled;
+
+        let trade = matcher.execute_order(&mut order, dec!(150.0), 1001);
+        assert!(trade.is_none());
     }
 }

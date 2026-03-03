@@ -3,6 +3,7 @@ use crate::common::{Stock, TimeFrame};
 use crate::market::entity::Candle;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -63,9 +64,9 @@ pub struct Position {
     // 股票代码
     pub symbol: String,
     // 持仓数量
-    pub quantity: f64,
+    pub quantity: Decimal,
     // 平均持仓成本
-    pub avg_price: f64,
+    pub avg_price: Decimal,
     // 最后更新时间
     pub last_updated: DateTime<Utc>,
 }
