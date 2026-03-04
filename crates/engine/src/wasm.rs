@@ -2,7 +2,6 @@ use crate::runtime::{EngineBase, PluginContext};
 use okane_core::common::time::TimeProvider;
 use futures::StreamExt;
 use okane_core::common::TimeFrame;
-use okane_core::engine::entity::Signal;
 use okane_core::engine::error::EngineError;
 use okane_core::market::port::Market;
 use std::sync::{Arc, Mutex};
@@ -20,6 +19,7 @@ pub struct WasmEngine {
     pub base: EngineBase,
     trade_port: Arc<dyn okane_core::trade::port::TradePort>,
     time_provider: Arc<dyn TimeProvider>,
+    notifier: Option<Arc<dyn okane_core::notify::port::Notifier>>,
 }
 
 const WASM_FUEL_LIMIT: u64 = 1_000_000;
@@ -37,21 +37,14 @@ impl WasmEngine {
         market: Arc<dyn Market>,
         trade_port: Arc<dyn okane_core::trade::port::TradePort>,
         time_provider: Arc<dyn TimeProvider>,
+        notifier: Option<Arc<dyn okane_core::notify::port::Notifier>>,
     ) -> Self {
         Self {
             base: EngineBase::new(market),
             trade_port,
             time_provider,
+            notifier,
         }
-    }
-
-    /// # Summary
-    /// 注册信号处理器。
-    ///
-    /// # Arguments
-    /// * `handler`: 信号处理钩子实现。
-    pub fn register_handler(&mut self, handler: Box<dyn okane_core::engine::port::SignalHandler>) {
-        self.base.register_handler(handler);
     }
 
     /// # Summary
@@ -64,8 +57,7 @@ impl WasmEngine {
     /// 4. 获取 WASM 导出的内存和 on_candle 函数。
     /// 5. 订阅 K 线流，对每根 K 线：
     ///    a. 将 JSON 写入 WASM 线性内存。
-    ///    b. 调用 on_candle(ptr, len) 并读取返回值。
-    ///    c. 解析信号后通过 EngineBase 分发。
+    ///    b. 调用 on_candle(ptr, len)，策略通过 host.* API 直接执行动作。
     ///
     /// # Arguments
     /// * `symbol`: 证券代码。
@@ -97,6 +89,7 @@ impl WasmEngine {
             trade_port: self.trade_port.clone(),
             account_id: account_id.to_string(),
             time_provider: self.time_provider.clone(),
+            notifier: self.notifier.clone(),
         }));
 
         let mut store = Store::new(&engine, plugin_ctx.clone());
@@ -141,7 +134,6 @@ impl WasmEngine {
 
         // 核心执行循环
         while let Some(candle) = stream.next().await {
-            // 注意: 在回测模式中 time_provider 应当由外部循环驱动，实盘中时间自动流逝
 
             // 重置 fuel
             store
@@ -170,27 +162,9 @@ impl WasmEngine {
                     EngineError::Plugin(e.to_string())
                 })?;
 
-            // 读取返回结果
-            if result_ptr != 0 {
-                // 结果格式: 前 4 字节是长度，后面是 JSON 字符串
-                let mut len_buf = [0u8; 4];
-                memory
-                    .read(&store, result_ptr as usize, &mut len_buf)
-                    .map_err(|e| EngineError::Plugin(format!("Memory read failed: {}", e)))?;
-                let result_len = u32::from_le_bytes(len_buf) as usize;
-
-                let mut result_buf = vec![0u8; result_len];
-                memory
-                    .read(&store, (result_ptr as usize) + 4, &mut result_buf)
-                    .map_err(|e| EngineError::Plugin(format!("Memory read failed: {}", e)))?;
-
-                let result_str = String::from_utf8(result_buf)
-                    .map_err(|e| EngineError::Plugin(format!("UTF-8 decode error: {}", e)))?;
-
-                if let Ok(Some(signal)) = serde_json::from_str::<Option<Signal>>(&result_str) {
-                    self.base.dispatch_signal(signal).await?;
-                }
-            }
+            // 读取返回结果 (WASM on_candle 返回值被忽略，策略通过 host.* API 直接执行动作)
+            // result_ptr 非 0 可用于未来日志扩展，但不再解析为 Signal
+            let _ = result_ptr;
         }
 
         Ok(())

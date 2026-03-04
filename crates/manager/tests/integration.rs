@@ -2,6 +2,7 @@ pub mod mock_trade;
 use okane_core::common::TimeFrame;
 use okane_core::engine::error::EngineError;
 use okane_core::engine::port::{EngineBuilder, EngineFuture, EngineBuildParams};
+use okane_core::notify::port::NotifierFactory;
 use okane_core::strategy::entity::{EngineType, StrategyStatus};
 use okane_manager::strategy::{StartRequest, StrategyManager};
 use okane_store::strategy::SqliteStrategyStore;
@@ -9,6 +10,16 @@ use okane_store::strategy::SqliteStrategyStore;
 use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::time::{sleep, Duration};
+
+/// 测试用空通知工厂, 始终返回 None
+struct NoopNotifierFactory;
+
+#[async_trait::async_trait]
+impl NotifierFactory for NoopNotifierFactory {
+    async fn create_for_user(&self, _user_id: &str) -> Result<Option<Arc<dyn okane_core::notify::port::Notifier>>, okane_core::notify::error::NotifyError> {
+        Ok(None)
+    }
+}
 
 struct MockEngineBuilder;
 
@@ -33,7 +44,7 @@ async fn test_strategy_lifecycle() {
     let store = Arc::new(SqliteStrategyStore::new().unwrap());
     let engine_builder = Arc::new(MockEngineBuilder);
     let trade_port = Arc::new(mock_trade::MockTradePort);
-    let manager = StrategyManager::new(store, engine_builder, trade_port, Arc::new(okane_core::common::time::RealTimeProvider));
+    let manager = StrategyManager::new(store, engine_builder, trade_port, Arc::new(okane_core::common::time::RealTimeProvider), Arc::new(NoopNotifierFactory));
 
     let user_id = "test_user";
     let req = StartRequest {
@@ -69,7 +80,7 @@ async fn test_strategy_lifecycle() {
         }
     }
     
-    let manager = StrategyManager::new(Arc::new(SqliteStrategyStore::new().unwrap()), Arc::new(InfiniteEngineBuilder), Arc::new(mock_trade::MockTradePort), Arc::new(okane_core::common::time::RealTimeProvider));
+    let manager = StrategyManager::new(Arc::new(SqliteStrategyStore::new().unwrap()), Arc::new(InfiniteEngineBuilder), Arc::new(mock_trade::MockTradePort), Arc::new(okane_core::common::time::RealTimeProvider), Arc::new(NoopNotifierFactory));
     let req = StartRequest {
         symbol: "AAPL".to_string(),
         account_id: "SystemDefault_01".to_string(),

@@ -85,19 +85,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matcher = std::sync::Arc::new(okane_trade::matcher::LocalMatchEngine::new(rust_decimal::Decimal::ZERO));
     let trade_service: Arc<dyn TradePort> = Arc::new(TradeService::new(account_manager, matcher, market.clone(), pending_port));
 
-    // 6. 构造应用服务层（注入 Core Trait 抽象）
+    // 6. 实例化系统级存储（提供给鉴权系统 + 用户通知配置查询）
+    let system_store: Arc<dyn okane_core::store::port::SystemStore> =
+        Arc::new(SqliteSystemStore::new().await?);
+
+    // 7. 创建通知工厂（根据用户 ID 动态创建 Notifier, 配置存储在数据库中）
+    let notifier_factory: Arc<dyn okane_core::notify::port::NotifierFactory> =
+        Arc::new(okane_notify::factory::DefaultNotifierFactory::new(system_store.clone()));
+
+    // 8. 构造应用服务层（注入 Core Trait 抽象）
     let manager = StrategyManager::new(
         strategy_store,
         engine_builder,
         trade_service.clone(),
         Arc::new(RealTimeProvider),
+        notifier_factory,
     );
 
     info!("StrategyManager initialized.");
-
-    // 7. 实例化系统级存储，提供给鉴权系统、配置下发
-    let system_store: Arc<dyn okane_core::store::port::SystemStore> =
-        Arc::new(SqliteSystemStore::new().await?);
 
     // 8. 挂载 API 服务
     let app_state = okane_api::server::AppState {

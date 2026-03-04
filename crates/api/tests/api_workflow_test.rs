@@ -19,6 +19,17 @@ use okane_manager::strategy::StrategyManager;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
+use okane_core::notify::port::NotifierFactory;
+
+/// 测试用空通知工厂
+struct NoopNotifierFactory;
+#[async_trait::async_trait]
+impl NotifierFactory for NoopNotifierFactory {
+    async fn create_for_user(&self, _user_id: &str) -> Result<Option<std::sync::Arc<dyn okane_core::notify::port::Notifier>>, okane_core::notify::error::NotifyError> {
+        Ok(None)
+    }
+}
+
 // 帮助函数：在随机端口启动测试服务器
 async fn spawn_test_server() -> (String, Arc<dyn SystemStore>, tempfile::TempDir) {
     let tmp_dir = tempfile::tempdir().expect("Failed to create temp dir");
@@ -62,6 +73,7 @@ async fn spawn_test_server() -> (String, Arc<dyn SystemStore>, tempfile::TempDir
         engine_builder,
         trade_service.clone(),
         Arc::new(okane_core::common::time::RealTimeProvider),
+        Arc::new(NoopNotifierFactory), // 测试环境不配置通知推送
     );
 
     let app_config = Arc::new(okane_core::config::AppConfig::default());

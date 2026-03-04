@@ -1,9 +1,7 @@
 use okane_core::common::time::TimeProvider;
 
 use okane_core::common::TimeFrame;
-use okane_core::engine::entity::Signal;
 use okane_core::engine::error::EngineError;
-use okane_core::engine::port::SignalHandler;
 use okane_core::market::port::Market;
 use std::sync::Arc;
 
@@ -25,7 +23,6 @@ pub enum StrategySource {
 ///
 /// # Invariants
 /// - `market` 引用在上下文生命周期内有效。
-/// - `current_time` 在每次 K 线到达时更新。
 pub struct PluginContext {
     /// 市场数据访问端口
     pub market: Arc<dyn Market>,
@@ -35,19 +32,15 @@ pub struct PluginContext {
     pub account_id: String,
     /// 当前挂载的时钟源，保证回测和实盘的时间分轨
     pub time_provider: Arc<dyn TimeProvider>,
+    /// 通知推送端口 (可选)
+    pub notifier: Option<Arc<dyn okane_core::notify::port::Notifier>>,
 }
 
 /// # Summary
-/// 引擎基础设施，封装市场访问和信号分发的公共能力。
-///
-/// # Invariants
-/// - `handlers` 中的每个处理器必须实现 `SignalHandler`。
-/// - 信号分发顺序与注册顺序一致。
+/// 引擎基础设施，封装市场访问的公共能力。
 pub struct EngineBase {
     /// 市场数据访问端口
     pub market: Arc<dyn Market>,
-    /// 已注册的信号处理器列表
-    pub handlers: Vec<Box<dyn SignalHandler>>,
 }
 
 impl EngineBase {
@@ -60,40 +53,7 @@ impl EngineBase {
     /// # Returns
     /// * `Self` - 初始化后的实例。
     pub fn new(market: Arc<dyn Market>) -> Self {
-        Self {
-            market,
-            handlers: Vec::new(),
-        }
-    }
-
-    /// # Summary
-    /// 注册信号处理器。
-    ///
-    /// # Arguments
-    /// * `handler`: 信号处理钩子实现。
-    pub fn register_handler(&mut self, handler: Box<dyn SignalHandler>) {
-        self.handlers.push(handler);
-    }
-
-    /// # Summary
-    /// 分发信号到所有匹配的处理器。
-    ///
-    /// # Logic
-    /// 1. 遍历所有已注册的处理器。
-    /// 2. 若匹配则调用其 handle 方法。
-    ///
-    /// # Arguments
-    /// * `signal`: 策略产生的信号。
-    ///
-    /// # Returns
-    /// * `Result<(), EngineError>` - 分发结果。
-    pub async fn dispatch_signal(&self, signal: Signal) -> Result<(), EngineError> {
-        for handler in &self.handlers {
-            if handler.matches(&signal) {
-                handler.handle(signal.clone()).await?;
-            }
-        }
-        Ok(())
+        Self { market }
     }
 
     /// # Summary

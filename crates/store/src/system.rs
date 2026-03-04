@@ -62,6 +62,12 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL,
     updated_at DATETIME NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS user_notify_config (
+    user_id TEXT PRIMARY KEY,
+    config_json TEXT NOT NULL,
+    updated_at DATETIME NOT NULL
+);
 "#;
 
 const SQL_SELECT_USER: &str = "SELECT * FROM users WHERE id = ?";
@@ -89,6 +95,8 @@ VALUES (?, ?, ?, ?, ?)
 const SQL_SELECT_SETTING: &str = "SELECT value FROM settings WHERE key = ?";
 const SQL_INSERT_SETTING: &str = "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)";
 const SQL_COUNT_USERS: &str = "SELECT COUNT(*) FROM users";
+const SQL_SELECT_USER_NOTIFY: &str = "SELECT config_json FROM user_notify_config WHERE user_id = ?";
+const SQL_UPSERT_USER_NOTIFY: &str = "INSERT OR REPLACE INTO user_notify_config (user_id, config_json, updated_at) VALUES (?, ?, ?)";
 
 impl SqliteSystemStore {
     /// 创建新的 SqliteSystemStore 并初始化全局表结构。
@@ -414,6 +422,37 @@ impl SystemStore for SqliteSystemStore {
         sqlx::query(SQL_INSERT_SETTING)
             .bind(key)
             .bind(value)
+            .bind(Utc::now())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn get_user_notify_config(&self, user_id: &str) -> Result<Option<okane_core::config::UserNotifyConfig>, StoreError> {
+        let result = sqlx::query_scalar::<_, String>(SQL_SELECT_USER_NOTIFY)
+            .bind(user_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        match result {
+            Some(json_str) => {
+                let config: okane_core::config::UserNotifyConfig = serde_json::from_str(&json_str)
+                    .map_err(|e| StoreError::Database(format!("Failed to deserialize notify config: {}", e)))?;
+                Ok(Some(config))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn save_user_notify_config(&self, user_id: &str, config: &okane_core::config::UserNotifyConfig) -> Result<(), StoreError> {
+        let json_str = serde_json::to_string(config)
+            .map_err(|e| StoreError::Database(format!("Failed to serialize notify config: {}", e)))?;
+
+        sqlx::query(SQL_UPSERT_USER_NOTIFY)
+            .bind(user_id)
+            .bind(json_str)
             .bind(Utc::now())
             .execute(&self.pool)
             .await

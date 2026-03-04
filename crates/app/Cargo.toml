@@ -11,6 +11,7 @@ okane-engine = { version = "0.1.0", path = "../engine" }
 okane-feed = { version = "0.1.0", path = "../feed" }
 okane-manager = { version = "0.1.0", path = "../manager" }
 okane-market = { version = "0.1.0", path = "../market" }
+okane-notify = { version = "0.1.0", path = "../notify" }
 okane-store = { version = "0.1.0", path = "../store" }
 okane-trade = { version = "0.1.0", path = "../trade" }
 rust_decimal = "1.40.0"

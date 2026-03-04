@@ -58,6 +58,8 @@ pub struct StrategyManager {
     trade_port: Arc<dyn okane_core::trade::port::TradePort>,
     // 时间提供者，允许在回测中被替换
     time_provider: Arc<dyn TimeProvider>,
+    // 通知工厂，根据用户 ID 动态创建通知实例
+    notifier_factory: Arc<dyn okane_core::notify::port::NotifierFactory>,
     // 运行中的策略协程句柄，Key 为 "{user_id}_{instance_id}"
     running_tasks: DashMap<String, AbortHandle>,
 }
@@ -77,12 +79,14 @@ impl StrategyManager {
         engine_builder: Arc<dyn EngineBuilder>,
         trade_port: Arc<dyn okane_core::trade::port::TradePort>,
         time_provider: Arc<dyn TimeProvider>,
+        notifier_factory: Arc<dyn okane_core::notify::port::NotifierFactory>,
     ) -> Arc<Self> {
         Arc::new(Self {
             store,
             engine_builder,
             trade_port,
             time_provider,
+            notifier_factory,
             running_tasks: DashMap::new(),
         })
     }
@@ -134,9 +138,11 @@ impl StrategyManager {
             account_id: instance.account_id.clone(),
             timeframe: req.timeframe,
             source: req.source,
-            handlers: Vec::new(), // TODO: 外部注入 SignalHandler 列表
+            // handlers field removed — Signal 机制已移除
             trade_port: self.trade_port.clone(),
             time_provider: self.time_provider.clone(),
+            notifier: self.notifier_factory.create_for_user(user_id).await
+                .map_err(|e| ManagerError::Engine(EngineError::Handler(format!("Failed to create notifier for user {}: {}", user_id, e))))?,
         })?;
 
         // 更新状态为 Running

@@ -2,7 +2,6 @@ use crate::runtime::{EngineBase, PluginContext};
 use futures::StreamExt;
 use okane_core::common::TimeFrame;
 use okane_core::common::time::TimeProvider;
-use okane_core::engine::entity::Signal;
 use okane_core::engine::error::EngineError;
 use okane_core::market::port::Market;
 use rquickjs::{AsyncContext, AsyncRuntime, Function, Object, Value, async_with};
@@ -20,6 +19,7 @@ pub struct JsEngine {
     pub base: EngineBase,
     trade_port: Arc<dyn okane_core::trade::port::TradePort>,
     time_provider: Arc<dyn TimeProvider>,
+    notifier: Option<Arc<dyn okane_core::notify::port::Notifier>>,
 }
 
 const JS_MEM_LIMIT: usize = 32 * 1024 * 1024;
@@ -38,21 +38,14 @@ impl JsEngine {
         market: Arc<dyn Market>,
         trade_port: Arc<dyn okane_core::trade::port::TradePort>,
         time_provider: Arc<dyn TimeProvider>,
+        notifier: Option<Arc<dyn okane_core::notify::port::Notifier>>,
     ) -> Self {
         Self {
             base: EngineBase::new(market),
             trade_port,
             time_provider,
+            notifier,
         }
-    }
-
-    /// # Summary
-    /// 注册信号处理器。
-    ///
-    /// # Arguments
-    /// * `handler`: 信号处理钩子实现。
-    pub fn register_handler(&mut self, handler: Box<dyn okane_core::engine::port::SignalHandler>) {
-        self.base.register_handler(handler);
     }
 
     /// # Summary
@@ -63,7 +56,7 @@ impl JsEngine {
     /// 2. 在 JS 全局注入 `host` 对象，包含 log/now/fetchHistory 方法。
     /// 3. 加载并执行策略 JS 源码。
     /// 4. 订阅 K 线流，每次到达时序列化为 JSON 调用 JS 的 `onCandle` 函数。
-    /// 5. 解析返回值为 `Option<Signal>`，若有信号则通过 EngineBase 分发。
+    /// 5. 策略通过 host.* API 直接执行动作，onCandle 为 void。
     ///
     /// # Arguments
     /// * `symbol`: 证券代码。
@@ -102,6 +95,7 @@ impl JsEngine {
             trade_port: self.trade_port.clone(),
             account_id: account_id.to_string(),
             time_provider: self.time_provider.clone(),
+            notifier: self.notifier.clone(),
         }));
 
         // 在 JS 全局注入 host 对象并加载策略源码
@@ -120,28 +114,20 @@ impl JsEngine {
 
         // 核心执行循环
         while let Some(candle) = stream.next().await {
-            // 注意: 在回测模式中 time_provider 应当由外部循环驱动，实盘中时间自动流逝
-
             // 序列化 K 线数据
             let candle_json = serde_json::to_string(&candle)
                 .map_err(|e| EngineError::Plugin(e.to_string()))?;
 
-            // 调用 JS 的 onCandle 函数
+            // 调用 JS 的 onCandle 函数 (void — 策略通过 host.* API 直接执行动作)
             let candle_json_clone = candle_json.clone();
-            let result: Result<Option<Signal>, EngineError> = async_with!(ctx => |ctx| {
+            let result: Result<(), EngineError> = async_with!(ctx => |ctx| {
                 Self::call_on_candle(&ctx, &candle_json_clone)
             })
             .await;
 
-            match result {
-                Ok(Some(signal)) => {
-                    self.base.dispatch_signal(signal).await?;
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    error!("JsEngine: Strategy execution failed for {}: {}", symbol, e);
-                    return Err(e);
-                }
+            if let Err(e) = result {
+                error!("JsEngine: Strategy execution failed for {}: {}", symbol, e);
+                return Err(e);
             }
         }
 
@@ -229,6 +215,34 @@ impl JsEngine {
         )
         .map_err(|e| EngineError::Plugin(e.to_string()))?;
 
+        // host.notify(subject: string, content: string) -> string ("ok" | error)
+        let ctx_for_notify = plugin_ctx.clone();
+        host.set(
+            "notify",
+            Function::new(ctx.clone(), move |subject: String, content: String| -> String {
+                let ctx_mutex = ctx_for_notify.lock().unwrap_or_else(|e| e.into_inner());
+                let notifier = ctx_mutex.notifier.clone();
+                drop(ctx_mutex);
+
+                match notifier {
+                    Some(n) => {
+                        match futures::executor::block_on(async {
+                            n.notify(&subject, &content).await
+                        }) {
+                            Ok(()) => "ok".to_string(),
+                            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+                        }
+                    }
+                    None => {
+                        warn!("JS called host.notify but no notifier is configured");
+                        "{\"error\": \"notifier not configured\"}".to_string()
+                    }
+                }
+            })
+            .map_err(|e| EngineError::Plugin(e.to_string()))?,
+        )
+        .map_err(|e| EngineError::Plugin(e.to_string()))?;
+
         // host.buy(symbol: string, price: number | null, volume: number) -> string (OrderId | Error)
         let ctx_for_buy = plugin_ctx.clone();
         host.set(
@@ -238,6 +252,8 @@ impl JsEngine {
                 let trade_port = ctx_mutex.trade_port.clone();
                 let account_id = ctx_mutex.account_id.clone();
                 drop(ctx_mutex);
+
+                info!("host.buy: symbol={}, price={:?}, volume={}", symbol, price, volume);
 
                 let req_price = price.and_then(rust_decimal::Decimal::from_f64_retain);
                 let req_vol = rust_decimal::Decimal::from_f64_retain(volume).unwrap_or(rust_decimal::Decimal::ZERO);
@@ -273,6 +289,8 @@ impl JsEngine {
                 let account_id = ctx_mutex.account_id.clone();
                 drop(ctx_mutex);
 
+                info!("host.sell: symbol={}, price={:?}, volume={}", symbol, price, volume);
+
                 let req_price = price.and_then(rust_decimal::Decimal::from_f64_retain);
                 let req_vol = rust_decimal::Decimal::from_f64_retain(volume).unwrap_or(rust_decimal::Decimal::ZERO);
                 
@@ -297,6 +315,77 @@ impl JsEngine {
         )
         .map_err(|e| EngineError::Plugin(e.to_string()))?;
 
+        // host.getAccount() -> string (JSON AccountSnapshot)
+        // 返回当前策略绑定账户的资金和持仓快照
+        let ctx_for_get_account = plugin_ctx.clone();
+        host.set(
+            "getAccount",
+            Function::new(ctx.clone(), move || -> String {
+                let ctx_mutex = ctx_for_get_account.lock().unwrap_or_else(|e| e.into_inner());
+                let trade_port = ctx_mutex.trade_port.clone();
+                let account_id = ctx_mutex.account_id.clone();
+                drop(ctx_mutex);
+
+                match futures::executor::block_on(async {
+                    trade_port.get_account(okane_core::trade::entity::AccountId(account_id)).await
+                }) {
+                    Ok(snapshot) => serde_json::to_string(&snapshot).unwrap_or_else(|e| {
+                        format!("{{\"error\": \"{}\"}}", e)
+                    }),
+                    Err(e) => format!("{{\"error\": \"{}\"}}", e),
+                }
+            })
+            .map_err(|e| EngineError::Plugin(e.to_string()))?,
+        )
+        .map_err(|e| EngineError::Plugin(e.to_string()))?;
+
+        // host.getOrder(orderId: string) -> string (JSON Order | null)
+        // 查询单笔订单详情
+        let ctx_for_get_order = plugin_ctx.clone();
+        host.set(
+            "getOrder",
+            Function::new(ctx.clone(), move |order_id: String| -> String {
+                let ctx_mutex = ctx_for_get_order.lock().unwrap_or_else(|e| e.into_inner());
+                let trade_port = ctx_mutex.trade_port.clone();
+                drop(ctx_mutex);
+
+                match futures::executor::block_on(async {
+                    trade_port.get_order(&okane_core::trade::entity::OrderId(order_id)).await
+                }) {
+                    Ok(Some(order)) => serde_json::to_string(&order).unwrap_or_else(|e| {
+                        format!("{{\"error\": \"{}\"}}", e)
+                    }),
+                    Ok(None) => "null".to_string(),
+                    Err(e) => format!("{{\"error\": \"{}\"}}", e),
+                }
+            })
+            .map_err(|e| EngineError::Plugin(e.to_string()))?,
+        )
+        .map_err(|e| EngineError::Plugin(e.to_string()))?;
+
+        // host.cancelOrder(orderId: string) -> string ("ok" | error)
+        // 撤销一笔尚未完全成交的订单
+        let ctx_for_cancel = plugin_ctx.clone();
+        host.set(
+            "cancelOrder",
+            Function::new(ctx.clone(), move |order_id: String| -> String {
+                let ctx_mutex = ctx_for_cancel.lock().unwrap_or_else(|e| e.into_inner());
+                let trade_port = ctx_mutex.trade_port.clone();
+                drop(ctx_mutex);
+
+                info!("host.cancelOrder: orderId={}", order_id);
+
+                match futures::executor::block_on(async {
+                    trade_port.cancel_order(okane_core::trade::entity::OrderId(order_id)).await
+                }) {
+                    Ok(()) => "ok".to_string(),
+                    Err(e) => format!("{{\"error\": \"{}\"}}", e),
+                }
+            })
+            .map_err(|e| EngineError::Plugin(e.to_string()))?,
+        )
+        .map_err(|e| EngineError::Plugin(e.to_string()))?;
+
         globals
             .set("host", host)
             .map_err(|e| EngineError::Plugin(e.to_string()))?;
@@ -309,30 +398,26 @@ impl JsEngine {
     }
 
     /// # Summary
-    /// 调用 JS 的 onCandle 函数并解析结果。
+    /// 调用 JS 的 onCandle 函数。
     ///
     /// # Logic
     /// 1. 从全局获取 `onCandle` 函数引用。
     /// 2. 将 K 线 JSON 字符串作为参数传入。
-    /// 3. 解析返回值为 JSON 字符串并反序列化为 `Option<Signal>`。
+    /// 3. 策略通过 host.* API 直接执行动作，返回值被忽略。
     fn call_on_candle(
         ctx: &rquickjs::Ctx<'_>,
         candle_json: &str,
-    ) -> Result<Option<Signal>, EngineError> {
+    ) -> Result<(), EngineError> {
         let globals = ctx.globals();
 
         let on_candle: Function = globals
             .get("onCandle")
             .map_err(|e| EngineError::Plugin(format!("onCandle function not found: {}", e)))?;
 
-        let result: String = on_candle
+        let _result: Value = on_candle
             .call((candle_json,))
             .map_err(|e| EngineError::Plugin(format!("onCandle execution error: {}", e)))?;
 
-        // 解析返回值
-        let signal: Option<Signal> = serde_json::from_str(&result)
-            .map_err(|e| EngineError::Plugin(format!("Signal deserialization error: {}", e)))?;
-
-        Ok(signal)
+        Ok(())
     }
 }

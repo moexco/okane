@@ -14,3 +14,5 @@ jwt_secret = "YOUR_SUPER_SECRET_KEY"
 [database]
 # The root directory for storing Okane data (SQLite files, accounts, strategies, logic traces)
 data_dir = "data"
+
+# 注意: 通知配置已改为用户级别, 通过 API 设置, 不在全局配置中

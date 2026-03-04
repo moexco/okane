@@ -297,4 +297,28 @@ pub trait SystemStore: Send + Sync {
     /// # Returns
     /// * `Result<(), StoreError>`
     async fn set_setting(&self, key: &str, value: &str) -> Result<(), StoreError>;
+
+    // --- 用户通知配置域 ---
+
+    /// # Summary
+    /// 获取用户的通知推送配置。
+    ///
+    /// # Arguments
+    /// * `user_id`: 用户唯一标识。
+    ///
+    /// # Returns
+    /// * `Ok(Some(config))` - 用户已配置
+    /// * `Ok(None)` - 用户未配置
+    async fn get_user_notify_config(&self, user_id: &str) -> Result<Option<crate::config::UserNotifyConfig>, StoreError>;
+
+    /// # Summary
+    /// 保存用户的通知推送配置。
+    ///
+    /// # Arguments
+    /// * `user_id`: 用户唯一标识。
+    /// * `config`: 通知配置实体。
+    ///
+    /// # Returns
+    /// * `Result<(), StoreError>`
+    async fn save_user_notify_config(&self, user_id: &str, config: &crate::config::UserNotifyConfig) -> Result<(), StoreError>;
 }

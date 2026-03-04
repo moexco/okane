@@ -40,10 +40,9 @@ impl EngineBuilder for EngineFactory {
     ///
     /// # Logic
     /// 1. 根据 engine_type 选择 JsEngine 或 WasmEngine。
-    /// 2. 注册所有 SignalHandler。
-    /// 3. 对于 JsEngine：因 QuickJS AsyncRuntime 不是 Send，
+    /// 2. 对于 JsEngine：因 QuickJS AsyncRuntime 不是 Send，
     ///    使用独立线程 + tokio LocalSet 运行，通过 oneshot 通道桥接结果。
-    /// 4. 对于 WasmEngine：直接包装为 Send Future。
+    /// 3. 对于 WasmEngine：直接包装为 Send Future。
     fn build(
         &self,
         params: EngineBuildParams,
@@ -61,7 +60,7 @@ impl EngineBuilder for EngineFactory {
                     let (tx, rx) = tokio::sync::oneshot::channel();
 
                     std::thread::spawn(move || {
-                        let rt_res = tokio::runtime::Builder::new_current_thread()
+                let rt_res = tokio::runtime::Builder::new_current_thread()
                             .enable_all()
                             .build();
 
@@ -78,10 +77,7 @@ impl EngineBuilder for EngineFactory {
 
                         let local = tokio::task::LocalSet::new();
                         local.block_on(&rt, async move {
-                            let mut engine = JsEngine::new(market, params.trade_port, params.time_provider);
-                            for handler in params.handlers {
-                                engine.register_handler(handler);
-                            }
+                            let engine = JsEngine::new(market, params.trade_port, params.time_provider, params.notifier);
                             let result = engine
                                 .run_strategy(&params.symbol, &params.account_id, params.timeframe, &js_source)
                                 .await;
@@ -99,10 +95,7 @@ impl EngineBuilder for EngineFactory {
             EngineType::Wasm => {
                 // WasmEngine 的 Future 是 Send 的，可以直接包装
                 Ok(Box::pin(async move {
-                    let mut engine = WasmEngine::new(market, params.trade_port, params.time_provider);
-                    for handler in params.handlers {
-                        engine.register_handler(handler);
-                    }
+                    let engine = WasmEngine::new(market, params.trade_port, params.time_provider, params.notifier);
                     engine
                         .run_strategy(&params.symbol, &params.account_id, params.timeframe, &params.source)
                         .await
