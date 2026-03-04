@@ -69,4 +69,19 @@ pub trait StrategyStore: Send + Sync {
         &self,
         user_id: &str,
     ) -> Result<Vec<StrategyInstance>, StoreError>;
+
+    /// # Summary
+    /// 删除指定用户的策略实例。
+    ///
+    /// # Arguments
+    /// * `user_id` - 用户标识符。
+    /// * `id` - 策略实例 ID。
+    ///
+    /// # Returns
+    /// * `Result<(), StoreError>`
+    async fn delete_instance(
+        &self,
+        user_id: &str,
+        id: &str,
+    ) -> Result<(), StoreError>;
 }

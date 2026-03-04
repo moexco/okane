@@ -75,6 +75,35 @@ pub struct OrderResponse {
     pub created_at: i64,
 }
 
+/// 历史成交明细 (Trade/Fill) DTO
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TradeResponse {
+    /// 归属账户 ID
+    #[schema(example = "SysAcct_Alpha_01")]
+    pub account_id: String,
+    /// 原始订单 ID
+    #[schema(example = "ord-123456")]
+    pub order_id: String,
+    /// 股票代码
+    #[schema(example = "NVDA")]
+    pub symbol: String,
+    /// 方向 (Buy/Sell)
+    #[schema(example = "Buy")]
+    pub direction: String,
+    /// 实际成交价
+    #[schema(example = "120.50")]
+    pub price: String,
+    /// 实际成交量
+    #[schema(example = "50")]
+    pub volume: String,
+    /// 手续费
+    #[schema(example = "0.5")]
+    pub commission: String,
+    /// 成交时间戳 (毫秒)
+    #[schema(example = 1710000000000_i64)]
+    pub timestamp: i64,
+}
+
 // ============================================================
 //  行情相关 DTO
 // ============================================================
@@ -181,6 +210,107 @@ pub struct SaveStrategySourceRequest {
     /// 策略源码 (base64 编码)
     #[schema(example = "Y29uc29sZS5sb2coJ2hlbGxvJyk7")]
     pub source_base64: String,
+}
+
+// ============================================================
+//  通知配置 Request/Response
+// ============================================================
+
+/// Telegram 推送配置
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TelegramConfig {
+    /// Telegram Bot API Token
+    #[schema(example = "123456789:ABCdefGHIjklMNOpqrSTUvwxYZ")]
+    pub bot_token: String,
+    /// 目标 Chat ID
+    #[schema(example = "-1001234567890")]
+    pub chat_id: String,
+}
+
+/// Email 推送配置
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct EmailConfig {
+    /// SMTP 服务器地址
+    #[schema(example = "smtp.example.com")]
+    pub smtp_host: String,
+    /// SMTP 用户名
+    #[schema(example = "system@example.com")]
+    pub smtp_user: String,
+    /// SMTP 密码
+    #[schema(example = "s3cr3tP4ssw0rd")]
+    pub smtp_pass: String,
+    /// 发件人
+    #[schema(example = "system@example.com")]
+    pub from: String,
+    /// 收件人
+    #[schema(example = "user@example.com")]
+    pub to: String,
+}
+
+/// 用户级通知配置请求体
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct UpdateNotifyConfigRequest {
+    /// 通知渠道: "none" | "telegram" | "email"
+    #[schema(example = "telegram")]
+    pub channel: String,
+    /// Telegram 推送配置
+    pub telegram: TelegramConfig,
+    /// Email 推送配置
+    pub email: EmailConfig,
+}
+
+/// 用户级通知配置响应体
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct NotifyConfigResponse {
+    /// 通知渠道: "none" | "telegram" | "email"
+    #[schema(example = "telegram")]
+    pub channel: String,
+    /// Telegram 推送配置
+    pub telegram: TelegramConfig,
+    /// Email 推送配置
+    pub email: EmailConfig,
+}
+
+// ============================================================
+//  回测相关 DTO
+// ============================================================
+
+/// 执行回测请求体
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct BacktestRequest {
+    /// 目标证券代码
+    #[schema(example = "AAPL")]
+    pub symbol: String,
+    /// K 线时间周期
+    #[schema(example = "5m")]
+    pub timeframe: String,
+    /// 开始时间 (RFC3339 格式)
+    #[schema(example = "2026-01-01T00:00:00Z")]
+    pub start: String,
+    /// 结束时间 (RFC3339 格式)
+    #[schema(example = "2026-02-01T00:00:00Z")]
+    pub end: String,
+    /// 初始资金
+    #[schema(example = "100000.00")]
+    pub initial_balance: String,
+    /// 引擎类型 ("JavaScript" 或 "Wasm")
+    #[schema(example = "JavaScript")]
+    pub engine_type: String,
+    /// 策略源码 (base64 编码的脚本)
+    #[schema(example = "Y29uc29sZS5sb2coJ2hlbGxvJyk7")]
+    pub source_base64: String,
+}
+
+/// 回测结果
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct BacktestResponse {
+    /// 回测结束时的账户快照
+    pub final_snapshot: AccountSnapshotResponse,
+    /// 完整交易流水
+    pub trades: Vec<TradeResponse>,
+    /// 共处理的 K 线数量
+    #[schema(example = 5432)]
+    pub candle_count: usize,
 }
 
 // ============================================================
@@ -399,6 +529,59 @@ impl From<okane_core::trade::entity::Order> for OrderResponse {
             filled_volume: o.filled_volume.to_string(),
             status: format!("{:?}", o.status),
             created_at: o.created_at,
+        }
+    }
+}
+
+impl From<okane_core::trade::entity::Trade> for TradeResponse {
+    fn from(t: okane_core::trade::entity::Trade) -> Self {
+        Self {
+            account_id: t.account_id.0,
+            order_id: t.order_id.0,
+            symbol: t.symbol,
+            direction: format!("{:?}", t.direction),
+            price: t.price.to_string(),
+            volume: t.volume.to_string(),
+            commission: t.commission.to_string(),
+            timestamp: t.timestamp,
+        }
+    }
+}
+
+impl From<okane_core::config::UserNotifyConfig> for NotifyConfigResponse {
+    fn from(c: okane_core::config::UserNotifyConfig) -> Self {
+        Self {
+            channel: c.channel,
+            telegram: TelegramConfig {
+                bot_token: c.telegram.bot_token,
+                chat_id: c.telegram.chat_id,
+            },
+            email: EmailConfig {
+                smtp_host: c.email.smtp_host,
+                smtp_user: c.email.smtp_user,
+                smtp_pass: c.email.smtp_pass,
+                from: c.email.from,
+                to: c.email.to,
+            },
+        }
+    }
+}
+
+impl From<UpdateNotifyConfigRequest> for okane_core::config::UserNotifyConfig {
+    fn from(dto: UpdateNotifyConfigRequest) -> Self {
+        Self {
+            channel: dto.channel,
+            telegram: okane_core::config::TelegramConfig {
+                bot_token: dto.telegram.bot_token,
+                chat_id: dto.telegram.chat_id,
+            },
+            email: okane_core::config::EmailConfig {
+                smtp_host: dto.email.smtp_host,
+                smtp_user: dto.email.smtp_user,
+                smtp_pass: dto.email.smtp_pass,
+                from: dto.email.from,
+                to: dto.email.to,
+            },
         }
     }
 }

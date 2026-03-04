@@ -7,7 +7,7 @@ use axum::extract::{Path, Query, State};
 use serde::Deserialize;
 use axum::Json;
 
-use crate::types::{ApiResponse, StartStrategyRequest, StrategyResponse};
+use crate::types::{ApiResponse, StartStrategyRequest, StrategyResponse, SaveStrategySourceRequest};
 use crate::error::ApiError;
 use crate::middleware::auth::CurrentUser;
 use crate::server::AppState;
@@ -176,6 +176,65 @@ pub async fn stop_strategy(
 ) -> Result<Json<ApiResponse<String>>, ApiError> {
     state.strategy_manager.stop_strategy(&user.id, &id).await?;
     Ok(Json(ApiResponse::ok("策略已停止".to_string())))
+}
+
+/// 更新策略源码
+///
+/// 更新处于非运行状态的策略源码。
+#[utoipa::path(
+    put,
+    path = "/api/v1/user/strategies/{id}",
+    tag = "策略 (Strategy)",
+    security(("bearer_jwt" = [])),
+    request_body = SaveStrategySourceRequest,
+    params(
+        ("id" = String, Path, description = "策略实例 ID")
+    ),
+    responses(
+        (status = 200, description = "策略更新成功"),
+        (status = 400, description = "请求参数错误或策略正在运行"),
+        (status = 404, description = "策略不存在"),
+        (status = 401, description = "未认证")
+    )
+)]
+pub async fn update_strategy(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path(id): Path<String>,
+    Json(req): Json<SaveStrategySourceRequest>,
+) -> Result<Json<ApiResponse<String>>, ApiError> {
+    let source = base64_decode(&req.source_base64)
+        .map_err(|e| ApiError::BadRequest(format!("Base64 解码失败: {}", e)))?;
+
+    state.strategy_manager.update_strategy(&user.id, &id, source).await?;
+    Ok(Json(ApiResponse::ok("策略已更新".to_string())))
+}
+
+/// 删除策略
+///
+/// 删除处于非运行状态的策略记录。
+#[utoipa::path(
+    delete,
+    path = "/api/v1/user/strategies/{id}",
+    tag = "策略 (Strategy)",
+    security(("bearer_jwt" = [])),
+    params(
+        ("id" = String, Path, description = "策略实例 ID")
+    ),
+    responses(
+        (status = 200, description = "策略已删除"),
+        (status = 400, description = "策略正在运行"),
+        (status = 404, description = "策略不存在"),
+        (status = 401, description = "未认证")
+    )
+)]
+pub async fn delete_strategy(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path(id): Path<String>,
+) -> Result<Json<ApiResponse<String>>, ApiError> {
+    state.strategy_manager.delete_strategy(&user.id, &id).await?;
+    Ok(Json(ApiResponse::ok("策略已删除".to_string())))
 }
 
 // ============================================================

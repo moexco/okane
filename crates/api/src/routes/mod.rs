@@ -1,7 +1,9 @@
 pub mod account;
 pub mod admin;
 pub mod auth;
-pub mod strategy;
+pub mod backtest;
 pub mod market;
-pub mod watchlist;
+pub mod notify;
+pub mod strategy;
 pub mod trade;
+pub mod watchlist;

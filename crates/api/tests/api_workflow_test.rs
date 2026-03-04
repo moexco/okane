@@ -66,7 +66,7 @@ async fn spawn_test_server() -> (String, Arc<dyn SystemStore>, tempfile::TempDir
     );
     let pending_port = Arc::new(okane_store::pending_order::MemoryPendingOrderStore::new());
     let matcher = std::sync::Arc::new(LocalMatchEngine::new(rust_decimal::Decimal::ZERO));
-    let trade_service = Arc::new(TradeService::new(account_manager, matcher, market.clone(), pending_port));
+    let trade_service = Arc::new(TradeService::new(account_manager, matcher, market.clone(), pending_port, Arc::new(okane_core::common::time::RealTimeProvider)));
 
     let strategy_manager = StrategyManager::new(
         strategy_store,
@@ -78,11 +78,20 @@ async fn spawn_test_server() -> (String, Arc<dyn SystemStore>, tempfile::TempDir
 
     let app_config = Arc::new(okane_core::config::AppConfig::default());
 
+    let engine_builder_factory = Arc::new(|m: Arc<dyn okane_core::market::port::Market>| {
+        Arc::new(okane_engine::factory::EngineFactory::new(m)) as Arc<dyn okane_core::engine::port::EngineBuilder>
+    });
+    let backtest_runner = Arc::new(okane_manager::backtest::BacktestRunner::new(
+        market.clone(),
+        engine_builder_factory,
+    ));
+
     let state = AppState {
         strategy_manager,
         trade_port: trade_service,
         system_store: system_store.clone(),
         market_port: market,
+        backtest_runner,
         app_config,
     };
 
@@ -114,6 +123,7 @@ async fn spawn_test_server() -> (String, Arc<dyn SystemStore>, tempfile::TempDir
             .routes(utoipa_axum::routes!(okane_api::routes::strategy::get_strategy))
             .routes(utoipa_axum::routes!(okane_api::routes::strategy::deploy_strategy))
             .routes(utoipa_axum::routes!(okane_api::routes::strategy::stop_strategy))
+            .routes(utoipa_axum::routes!(okane_api::routes::backtest::run_backtest))
             .layer(axum::middleware::from_fn(
                 okane_api::middleware::auth::require_password_changed,
             ))
@@ -146,7 +156,7 @@ async fn spawn_test_server() -> (String, Arc<dyn SystemStore>, tempfile::TempDir
     (addr, system_store, tmp_dir)
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_full_api_workflow() {
     tracing_subscriber::fmt().with_env_filter("debug").try_init().ok();
     
@@ -298,7 +308,7 @@ async fn test_full_api_workflow() {
             account_id: "trader_01".to_string(),
             timeframe: "1m".to_string(),
             engine_type: "JavaScript".to_string(),
-            source_base64: "Y29uc29sZS5sb2coJ2hlbGxvJyk7".to_string(), // console.log('hello');
+            source_base64: "ZnVuY3Rpb24gb25Jbml0KCkge30gZnVuY3Rpb24gb25DYW5kbGUoaW5wdXQpIHsgdmFyIGNhbmRsZSA9IEpTT04ucGFyc2UoaW5wdXQpOyBob3N0LmJ1eSgnQUFQTCcsIGNhbmRsZS5jbG9zZSwgMTAuMCk7IH0=".to_string(), // valid js
         })
         .send()
         .await
@@ -330,4 +340,37 @@ async fn test_full_api_workflow() {
         .await
         .unwrap();
     assert_eq!(acc_res.status(), StatusCode::OK);
+
+    // ============================================
+    // Case 9: 策略沙盒回测
+    // ============================================
+    // `ZnVu...` 是 base64 编码的:
+    // function onInit() {} function onCandle(input) { var candle = JSON.parse(input); host.buy('AAPL', candle.close, 10.0); }
+    let end_time = chrono::Utc::now();
+    let start_time = end_time - chrono::Duration::days(3);
+    
+    let backtest_res = client
+        .post(format!("{}/api/v1/user/backtest", base_url))
+        .bearer_auth(&trader_token)
+        .json(&serde_json::json!({
+            "symbol": "AAPL",
+            "timeframe": "1d",
+            "start": start_time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "end": end_time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "initial_balance": "10000.00",
+            "engine_type": "JavaScript",
+            "source_base64": "ZnVuY3Rpb24gb25Jbml0KCkge30gZnVuY3Rpb24gb25DYW5kbGUoaW5wdXQpIHsgdmFyIGNhbmRsZSA9IEpTT04ucGFyc2UoaW5wdXQpOyBob3N0LmJ1eSgnQUFQTCcsIGNhbmRsZS5jbG9zZSwgMTAuMCk7IH0="
+        }))
+        .send()
+        .await
+        .unwrap();
+    
+    assert_eq!(backtest_res.status(), StatusCode::OK, "Backtest request failed");
+    
+    let bt_data: ApiResponse<okane_api::types::BacktestResponse> = backtest_res.json().await.unwrap();
+    let result = bt_data.data.unwrap();
+    
+    // We don't strictly assert candle_count > 0 to avoid flaky behavior without internet,
+    // but we can assert the response format is correctly assembled.
+    assert!(result.final_snapshot.account_id.starts_with("backtest_"));
 }

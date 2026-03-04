@@ -7,6 +7,11 @@ edition = "2024"
 chrono = { version = "0.4.43", features = ["serde"] }
 dashmap = "6.1.0"
 okane-core = { version = "0.1.0", path = "../core" }
+okane-market = { version = "0.1.0", path = "../market" }
+okane-store = { version = "0.1.0", path = "../store" }
+okane-trade = { version = "0.1.0", path = "../trade" }
+async-trait = "0.1.89"
+rust_decimal = "1.40.0"
 thiserror = "2.0.18"
 tokio = { version = "1.49.0", features = ["rt", "sync"] }
 tracing = "0.1.43"

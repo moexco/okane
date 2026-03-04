@@ -93,9 +93,8 @@ async fn test_end_to_end_backtest_with_time_travel() {
 
     let pending_port = Arc::new(okane_store::pending_order::MemoryPendingOrderStore::new());
     let matcher = std::sync::Arc::new(okane_trade::matcher::LocalMatchEngine::new(Decimal::ZERO));
-    let trade_service = Arc::new(TradeService::new(account_manager.clone(), matcher, market.clone(), pending_port));
     let fake_clock = Arc::new(FakeClockProvider::new(base_time));
-    
+    let trade_service = Arc::new(TradeService::new(account_manager.clone(), matcher, market.clone(), pending_port, fake_clock.clone()));
 
     // 创建 BacktestDriver
     let driver = BacktestDriver::new(market.clone(), trade_service.clone(), fake_clock.clone());

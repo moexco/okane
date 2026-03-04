@@ -69,7 +69,7 @@ async fn test_high_concurrency_order_execution() {
     let pending_port = Arc::new(okane_store::pending_order::MemoryPendingOrderStore::new());
     // 用 Arc 包裹 TradeService 供多线程闭包移动
     let matcher = std::sync::Arc::new(okane_trade::matcher::LocalMatchEngine::new(rust_decimal::Decimal::from_str_exact("0.0001").unwrap()));
-    let trade_service = Arc::new(TradeService::new(account_manager.clone(), matcher, market, pending_port));
+    let trade_service = Arc::new(TradeService::new(account_manager.clone(), matcher, market, pending_port, Arc::new(okane_core::common::time::RealTimeProvider)));
     
     // 测试：并发抛入 100 张限价买单和 50 张市价卖单。
     // 单张买单需要金额: volume(10) * price(150) = 1500
@@ -155,7 +155,7 @@ async fn test_insufficient_funds_rejection() {
     let market = Arc::new(MockMarket);
     let pending_port = Arc::new(okane_store::pending_order::MemoryPendingOrderStore::new());
     let matcher = std::sync::Arc::new(okane_trade::matcher::LocalMatchEngine::new(rust_decimal::Decimal::ZERO));
-    let trade_service = Arc::new(TradeService::new(account_manager.clone(), matcher, market, pending_port));
+    let trade_service = Arc::new(TradeService::new(account_manager.clone(), matcher, market, pending_port, Arc::new(okane_core::common::time::RealTimeProvider)));
     
     // 购买 1 股 AAPL, 价格 150，理应风控拒绝并无法入队撮合
     let order = Order::new(

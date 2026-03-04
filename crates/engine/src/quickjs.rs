@@ -6,7 +6,24 @@ use okane_core::engine::error::EngineError;
 use okane_core::market::port::Market;
 use rquickjs::{AsyncContext, AsyncRuntime, Function, Object, Value, async_with};
 use std::sync::{Arc, Mutex};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
+
+/// 辅助函数：在 QuickJS 同步环境（运行于 LocalSet）中安全地等待异步任务完成
+///
+/// 详述：由于 JsEngine 在 tokio::task::LocalSet 中执行，不能调用 tokio::task::block_in_place
+/// (会 panic: can call blocking only when running on the multi-threaded runtime)。
+/// 为了在 sync 的 host 绑定中执行 async 代码，我们新建一个 OS 线程去执行 `tokio::runtime::Handle::block_on`，
+/// 并使用 `std::thread::scope` 安全借用栈上的参数。
+fn block_on_async<F, R>(future: F) -> R
+where
+    F: std::future::Future<Output = R> + Send,
+    R: Send,
+{
+    let handle = tokio::runtime::Handle::current();
+    std::thread::scope(|s| {
+        s.spawn(move || handle.block_on(future)).join().unwrap_or_else(|_| panic!("Background thread panicked during block_on_async"))
+    })
+}
 
 /// # Summary
 /// 基于 QuickJS 的策略执行引擎。
@@ -158,7 +175,8 @@ impl JsEngine {
                 match level {
                     1 => error!("JS [ERROR]: {}", msg),
                     2 => warn!("JS [WARN]: {}", msg),
-                    _ => info!("JS [INFO]: {}", msg),
+                    3 => info!("JS [INFO]: {}", msg),
+                    _ => debug!("JS [DEBUG]: {}", msg),
                 }
             })
             .map_err(|e| EngineError::Plugin(e.to_string()))?,
@@ -193,7 +211,7 @@ impl JsEngine {
                 };
 
                 // 阻塞式桥接异步调用
-                match futures::executor::block_on(async {
+                match block_on_async(async {
                     let stock = market.get_stock(&symbol).await.map_err(|e| e.to_string())?;
                     let end = end_at;
                     let duration = tf_parsed.duration() * (limit * 2);
@@ -226,7 +244,7 @@ impl JsEngine {
 
                 match notifier {
                     Some(n) => {
-                        match futures::executor::block_on(async {
+                        match block_on_async(async {
                             n.notify(&subject, &content).await
                         }) {
                             Ok(()) => "ok".to_string(),
@@ -268,7 +286,7 @@ impl JsEngine {
                     0,
                 );
 
-                match futures::executor::block_on(async {
+                match block_on_async(async {
                     trade_port.submit_order(order).await
                 }) {
                     Ok(oid) => oid.0,
@@ -304,7 +322,7 @@ impl JsEngine {
                     0,
                 );
 
-                match futures::executor::block_on(async {
+                match block_on_async(async {
                     trade_port.submit_order(order).await
                 }) {
                     Ok(oid) => oid.0,
@@ -326,7 +344,7 @@ impl JsEngine {
                 let account_id = ctx_mutex.account_id.clone();
                 drop(ctx_mutex);
 
-                match futures::executor::block_on(async {
+                match block_on_async(async {
                     trade_port.get_account(okane_core::trade::entity::AccountId(account_id)).await
                 }) {
                     Ok(snapshot) => serde_json::to_string(&snapshot).unwrap_or_else(|e| {
@@ -349,7 +367,7 @@ impl JsEngine {
                 let trade_port = ctx_mutex.trade_port.clone();
                 drop(ctx_mutex);
 
-                match futures::executor::block_on(async {
+                match block_on_async(async {
                     trade_port.get_order(&okane_core::trade::entity::OrderId(order_id)).await
                 }) {
                     Ok(Some(order)) => serde_json::to_string(&order).unwrap_or_else(|e| {
@@ -375,7 +393,7 @@ impl JsEngine {
 
                 info!("host.cancelOrder: orderId={}", order_id);
 
-                match futures::executor::block_on(async {
+                match block_on_async(async {
                     trade_port.cancel_order(okane_core::trade::entity::OrderId(order_id)).await
                 }) {
                     Ok(()) => "ok".to_string(),

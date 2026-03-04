@@ -18,7 +18,7 @@ use okane_core::trade::port::TradePort;
 use okane_core::market::port::Market;
 use okane_manager::strategy::StrategyManager;
 
-use crate::routes::{account, admin, auth, strategy, market, watchlist, trade};
+use crate::routes::{account, admin, auth, backtest, market, notify, strategy, trade, watchlist};
 
 // ============================================================
 //  共享应用状态
@@ -38,6 +38,8 @@ pub struct AppState {
     pub system_store: Arc<dyn SystemStore>,
     /// 行情数据入口 (查询K线与状态)
     pub market_port: Arc<dyn Market>,
+    /// 回测运行器
+    pub backtest_runner: Arc<okane_manager::backtest::BacktestRunner>,
     /// 应用全局配置
     pub app_config: Arc<okane_core::config::AppConfig>,
 }
@@ -60,7 +62,8 @@ pub struct AppState {
         (name = "鉴权 (Auth)", description = "JWT 获取、密码修改登录认证相关API"),
         (name = "系统管理 (Admin)", description = "用户开户、全站核心系统管理API"),
         (name = "账户 (Account)", description = "系统账户资产与持仓查询"),
-        (name = "策略 (Strategy)", description = "策略的部署、停止、查询与源码管理")
+        (name = "策略 (Strategy)", description = "策略的部署、停止、查询与源码管理"),
+        (name = "回测 (Backtest)", description = "基于历史行情的策略沙盒隔离回测")
     ),
     modifiers(&SecurityAddon)
 )]
@@ -127,6 +130,11 @@ pub async fn start_server(state: AppState, bind_addr: &str) -> Result<(), Box<dy
         .routes(routes!(strategy::get_strategy))
         .routes(routes!(strategy::deploy_strategy))
         .routes(routes!(strategy::stop_strategy))
+        .routes(routes!(strategy::update_strategy))
+        .routes(routes!(strategy::delete_strategy))
+        .routes(routes!(backtest::run_backtest))
+        .routes(routes!(notify::get_notify_config))
+        .routes(routes!(notify::update_notify_config))
         .routes(routes!(watchlist::get_watchlist))
         .routes(routes!(watchlist::add_to_watchlist))
         .routes(routes!(watchlist::remove_from_watchlist))

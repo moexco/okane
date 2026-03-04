@@ -47,6 +47,7 @@ const SQL_SELECT_STRATEGY: &str = "SELECT * FROM strategy_instances WHERE id = ?
 
 const SQL_SELECT_ALL_STRATEGIES: &str = "SELECT * FROM strategy_instances";
 
+const SQL_DELETE_STRATEGY: &str = "DELETE FROM strategy_instances WHERE id = ?";
 
 
 impl SqliteStrategyStore {
@@ -194,5 +195,19 @@ impl StrategyStore for SqliteStrategyStore {
                 updated_at: row.8,
             })
         }).collect()
+    }
+
+    async fn delete_instance(&self, user_id: &str, id: &str) -> Result<(), StoreError> {
+        let pool = self.get_or_init_pool(user_id).await?;
+        let res = sqlx::query(SQL_DELETE_STRATEGY)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        
+        if res.rows_affected() == 0 {
+            return Err(StoreError::NotFound);
+        }
+        Ok(())
     }
 }

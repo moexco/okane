@@ -21,6 +21,8 @@ pub enum ManagerError {
     Store(#[from] StoreError),
     #[error("Engine error: {0}")]
     Engine(#[from] EngineError),
+    #[error("Trade error: {0}")]
+    Trade(#[from] okane_core::trade::port::TradeError),
     #[error("Strategy not found: {0}")]
     NotFound(String),
     #[error("Strategy already running: {0}")]
@@ -251,5 +253,59 @@ impl StrategyManager {
         id: &str,
     ) -> Result<StrategyInstance, ManagerError> {
         Ok(self.store.get_instance(user_id, id).await?)
+    }
+
+    /// # Summary
+    /// 更新策略源码。
+    ///
+    /// # Arguments
+    /// * `user_id` - 用户标识符。
+    /// * `id` - 策略实例 ID。
+    /// * `source` - 新的策略源码（或字节码）。
+    ///
+    /// # Returns
+    /// * `Result<(), ManagerError>`
+    pub async fn update_strategy(
+        &self,
+        user_id: &str,
+        id: &str,
+        source: Vec<u8>,
+    ) -> Result<(), ManagerError> {
+        let mut instance = self.store.get_instance(user_id, id).await?;
+        
+        if matches!(instance.status, StrategyStatus::Running) {
+            return Err(ManagerError::AlreadyRunning(id.to_string()));
+        }
+
+        instance.source = source;
+        instance.updated_at = Utc::now();
+        
+        self.store.save_instance(user_id, &instance).await?;
+
+        Ok(())
+    }
+
+    /// # Summary
+    /// 删除策略实例。
+    ///
+    /// # Arguments
+    /// * `user_id` - 用户标识符。
+    /// * `id` - 策略实例 ID。
+    ///
+    /// # Returns
+    /// * `Result<(), ManagerError>`
+    pub async fn delete_strategy(
+        &self,
+        user_id: &str,
+        id: &str,
+    ) -> Result<(), ManagerError> {
+        let instance = self.store.get_instance(user_id, id).await?;
+        
+        if matches!(instance.status, StrategyStatus::Running) {
+            return Err(ManagerError::AlreadyRunning(id.to_string()));
+        }
+
+        self.store.delete_instance(user_id, id).await?;
+        Ok(())
     }
 }

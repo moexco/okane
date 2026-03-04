@@ -83,7 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let account_manager = Arc::new(AccountManager::default());
     let pending_port = Arc::new(okane_store::pending_order::MemoryPendingOrderStore::new());
     let matcher = std::sync::Arc::new(okane_trade::matcher::LocalMatchEngine::new(rust_decimal::Decimal::ZERO));
-    let trade_service: Arc<dyn TradePort> = Arc::new(TradeService::new(account_manager, matcher, market.clone(), pending_port));
+    let trade_service: Arc<dyn TradePort> = Arc::new(TradeService::new(account_manager, matcher, market.clone(), pending_port, Arc::new(okane_core::common::time::RealTimeProvider)));
 
     // 6. 实例化系统级存储（提供给鉴权系统 + 用户通知配置查询）
     let system_store: Arc<dyn okane_core::store::port::SystemStore> =
@@ -104,12 +104,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("StrategyManager initialized.");
 
-    // 8. 挂载 API 服务
+    // 8. 创建回测引擎
+    // 回测运行器需要一个工厂函数，以便为隔离的 BacktestMarket 创建 EngineBuilder
+    let engine_builder_factory = Arc::new(|m: Arc<dyn okane_core::market::port::Market>| {
+        Arc::new(EngineFactory::new(m)) as Arc<dyn okane_core::engine::port::EngineBuilder>
+    });
+    let backtest_runner = Arc::new(okane_manager::backtest::BacktestRunner::new(
+        market.clone(),
+        engine_builder_factory,
+    ));
+
+    // 9. 挂载 API 服务
     let app_state = okane_api::server::AppState {
         strategy_manager: manager.clone(),
         trade_port: trade_service,
         system_store,
         market_port: market.clone(),
+        backtest_runner,
         app_config: Arc::new(app_config.clone()),
     };
 

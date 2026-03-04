@@ -1,9 +1,12 @@
 use async_trait::async_trait;
+use okane_core::common::time::TimeProvider;
 use okane_core::market::entity::Candle;
 use okane_core::market::port::Market;
 use okane_core::trade::entity::{AccountId, AccountSnapshot, Order, OrderDirection, OrderId, OrderStatus};
 use okane_core::trade::port::{AccountPort, BacktestTradePort, MatcherPort, TradeError, TradePort, PendingOrderPort};
 use std::sync::Arc;
+
+use crate::trade_log::TradeLog;
 
 /// # Summary
 /// `TradeService` 是纸面交易环境和内盘 OMS 的入口调度者，
@@ -15,16 +18,34 @@ pub struct TradeService {
     market: Arc<dyn Market>,
     /// 活动订单持久化端口
     pending_port: Arc<dyn PendingOrderPort>,
+    /// 逻辑时钟源，回测时由 FakeClockProvider 提供，实盘为 RealTimeProvider
+    time_provider: Arc<dyn TimeProvider>,
+    /// 可选的交易事件收集器 — 记录所有成交，用于回测结果提取
+    trade_log: Option<Arc<TradeLog>>,
 }
 
 impl TradeService {
-    pub fn new(account_port: Arc<dyn AccountPort>, matcher: Arc<dyn MatcherPort>, market: Arc<dyn Market>, pending_port: Arc<dyn PendingOrderPort>) -> Self {
+    pub fn new(
+        account_port: Arc<dyn AccountPort>,
+        matcher: Arc<dyn MatcherPort>,
+        market: Arc<dyn Market>,
+        pending_port: Arc<dyn PendingOrderPort>,
+        time_provider: Arc<dyn TimeProvider>,
+    ) -> Self {
         Self {
             account_port,
             matcher,
             market,
             pending_port,
+            time_provider,
+            trade_log: None,
         }
+    }
+
+    /// 设置交易事件收集器。回测场景下使用。
+    pub fn with_trade_log(mut self, trade_log: Arc<TradeLog>) -> Self {
+        self.trade_log = Some(trade_log);
+        self
     }
 }
 
@@ -57,10 +78,13 @@ impl TradePort for TradeService {
         // 如果是市价单 (price == None)，立刻尝试撮合。
         // 如果是限价单，先放入 Pending 队列等待下一个 Tick。
         if order.price.is_none() {
-            let now_ms = chrono::Utc::now().timestamp_millis();
+            let now_ms = self.time_provider.now().timestamp_millis();
             order.status = OrderStatus::Submitted;
             
             if let Some(trade) = self.matcher.execute_order(&mut order, latest_price, now_ms) {
+                if let Some(log) = &self.trade_log {
+                    log.record(&trade);
+                }
                 self.account_port.process_trade(&order.account_id, &trade, est_req_funds).await?;
             }
         } else {
@@ -121,6 +145,9 @@ impl BacktestTradePort for TradeService {
                     let now_ms = candle.time.timestamp_millis();
                     
                     if let Some(trade) = self.matcher.execute_order(&mut order, exec_price, now_ms) {
+                        if let Some(log) = &self.trade_log {
+                            log.record(&trade);
+                        }
                         let est_req_funds = limit_price * trade.volume; // 原本冻结的总数
                         if let Err(e) = self.account_port.process_trade(&order.account_id, &trade, est_req_funds).await {
                             tracing::warn!("Backtest tick: Failed process trade on account {}: {}", order.id.0, e);
