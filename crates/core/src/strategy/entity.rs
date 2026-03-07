@@ -41,6 +41,34 @@ pub enum StrategyStatus {
     Failed(String), // 附带错误信息
 }
 
+impl std::fmt::Display for StrategyStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StrategyStatus::Pending => write!(f, "Pending"),
+            StrategyStatus::Running => write!(f, "Running"),
+            StrategyStatus::Stopped => write!(f, "Stopped"),
+            StrategyStatus::Failed(msg) => write!(f, "Failed:{}", msg),
+        }
+    }
+}
+
+impl std::str::FromStr for StrategyStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Pending" => Ok(StrategyStatus::Pending),
+            "Running" => Ok(StrategyStatus::Running),
+            "Stopped" => Ok(StrategyStatus::Stopped),
+            other if other.starts_with("Failed:") => {
+                let msg = other.strip_prefix("Failed:").ok_or_else(|| "Invalid Failed prefix".to_string())?;
+                Ok(StrategyStatus::Failed(msg.to_string()))
+            }
+            _ => Err(format!("Unknown StrategyStatus: {}", s)),
+        }
+    }
+}
+
 /// # Summary
 /// `StrategyInstance` 聚合根。
 ///

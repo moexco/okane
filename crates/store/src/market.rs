@@ -60,7 +60,15 @@ impl SqliteMarketStore {
     /// # Returns
     /// * `Result<Self, StoreError>` - 存储实例或错误。
     pub fn new() -> Result<Self, StoreError> {
-        let base_path = crate::config::get_root_dir()?.join("market");
+        Self::new_with_path(None)
+    }
+
+    /// 创建新的 SqliteMarketStore 实例，支持指定路径。
+    pub fn new_with_path(root_path: Option<PathBuf>) -> Result<Self, StoreError> {
+        let base_path = match root_path {
+            Some(p) => p.join("market"),
+            None => crate::config::get_root_dir()?.join("market"),
+        };
         if !base_path.exists() {
             std::fs::create_dir_all(&base_path).map_err(|e| StoreError::Database(e.to_string()))?;
         }
@@ -77,6 +85,8 @@ impl SqliteMarketStore {
     /// 2. 配置 SQLite 连接选项，开启 `create_if_missing`。
     /// 3. 如果缓存中没有，则创建新连接池并运行初始化建表 SQL。
     async fn get_or_init_pool(&self, stock: &Stock) -> Result<SqlitePool, StoreError> {
+        // 对于外部行情源，如果交易所信息缺失，回退到 "UNKNOWN" 以保证数据库文件能被定位。
+        // OK: External Feed metadata fallback
         let exchange = stock.exchange.as_deref().unwrap_or("UNKNOWN");
         let key = format!("{}_{}", stock.symbol, exchange);
 
@@ -142,7 +152,7 @@ impl MarketStore for SqliteMarketStore {
             .bind(candle.close.to_string())
             .bind(candle.adj_close.map(|a| a.to_string()))
             .bind(candle.volume.to_string())
-            .bind(candle.is_final as i32)
+            .bind(i32::from(candle.is_final))
             .execute(&pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -197,12 +207,12 @@ impl MarketStore for SqliteMarketStore {
 
             results.push(Candle {
                 time: row.get("time"),
-                open: Decimal::from_str(&open_str).unwrap_or_default(),
-                high: Decimal::from_str(&high_str).unwrap_or_default(),
-                low: Decimal::from_str(&low_str).unwrap_or_default(),
-                close: Decimal::from_str(&close_str).unwrap_or_default(),
+                open: Decimal::from_str(&open_str).map_err(|e| StoreError::Database(format!("Failed to parse Decimal '{}': {}", open_str, e)))?,
+                high: Decimal::from_str(&high_str).map_err(|e| StoreError::Database(format!("Failed to parse Decimal '{}': {}", high_str, e)))?,
+                low: Decimal::from_str(&low_str).map_err(|e| StoreError::Database(format!("Failed to parse Decimal '{}': {}", low_str, e)))?,
+                close: Decimal::from_str(&close_str).map_err(|e| StoreError::Database(format!("Failed to parse Decimal '{}': {}", close_str, e)))?,
                 adj_close: adj_close_str.and_then(|s| Decimal::from_str(&s).ok()),
-                volume: Decimal::from_str(&volume_str).unwrap_or_default(),
+                volume: Decimal::from_str(&volume_str).map_err(|e| StoreError::Database(format!("Failed to parse Decimal '{}': {}", volume_str, e)))?,
                 is_final: row.get::<i32, _>("is_final") != 0,
             });
         }

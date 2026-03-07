@@ -1,22 +1,23 @@
-use okane_core::trade::entity::{AccountId, OrderDirection, Trade};
-use okane_core::trade::port::AccountPort;
+use okane_core::trade::entity::AccountId;
 use okane_store::account::SqliteAccountStore;
 use rust_decimal_macros::dec;
 use tokio::time::Instant;
+use okane_core::trade::entity::{OrderDirection, Trade};
+use okane_core::trade::port::AccountPort;
 
 #[tokio::test]
-async fn test_sqlite_account_high_concurrency() {
-    let tmp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+async fn test_sqlite_account_high_concurrency() -> anyhow::Result<()> {
+    let tmp_dir = tempfile::tempdir().map_err(|e| anyhow::anyhow!("Failed to create temp dir: {}", e))?;
     okane_store::config::set_root_dir(tmp_dir.path().to_path_buf());
 
-    let store = SqliteAccountStore::new().expect("Failed to create store");
+    let store = SqliteAccountStore::new().map_err(|e| anyhow::anyhow!("Failed to create store: {}", e))?;
     
     // Create an isolated account for db test
-    let test_acct_id = format!("TestTx_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros());
+    let test_acct_id = format!("TestTx_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| anyhow::anyhow!(e))?.as_micros());
     let acct = AccountId(test_acct_id.clone());
 
     // Deposit 1000 initial cash
-    store.deposit(&acct, dec!(1000.0)).await.unwrap();
+    store.deposit(&acct, dec!(1000.0)).await.map_err(|e| anyhow::anyhow!(e))?;
 
     let mut handles = vec![];
     let store = std::sync::Arc::new(store);
@@ -40,20 +41,21 @@ async fn test_sqlite_account_high_concurrency() {
                     price: dec!(14.0),
                     volume: dec!(1.0),
                     commission: dec!(0.0),
-                    timestamp: i as i64,
+                    timestamp: i64::from(i),
                 };
-                store_clone.process_trade(&a_id, &trade, req_funds).await.expect("Trade DB Error");
+                store_clone.process_trade(&a_id, &trade, req_funds).await.map_err(|e| anyhow::anyhow!("Trade DB Error: {}", e))?;
             }
+            Ok::<(), anyhow::Error>(())
         }));
     }
 
     for h in handles {
-        h.await.unwrap();
+        h.await.map_err(|e| anyhow::anyhow!("Join error: {}", e))??;
     }
     let elapsed = start.elapsed();
     
     // Final verification
-    let snap = store.snapshot(&acct).await.unwrap();
+    let snap = store.snapshot(&acct).await.map_err(|e| anyhow::anyhow!(e))?;
     
     tracing::info!("Account Snapshot: {:?}", snap);
     tracing::info!("Finished 50 concurrent transactions in {:?}", elapsed);
@@ -66,4 +68,5 @@ async fn test_sqlite_account_high_concurrency() {
     assert_eq!(snap.positions.len(), 1);
     assert_eq!(snap.positions[0].symbol, "AAPL");
     assert_eq!(snap.positions[0].volume, dec!(50.0));
+    Ok(())
 }

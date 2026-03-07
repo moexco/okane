@@ -1,3 +1,4 @@
+pub mod error;
 pub mod cache;
 pub mod common;
 pub mod config;
@@ -7,3 +8,6 @@ pub mod notify;
 pub mod store;
 pub mod strategy;
 pub mod trade;
+
+#[cfg(feature = "test-utils")]
+pub mod test_utils;

@@ -35,39 +35,24 @@ impl YahooProvider {
     ///
     /// # Returns
     /// 返回初始化后的 YahooProvider。
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, MarketError> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::USER_AGENT,
             reqwest::header::HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
         );
 
-        Self {
+        Ok(Self {
             client: Client::builder()
                 .timeout(Duration::from_secs(10))
                 .default_headers(headers)
                 .build()
-                .unwrap_or_else(|_| Client::new()),
-        }
+                .map_err(|e| MarketError::Network(format!("Failed to build Yahoo client: {}", e)))?,
+        })
     }
 }
 
-impl Default for YahooProvider {
-    /// # Summary
-    /// 提供 YahooProvider 的默认初始化。
-    ///
-    /// # Logic
-    /// 1. 调用 `Self::new()` 进行初始化。
-    ///
-    /// # Arguments
-    /// * None
-    ///
-    /// # Returns
-    /// 返回默认的 YahooProvider 实例。
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// 移除不安全的 Default 实现，强制显式初始化以保证配置生效
 
 /// # Summary
 /// Yahoo API 响应顶层结构。
@@ -232,14 +217,20 @@ impl MarketDataProvider for YahooProvider {
             ) {
                 let adj_c = adj_close_list.and_then(|list| list.get(i)).and_then(|x| *x);
 
+                let open = Decimal::from_f64_retain(o).ok_or_else(|| MarketError::Parse(format!("Invalid open price: {}", o)))?;
+                let high = Decimal::from_f64_retain(h).ok_or_else(|| MarketError::Parse(format!("Invalid high price: {}", h)))?;
+                let low = Decimal::from_f64_retain(l).ok_or_else(|| MarketError::Parse(format!("Invalid low price: {}", l)))?;
+                let close = Decimal::from_f64_retain(c).ok_or_else(|| MarketError::Parse(format!("Invalid close price: {}", c)))?;
+                let volume = Decimal::from_f64_retain(v).ok_or_else(|| MarketError::Parse(format!("Invalid volume: {}", v)))?;
+
                 candles.push(Candle {
                     time: Utc.timestamp_opt(ts, 0).single().ok_or_else(|| MarketError::Parse("Invalid timestamp".into()))?,
-                    open: Decimal::from_f64_retain(o).unwrap_or_default(),
-                    high: Decimal::from_f64_retain(h).unwrap_or_default(),
-                    low: Decimal::from_f64_retain(l).unwrap_or_default(),
-                    close: Decimal::from_f64_retain(c).unwrap_or_default(),
+                    open,
+                    high,
+                    low,
+                    close,
                     adj_close: adj_c.and_then(Decimal::from_f64_retain),
-                    volume: Decimal::from_f64_retain(v).unwrap_or_default(),
+                    volume,
                     is_final: true, // 历史数据默认为最终态
                 });
             }
@@ -380,13 +371,17 @@ impl MarketDataProvider for YahooProvider {
             // 只保留具有 symbol 和 name 的结果，并且通常只寻找真正的股票或ETF
             !q.symbol.is_empty() && (q.longname.is_some() || q.shortname.is_some())
         }).map(|q| {
+            // 对于外部搜索接口，如果名称缺失，回退到 "Unknown" 以保证元数据结构完整。
+            // OK: External Feed metadata fallback
             let name = q.longname.or(q.shortname).unwrap_or_else(|| "Unknown".to_string());
             okane_core::store::port::StockMetadata {
                 symbol: q.symbol,
                 name,
-                exchange: q.exchange.unwrap_or_else(|| "Unknown".to_string()),
+                // 对于交易所信息，如果缺失，回退到 "N/A" 是业务可接受的降级表现。
+                // OK: External Feed metadata fallback
+                exchange: q.exchange.unwrap_or_else(|| "N/A".to_string()),
                 sector: q.industry,
-                currency: "USD".to_string(), // Yahoo Search 中可能没有 currency, 默认给 USD 或从其他 API 拿
+                currency: "USD".to_string(), 
             }
         }).collect();
 

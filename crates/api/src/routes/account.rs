@@ -6,10 +6,74 @@
 use axum::extract::{Path, State};
 use axum::Json;
 
-use crate::types::{AccountSnapshotResponse, ApiResponse};
+use crate::types::{AccountSnapshotResponse, ApiResponse, CreateAccountRequest};
 use crate::error::ApiError;
 use crate::middleware::auth::CurrentUser;
 use crate::server::AppState;
+use rust_decimal::Decimal;
+use std::str::FromStr;
+
+/// 创建并绑定新的金融账号
+/// 
+/// 遵循“无主账号不准开立”原则。创建即绑定，严禁共用。
+#[utoipa::path(
+    post,
+    path = "/api/v1/user/account",
+    tag = "账户 (Account)",
+    security(("bearer_jwt" = [])),
+    request_body = CreateAccountRequest,
+    responses(
+        (status = 201, description = "开户成功", body = ApiResponse<String>),
+        (status = 409, description = "账号已存在"),
+        (status = 401, description = "未认证")
+    )
+)]
+pub async fn register_account(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Json(req): Json<CreateAccountRequest>,
+) -> Result<Json<ApiResponse<String>>, ApiError> {
+    // 1. 检查账号是否已存在
+    if let Ok(Some(_)) = state.system_store.get_account_owner(&req.account_id).await {
+        return Err(ApiError::BadRequest(format!("Account {} already exists and is owned by someone", req.account_id)));
+    }
+
+    // 2. 绑定账号到当前用户
+    state.system_store.bind_account(&user.id, &req.account_id).await
+        .map_err(|e| ApiError::Internal(format!("Failed to bind account: {}", e)))?;
+    
+    // 3. 可选：初始化资金 (通过 AccountStore)
+    if let Some(bal_str) = req.initial_balance {
+        let _amount = Decimal::from_str(&bal_str).map_err(|_| ApiError::BadRequest("Invalid initial balance format".to_string()))?;
+        let _acc_id = okane_core::trade::entity::AccountId(req.account_id.clone());
+        // 注意：AccountPort 可能需要特殊的 deposit 接口或直接在 SqliteAccountStore 里做。
+        // 由于 TradePort 抽象可能没直接暴露 deposit，这里我们先保证绑定逻辑。
+    }
+
+    tracing::info!("User {} created and bound account {}", user.id, req.account_id);
+    Ok(Json(ApiResponse::ok(req.account_id)))
+}
+
+/// 列出当前用户拥有的所有金融账号
+#[utoipa::path(
+    get,
+    path = "/api/v1/user/accounts",
+    tag = "账户 (Account)",
+    security(("bearer_jwt" = [])),
+    responses(
+        (status = 200, description = "成功获取账号列表", body = ApiResponse<Vec<String>>),
+        (status = 401, description = "未认证")
+    )
+)]
+pub async fn list_accounts(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+) -> Result<Json<ApiResponse<Vec<String>>>, ApiError> {
+    let accounts = state.system_store.get_user_accounts(&user.id).await
+        .map_err(|e| ApiError::Internal(format!("Failed to list accounts: {}", e)))?;
+    
+    Ok(Json(ApiResponse::ok(accounts)))
+}
 
 /// 获取指定系统账户的资金与持仓快照
 ///
@@ -34,10 +98,12 @@ pub async fn get_account_snapshot(
     CurrentUser(user): CurrentUser,
     Path(account_id): Path<String>,
 ) -> Result<Json<ApiResponse<AccountSnapshotResponse>>, ApiError> {
-    // IDOR Check: Ensures the user owns this account
-    if account_id != user.id && !account_id.starts_with(&format!("{}_", user.id)) {
+    // IDOR Check: Ensures the user owns this account strictly via DB
+    let is_owner = state.system_store.verify_account_ownership(&user.id, &account_id).await
+        .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?;
+    if !is_owner {
         tracing::warn!("IDOR attempt: user {} tried to access account {}", user.id, account_id);
-        return Err(ApiError::Forbidden(format!("Account {} does not belong to user {}", account_id, user.id)));
+        return Err(ApiError::Forbidden(format!("Account {} does not belong to user {}. Ownership required.", account_id, user.id)));
     }
 
     let account_id_val = okane_core::trade::entity::AccountId(account_id);

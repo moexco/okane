@@ -45,14 +45,23 @@ pub async fn login(
 
     // 2. 验证密码
     let valid = bcrypt::verify(&req.password, &user.password_hash)
-        .unwrap_or(false);
+        .map_err(|e| ApiError::Internal(format!("Hash verification failed: {}", e)))?;
 
     if !valid {
         return Err(ApiError::Unauthorized("Invalid username or password".into()));
     }
 
     // 3. 生成 JWT
-    let exp = Utc::now().timestamp() as usize + JWT_EXPIRES_IN as usize;
+    let now = Utc::now().timestamp();
+    let expires_seconds = i64::try_from(JWT_EXPIRES_IN)
+        .map_err(|e| ApiError::Internal(format!("JWT config error: {}", e)))?;
+    
+    // JWT exp 字段必须为正确的时间戳。此处强制进行溢出检查，拒绝产生过期时间为 0 的垃圾 Token。
+    let exp_i64 = now.checked_add(expires_seconds)
+        .ok_or_else(|| ApiError::Internal("JWT timestamp overflow".into()))?;
+        
+    let exp = usize::try_from(exp_i64)
+        .map_err(|e| ApiError::Internal(format!("Timestamp conversion failed: {}", e)))?;
     let claims = Claims {
         sub: user.id.clone(),
         role: user.role.to_string(),
@@ -94,7 +103,7 @@ pub async fn change_password(
     // 1. 验证旧密码
     tracing::info!("Attempting to change password for user: {}, force_change: {}", user.id, user.force_password_change);
     let valid = bcrypt::verify(&req.old_password, &user.password_hash)
-        .unwrap_or(false);
+        .map_err(|e| ApiError::Internal(format!("Hash verification failed: {}", e)))?;
 
     if !valid {
         tracing::warn!("Failed old password validation for user {}", user.id);

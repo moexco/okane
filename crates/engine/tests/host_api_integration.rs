@@ -1,4 +1,4 @@
-pub mod mock_trade;
+use okane_core::test_utils::SpyTradePort;
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use okane_core::common::time::FakeClockProvider;
@@ -21,25 +21,25 @@ impl Stock for MockStock {
     fn identity(&self) -> &StockIdentity {
         &self.identity
     }
-    fn current_price(&self) -> Option<rust_decimal::Decimal> {
-        None
+    fn current_price(&self) -> Result<Option<rust_decimal::Decimal>, MarketError> {
+        Ok(None)
     }
-    fn latest_candle(&self, _: TimeFrame) -> Option<Candle> {
-        None
+    fn latest_candle(&self, _: TimeFrame) -> Result<Option<Candle>, MarketError> {
+        Ok(None)
     }
-    fn last_closed_candle(&self, _: TimeFrame) -> Option<Candle> {
-        None
+    fn last_closed_candle(&self, _: TimeFrame) -> Result<Option<Candle>, MarketError> {
+        Ok(None)
     }
     fn status(&self) -> StockStatus {
         StockStatus::Online
     }
-    fn subscribe(&self, _: TimeFrame) -> CandleStream {
+    fn subscribe(&self, _: TimeFrame) -> Result<CandleStream, MarketError> {
         let rx = self.rx.clone();
         let s = async_stream::stream! {
             let mut rx = rx.lock().await;
             while let Some(c) = rx.recv().await { yield c; }
         };
-        Box::pin(s)
+        Ok(Box::pin(s))
     }
     async fn fetch_history(
         &self,
@@ -51,7 +51,7 @@ impl Stock for MockStock {
         let base_time = end;
         for i in 0..5 {
             candles.push(Candle {
-                time: base_time - chrono::Duration::minutes(i as i64),
+                time: base_time - chrono::Duration::minutes(i64::from(i)),
                 open: dec!(100.0),
                 high: dec!(100.0),
                 low: dec!(100.0),
@@ -92,7 +92,7 @@ function onCandle(input) {
 "#;
 
 #[tokio::test]
-async fn test_host_functions_from_js() {
+async fn test_host_functions_from_js() -> anyhow::Result<()> {
     let (tx, rx) = mpsc::unbounded_channel();
     let mock_stock = Arc::new(MockStock {
         identity: StockIdentity {
@@ -102,10 +102,10 @@ async fn test_host_functions_from_js() {
         rx: Arc::new(tokio::sync::Mutex::new(rx)),
     });
     let market = Arc::new(MockMarket { stock: mock_stock });
-    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort);
+    let trade = std::sync::Arc::new(SpyTradePort::new());
     let time_provider = Arc::new(FakeClockProvider::new(Utc::now()));
     let time_provider_clone = time_provider.clone();
-    let engine = JsEngine::new(market, trade, time_provider, None);
+    let engine = JsEngine::new(market, trade, time_provider, None).map_err(|e| anyhow::anyhow!(e))?;
 
     let local = tokio::task::LocalSet::new();
 
@@ -117,8 +117,10 @@ async fn test_host_functions_from_js() {
 
     local
         .run_until(async {
-            let test_time = Utc.with_ymd_and_hms(2026, 2, 2, 10, 0, 0).unwrap();
-            time_provider_clone.set_time(test_time);
+            let test_time = Utc.with_ymd_and_hms(2026, 2, 2, 10, 0, 0)
+                .single()
+                .ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
+            time_provider_clone.set_time(test_time)?;
             tx.send(Candle {
                 time: test_time,
                 open: dec!(150.0),
@@ -129,12 +131,14 @@ async fn test_host_functions_from_js() {
                 volume: dec!(0.0),
                 is_final: true,
             })
-            .unwrap();
+            .map_err(|e| anyhow::anyhow!("Send failed: {:?}", e))?;
 
             tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
             // 策略应正常执行 (host.now() + host.fetchHistory() + host.log())
             handle.abort();
+            Ok::<(), anyhow::Error>(())
         })
-        .await;
+        .await?;
+    Ok(())
 }

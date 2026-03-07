@@ -50,6 +50,8 @@ pub async fn list_strategies(
     // Sort by created_at descending (newest first)
     instances.sort_by_key(|b| std::cmp::Reverse(b.created_at));
     
+    // 分页参数遵循 REST API 协议默认值：如果不传，默认从第 0 条开始，每页返回 50 条。
+    // OK: Protocol default values
     let offset = query.offset.unwrap_or(0);
     let limit = query.limit.unwrap_or(50);
     
@@ -127,13 +129,18 @@ pub async fn deploy_strategy(
         .map_err(|e: String| ApiError::BadRequest(e))?;
 
     // Base64 解码源码
-    let source = base64_decode(&req.source_base64)
-        .map_err(|e| ApiError::BadRequest(format!("Base64 解码失败: {}", e)))?;
+    use base64::prelude::{Engine as _, BASE64_STANDARD};
+    let source = BASE64_STANDARD
+        .decode(&req.source_base64)
+        .map_err(|e| ApiError::BadRequest(format!("Base64 decode failed: {}", e)))?;
 
-    // IDOR Check: Ensure the strategy binds to an account owner by this user
-    if req.account_id != user.id && !req.account_id.starts_with(&format!("{}_", user.id)) {
+    // IDOR Check: Ensures the strategy binds to an account owned by this user strictly via DB check.
+    // 权限校验严禁使用 unwrap_or(false)，必须显式处理数据库异常以区分“无权限”与“服务故障”。
+    let is_owner = state.system_store.verify_account_ownership(&user.id, &req.account_id).await
+        .map_err(|e| ApiError::Internal(format!("Database error during permission check: {}", e)))?;
+    if !is_owner {
         tracing::warn!("IDOR attempt: user {} tried to deploy strategy on account {}", user.id, req.account_id);
-        return Err(ApiError::Forbidden(format!("Account {} does not belong to user {}", req.account_id, user.id)));
+        return Err(ApiError::Forbidden(format!("Account {} does not belong to user {}. Please register the account first.", req.account_id, user.id)));
     }
 
     let start_req = StartRequest {
@@ -203,8 +210,10 @@ pub async fn update_strategy(
     Path(id): Path<String>,
     Json(req): Json<SaveStrategySourceRequest>,
 ) -> Result<Json<ApiResponse<String>>, ApiError> {
-    let source = base64_decode(&req.source_base64)
-        .map_err(|e| ApiError::BadRequest(format!("Base64 解码失败: {}", e)))?;
+    use base64::prelude::{Engine as _, BASE64_STANDARD};
+    let source = BASE64_STANDARD
+        .decode(&req.source_base64)
+        .map_err(|e| ApiError::BadRequest(format!("Base64 decode failed: {}", e)))?;
 
     state.strategy_manager.update_strategy(&user.id, &id, source).await?;
     Ok(Json(ApiResponse::ok("策略已更新".to_string())))
@@ -235,36 +244,4 @@ pub async fn delete_strategy(
 ) -> Result<Json<ApiResponse<String>>, ApiError> {
     state.strategy_manager.delete_strategy(&user.id, &id).await?;
     Ok(Json(ApiResponse::ok("策略已删除".to_string())))
-}
-
-// ============================================================
-//  辅助函数
-// ============================================================
-
-/// 简单的 Base64 解码 (不引入额外依赖)
-fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-    let input = input.trim_end_matches('=');
-    let mut output = Vec::with_capacity(input.len() * 3 / 4);
-
-    let mut buf: u32 = 0;
-    let mut bits: u32 = 0;
-
-    for byte in input.bytes() {
-        let val = TABLE
-            .iter()
-            .position(|&b| b == byte)
-            .ok_or_else(|| format!("非法 Base64 字符: {}", byte as char))?
-            as u32;
-        buf = (buf << 6) | val;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            output.push((buf >> bits) as u8);
-            buf &= (1 << bits) - 1;
-        }
-    }
-
-    Ok(output)
 }

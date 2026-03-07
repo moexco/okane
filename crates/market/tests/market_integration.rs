@@ -1,169 +1,47 @@
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use dashmap::DashMap;
-use futures::StreamExt;
-use okane_core::common::{Stock as StockIdentity, TimeFrame};
-use okane_core::market::entity::Candle;
-use okane_core::market::error::MarketError;
-use okane_core::market::port::{CandleStream, Market, MarketDataProvider, StockStatus};
-use okane_core::store::error::StoreError;
-use okane_core::store::port::MarketStore;
-use okane_market::manager::MarketImpl;
+use okane_core::test_utils::{MockMarketDataProvider, MemMarketStore, wait_for_condition};
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use okane_core::market::port::{Market, StockStatus};
+use okane_market::manager::MarketImpl;
+use okane_core::market::entity::Candle;
+use chrono::Utc;
 use rust_decimal_macros::dec;
-
-/// # Summary
-/// 为测试提供的模拟行情驱动。
-struct MockProvider {
-    // 预设的价格数据，用于流推送
-    price_tx: mpsc::UnboundedSender<Candle>,
-    // 用于内部消费流
-    price_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Candle>>>,
-}
-
-impl MockProvider {
-    fn new() -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
-        Self {
-            price_tx: tx,
-            price_rx: Arc::new(tokio::sync::Mutex::new(rx)),
-        }
-    }
-
-    fn push_candle(&self, candle: Candle) {
-        if let Err(e) = self.price_tx.send(candle) {
-            tracing::error!("Test MockMarket send price failed: {}", e);
-        }
-    }
-}
-
-#[async_trait]
-impl MarketDataProvider for MockProvider {
-    async fn fetch_candles(
-        &self,
-        _: &StockIdentity,
-        _: TimeFrame,
-        _: DateTime<Utc>,
-        _: DateTime<Utc>,
-    ) -> Result<Vec<Candle>, MarketError> {
-        Ok(vec![Candle {
-            time: Utc::now(),
-            open: dec!(150.0),
-            high: dec!(155.0),
-            low: dec!(149.0),
-            close: dec!(152.0),
-            adj_close: None,
-            volume: dec!(1000.0),
-            is_final: true,
-        }])
-    }
-
-    async fn subscribe_candles(
-        &self,
-        _: &StockIdentity,
-        _: TimeFrame,
-    ) -> Result<CandleStream, MarketError> {
-        let rx = self.price_rx.clone();
-        let s = async_stream::stream! {
-            let mut rx = rx.lock().await;
-            while let Some(candle) = rx.recv().await {
-                yield candle;
-            }
-        };
-        Ok(Box::pin(s))
-    }
-
-    async fn search_symbols(
-        &self,
-        _query: &str,
-    ) -> Result<Vec<okane_core::store::port::StockMetadata>, MarketError> {
-        Ok(vec![])
-    }
-}
-
-/// # Summary
-/// 基于内存的简易存储实现。
-struct MemMarketStore {
-    db: DashMap<(String, TimeFrame), Vec<Candle>>,
-}
-
-impl MemMarketStore {
-    fn new() -> Self {
-        Self { db: DashMap::new() }
-    }
-}
-
-#[async_trait]
-impl MarketStore for MemMarketStore {
-    async fn save_candles(
-        &self,
-        stock: &StockIdentity,
-        timeframe: TimeFrame,
-        candles: &[Candle],
-    ) -> Result<(), StoreError> {
-        let mut entry = self
-            .db
-            .entry((stock.symbol.clone(), timeframe))
-            .or_default();
-        entry.extend_from_slice(candles);
-        Ok(())
-    }
-
-    async fn load_candles(
-        &self,
-        stock: &StockIdentity,
-        timeframe: TimeFrame,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
-    ) -> Result<Vec<Candle>, StoreError> {
-        let candles = self
-            .db
-            .get(&(stock.symbol.clone(), timeframe))
-            .map(|v| v.clone())
-            .unwrap_or_default();
-        Ok(candles
-            .into_iter()
-            .filter(|c| c.time >= start && c.time <= end)
-            .collect())
-    }
-}
+use okane_core::common::TimeFrame;
+use futures::StreamExt;
+use tokio::time::{Duration, sleep};
 
 /// # Summary
 /// 初始化测试所需的 Market 环境。
-async fn setup() -> (Arc<MarketImpl>, Arc<MockProvider>) {
-    let provider = Arc::new(MockProvider::new());
+async fn setup() -> (Arc<MarketImpl>, Arc<MockMarketDataProvider>) {
+    let provider = Arc::new(MockMarketDataProvider::new());
     let store = Arc::new(MemMarketStore::new());
     let market = MarketImpl::new(provider.clone(), store);
     (market, provider)
 }
 
 #[tokio::test]
-async fn test_get_stock_instance() {
+async fn test_get_stock_instance() -> anyhow::Result<()> {
     let (market, _) = setup().await;
-    let result = market.get_stock("AAPL").await;
-    assert!(
-        result.is_ok(),
-        "Should successfully get stock aggregate root"
-    );
-    assert_eq!(result.unwrap().identity().symbol, "AAPL");
+    let stock = market.get_stock("AAPL").await.map_err(|e| anyhow::anyhow!(e))?;
+    assert_eq!(stock.identity().symbol, "AAPL");
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_stock_identity() {
+async fn test_stock_identity() -> anyhow::Result<()> {
     let (market, _) = setup().await;
-    let stock = market.get_stock("AAPL").await.unwrap();
+    let stock = market.get_stock("AAPL").await.map_err(|e| anyhow::anyhow!(e))?;
     let id = stock.identity();
     assert_eq!(id.symbol, "AAPL");
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_stock_current_price() {
+async fn test_stock_current_price() -> anyhow::Result<()> {
     let (market, provider) = setup().await;
-    let stock = market.get_stock("AAPL").await.unwrap();
+    let stock = market.get_stock("AAPL").await.map_err(|e| anyhow::anyhow!(e))?;
 
     // 初始状态无价格
-    assert!(stock.current_price().is_none());
+    assert!(stock.current_price().map_err(|e| anyhow::anyhow!(e))?.is_none());
 
     // 模拟推送价格
     provider.push_candle(Candle {
@@ -178,14 +56,22 @@ async fn test_stock_current_price() {
     });
 
     // 等待 Fetcher 处理
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-    assert_eq!(stock.current_price(), Some(dec!(155.5)));
+    let success = wait_for_condition(Duration::from_secs(1), Duration::from_millis(10), || async {
+        stock.current_price()
+            .map(|p| p == Some(dec!(155.5)))
+            .unwrap_or_else(|e| {
+                tracing::error!("Test error during current_price poll: {}", e);
+                false
+            })
+    }).await;
+    assert!(success, "Should update price within 1s");
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_stock_latest_candle() {
+async fn test_stock_latest_candle() -> anyhow::Result<()> {
     let (market, provider) = setup().await;
-    let stock = market.get_stock("AAPL").await.unwrap();
+    let stock = market.get_stock("AAPL").await.map_err(|e| anyhow::anyhow!(e))?;
 
     provider.push_candle(Candle {
         time: Utc::now(),
@@ -198,16 +84,23 @@ async fn test_stock_latest_candle() {
         is_final: false,
     });
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-    let candle = stock.latest_candle(TimeFrame::Minute1);
-    assert!(candle.is_some());
-    assert_eq!(candle.unwrap().close, dec!(105.0));
+    let success = wait_for_condition(Duration::from_secs(1), Duration::from_millis(10), || async {
+        stock.latest_candle(TimeFrame::Minute1)
+            .map(|c| c.is_some())
+            .unwrap_or_else(|e| {
+                tracing::error!("Test error during latest_candle poll: {}", e);
+                false
+            })
+    }).await;
+    assert!(success, "Should receive latest candle within 1s");
+    assert_eq!(stock.latest_candle(TimeFrame::Minute1).map_err(|e| anyhow::anyhow!(e))?.ok_or_else(|| anyhow::anyhow!("Candle null"))?.close, dec!(105.0));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_stock_last_closed_candle() {
+async fn test_stock_last_closed_candle() -> anyhow::Result<()> {
     let (market, provider) = setup().await;
-    let stock = market.get_stock("AAPL").await.unwrap();
+    let stock = market.get_stock("AAPL").await.map_err(|e| anyhow::anyhow!(e))?;
 
     // 推送未闭合的
     provider.push_candle(Candle {
@@ -220,8 +113,9 @@ async fn test_stock_last_closed_candle() {
         volume: dec!(100.0),
         is_final: false,
     });
-    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
-    assert!(stock.last_closed_candle(TimeFrame::Minute1).is_none());
+    // 确保处理完成但状态不对
+    sleep(Duration::from_millis(20)).await; 
+    assert!(stock.last_closed_candle(TimeFrame::Minute1).map_err(|e| anyhow::anyhow!(e))?.is_none());
 
     // 推送已闭合的
     provider.push_candle(Candle {
@@ -234,17 +128,24 @@ async fn test_stock_last_closed_candle() {
         volume: dec!(100.0),
         is_final: true,
     });
-    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
-    let closed = stock.last_closed_candle(TimeFrame::Minute1);
-    assert!(closed.is_some());
-    assert_eq!(closed.unwrap().close, dec!(108.0));
+    let success = wait_for_condition(Duration::from_secs(1), Duration::from_millis(10), || async {
+        stock.last_closed_candle(TimeFrame::Minute1)
+            .map(|c| c.is_some())
+            .unwrap_or_else(|e| {
+                tracing::error!("Test error during last_closed_candle poll: {}", e);
+                false
+            })
+    }).await;
+    assert!(success, "Should receive closed candle within 1s");
+    assert_eq!(stock.last_closed_candle(TimeFrame::Minute1).map_err(|e| anyhow::anyhow!(e))?.ok_or_else(|| anyhow::anyhow!("Closed candle null"))?.close, dec!(108.0));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_stock_subscribe() {
+async fn test_stock_subscribe() -> anyhow::Result<()> {
     let (market, provider) = setup().await;
-    let stock = market.get_stock("AAPL").await.unwrap();
-    let mut stream = stock.subscribe(TimeFrame::Minute1);
+    let stock = market.get_stock("AAPL").await.map_err(|e| anyhow::anyhow!(e))?;
+    let mut stream = stock.subscribe(TimeFrame::Minute1).map_err(|e| anyhow::anyhow!(e))?;
 
     provider.push_candle(Candle {
         time: Utc::now(),
@@ -259,23 +160,40 @@ async fn test_stock_subscribe() {
 
     let received = stream.next().await;
     assert!(received.is_some());
-    assert_eq!(received.unwrap().close, dec!(99.0));
+    assert_eq!(received.ok_or_else(|| anyhow::anyhow!("Received null"))?.close, dec!(99.0));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_stock_fetch_history() {
-    let (market, _) = setup().await;
-    let stock = market.get_stock("AAPL").await.unwrap();
+async fn test_stock_fetch_history() -> anyhow::Result<()> {
+    let (market, provider) = setup().await;
+    let stock = market.get_stock("AAPL").await.map_err(|e| anyhow::anyhow!(e))?;
+    
+    // 模拟种子数据
+    let now = Utc::now();
+    provider.set_history(vec![Candle {
+        time: now - chrono::Duration::hours(1),
+        open: dec!(100.0),
+        high: dec!(105.0),
+        low: dec!(95.0),
+        close: dec!(102.0),
+        adj_close: None,
+        volume: dec!(1000.0),
+        is_final: true,
+    }]).map_err(|e| anyhow::anyhow!(e))?;
+
     let end = Utc::now();
     let start = end - chrono::Duration::days(10);
-    let history = stock.fetch_history(TimeFrame::Day1, start, end).await;
-    assert!(history.is_ok());
-    assert!(!history.unwrap().is_empty());
+    let history = stock.fetch_history(TimeFrame::Day1, start, end).await.map_err(|e| anyhow::anyhow!(e))?;
+    assert!(!history.is_empty());
+    assert_eq!(history[0].close, dec!(102.0));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_stock_status() {
+async fn test_stock_status() -> anyhow::Result<()> {
     let (market, _) = setup().await;
-    let stock = market.get_stock("AAPL").await.unwrap();
+    let stock = market.get_stock("AAPL").await.map_err(|e| anyhow::anyhow!(e))?;
     assert_eq!(stock.status(), StockStatus::Online);
+    Ok(())
 }

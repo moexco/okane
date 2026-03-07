@@ -43,6 +43,17 @@ pub struct AccountSnapshotResponse {
     pub positions: Vec<PositionResponse>,
 }
 
+/// 创建新金融账号请求体
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CreateAccountRequest {
+    /// 想要申请的系统账户 ID
+    #[schema(example = "MyNewAccount_01")]
+    pub account_id: String,
+    /// 初始资金 (可选，默认 0)
+    #[schema(example = "10000.00")]
+    pub initial_balance: Option<String>,
+}
+
 /// 订单流 DTO
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct OrderResponse {

@@ -55,25 +55,27 @@ pub async fn run_backtest(
 
     // 解析起止时间
     let start_time = DateTime::parse_from_rfc3339(&req.start)
-        .map_err(|e| ApiError::BadRequest(format!("无效的开始时间格式: {}", e)))?
+        .map_err(|e| ApiError::BadRequest(format!("Invalid start time format: {}", e)))?
         .with_timezone(&Utc);
 
     let end_time = DateTime::parse_from_rfc3339(&req.end)
-        .map_err(|e| ApiError::BadRequest(format!("无效的结束时间格式: {}", e)))?
+        .map_err(|e| ApiError::BadRequest(format!("Invalid end time format: {}", e)))?
         .with_timezone(&Utc);
 
     // 校验时间范围
     if start_time >= end_time {
-        return Err(ApiError::BadRequest("开始时间必须早于结束时间".to_string()));
+        return Err(ApiError::BadRequest("Start time must be before end time".to_string()));
     }
 
     // 解析初始资金
     let initial_balance = Decimal::from_str(&req.initial_balance)
-        .map_err(|_| ApiError::BadRequest("无效的初始资金数值".to_string()))?;
+        .map_err(|_| ApiError::BadRequest("Invalid initial balance value".to_string()))?;
 
     // Base64 解码源码
-    let source = base64_decode(&req.source_base64)
-        .map_err(|e| ApiError::BadRequest(format!("Base64 解码失败: {}", e)))?;
+    use base64::prelude::{Engine as _, BASE64_STANDARD};
+    let source = BASE64_STANDARD
+        .decode(&req.source_base64)
+        .map_err(|e| ApiError::BadRequest(format!("Base64 decode failed: {}", e)))?;
 
     // 构建 Runner 请求
     let run_req = okane_manager::backtest::BacktestRequest {
@@ -91,7 +93,7 @@ pub async fn run_backtest(
         .backtest_runner
         .run(run_req)
         .await
-        .map_err(|e| ApiError::Internal(format!("回测执行失败: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("Backtest execution failed: {}", e)))?;
 
     // 转换结果为 Response
     let ret = BacktestResponse {
@@ -101,36 +103,4 @@ pub async fn run_backtest(
     };
 
     Ok(Json(ApiResponse::ok(ret)))
-}
-
-// ============================================================
-//  辅助函数
-// ============================================================
-
-/// 简单的 Base64 解码 (不引入额外依赖)
-fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-    let input = input.trim_end_matches('=');
-    let mut output = Vec::with_capacity(input.len() * 3 / 4);
-
-    let mut buf: u32 = 0;
-    let mut bits: u32 = 0;
-
-    for byte in input.bytes() {
-        let val = TABLE
-            .iter()
-            .position(|&b| b == byte)
-            .ok_or_else(|| format!("非法 Base64 字符: {}", byte as char))?
-            as u32;
-        buf = (buf << 6) | val;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            output.push((buf >> bits) as u8);
-            buf &= (1 << bits) - 1;
-        }
-    }
-
-    Ok(output)
 }

@@ -37,7 +37,7 @@ pub trait Stock: Send + Sync {
     ///
     /// # Returns
     /// 若有价格则返回成交价，否则返回 None。
-    fn current_price(&self) -> Option<Decimal>;
+    fn current_price(&self) -> Result<Option<Decimal>, MarketError>;
 
     /// # Summary
     /// 获取特定周期下正在形成中的最新 K 线快照。
@@ -51,7 +51,7 @@ pub trait Stock: Send + Sync {
     ///
     /// # Returns
     /// 返回当前未收盘的 K 线数据。
-    fn latest_candle(&self, timeframe: TimeFrame) -> Option<Candle>;
+    fn latest_candle(&self, timeframe: TimeFrame) -> Result<Option<Candle>, MarketError>;
 
     /// # Summary
     /// 获取特定周期下刚刚收盘的完整 K 线。
@@ -64,7 +64,7 @@ pub trait Stock: Send + Sync {
     ///
     /// # Returns
     /// 返回最近一根已闭合的 K 线数据。
-    fn last_closed_candle(&self, timeframe: TimeFrame) -> Option<Candle>;
+    fn last_closed_candle(&self, timeframe: TimeFrame) -> Result<Option<Candle>, MarketError>;
 
     /// # Summary
     /// 订阅该证券的实时行情流。
@@ -78,7 +78,7 @@ pub trait Stock: Send + Sync {
     ///
     /// # Returns
     /// 返回异步流 CandleStream。
-    fn subscribe(&self, timeframe: TimeFrame) -> CandleStream;
+    fn subscribe(&self, timeframe: TimeFrame) -> Result<CandleStream, MarketError>;
 
     /// # Summary
     /// 获取该聚合根关联的历史数据。

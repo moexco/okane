@@ -7,6 +7,9 @@ use okane_core::market::port::Market;
 use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
 use wasmtime::*;
+use okane_core::market::entity::Candle;
+use okane_core::market::error::MarketError;
+use okane_core::trade::entity::OrderId;
 
 /// # Summary
 /// 基于 wasmtime 的策略执行引擎。
@@ -20,6 +23,7 @@ pub struct WasmEngine {
     trade_port: Arc<dyn okane_core::trade::port::TradePort>,
     time_provider: Arc<dyn TimeProvider>,
     notifier: Option<Arc<dyn okane_core::notify::port::Notifier>>,
+    bridge: Arc<crate::bridge::AsyncBridge>,
 }
 
 const WASM_FUEL_LIMIT: u64 = 1_000_000;
@@ -38,13 +42,14 @@ impl WasmEngine {
         trade_port: Arc<dyn okane_core::trade::port::TradePort>,
         time_provider: Arc<dyn TimeProvider>,
         notifier: Option<Arc<dyn okane_core::notify::port::Notifier>>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, EngineError> {
+        Ok(Self {
             base: EngineBase::new(market),
             trade_port,
             time_provider,
             notifier,
-        }
+            bridge: Arc::new(crate::bridge::AsyncBridge::new()?),
+        })
     }
 
     /// # Summary
@@ -90,6 +95,7 @@ impl WasmEngine {
             account_id: account_id.to_string(),
             time_provider: self.time_provider.clone(),
             notifier: self.notifier.clone(),
+            bridge: self.bridge.clone(),
         }));
 
         let mut store = Store::new(&engine, plugin_ctx.clone());
@@ -129,6 +135,12 @@ impl WasmEngine {
                 EngineError::Plugin(format!("alloc export not found: {}", e))
             })?;
 
+        let dealloc_fn = instance
+            .get_typed_func::<(i32, i32), ()>(&mut store, "dealloc")
+            .map_err(|e| {
+                EngineError::Plugin(format!("dealloc export not found: {}", e))
+            })?;
+
         // 订阅 K 线流
         let mut stream = self.base.subscribe(symbol, timeframe).await?;
 
@@ -146,25 +158,44 @@ impl WasmEngine {
             let input_bytes = input_json.as_bytes();
 
             // 在 WASM 中分配内存并写入输入数据
+            let input_len_i32 = i32::try_from(input_bytes.len()).map_err(|e| EngineError::Plugin(format!("Input size overflow: {}", e)))?;
             let ptr = alloc_fn
-                .call(&mut store, input_bytes.len() as i32)
+                .call(&mut store, input_len_i32)
                 .map_err(|e| EngineError::Plugin(format!("alloc call failed: {}", e)))?;
 
+            let usize_ptr = usize::try_from(ptr).map_err(|e| EngineError::Plugin(format!("Invalid pointer from WASM: {}", e)))?;
             memory
-                .write(&mut store, ptr as usize, input_bytes)
+                .write(&mut store, usize_ptr, input_bytes)
                 .map_err(|e| EngineError::Plugin(format!("Memory write failed: {}", e)))?;
 
             // 调用 on_candle(ptr, len) -> result_ptr
-            let result_ptr = on_candle
-                .call(&mut store, (ptr, input_bytes.len() as i32))
-                .map_err(|e| {
+            let result_ptr = match on_candle.call(&mut store, (ptr, input_len_i32)) {
+                Ok(res) => res,
+                Err(e) => {
+                    // 若执行抛错，也需尝试释放入参指针。如果释放也失败，记录警告但返回原始执行错误。
+                    if let Err(dealloc_e) = dealloc_fn.call(&mut store, (ptr, input_len_i32)) {
+                        error!("WasmEngine: fatal dealloc failure after execution error: {}", dealloc_e);
+                    }
                     error!("WasmEngine: on_candle execution failed for {}: {}", symbol, e);
-                    EngineError::Plugin(e.to_string())
-                })?;
+                    return Err(EngineError::Plugin(e.to_string()));
+                }
+            };
 
-            // 读取返回结果 (WASM on_candle 返回值被忽略，策略通过 host.* API 直接执行动作)
-            // result_ptr 非 0 可用于未来日志扩展，但不再解析为 Signal
-            let _ = result_ptr;
+            // 无论正常与否，由宿主分配的入参必须在通信完成后由宿主要求释放
+            dealloc_fn.call(&mut store, (ptr, input_len_i32))
+                .map_err(|e| EngineError::Plugin(format!("Failed to dealloc input buffer: {}", e)))?;
+
+            if result_ptr != 0 {
+                let mut len_bytes = [0u8; 4];
+                let usize_result_ptr = usize::try_from(result_ptr).map_err(|e| EngineError::Plugin(format!("Invalid result pointer: {}", e)))?;
+                if memory.read(&store, usize_result_ptr, &mut len_bytes).is_ok() {
+                    let json_len = i32::try_from(u32::from_le_bytes(len_bytes)).map_err(|e| EngineError::Plugin(format!("Invalid result length: {}", e)))?;
+                    let total_len = json_len + 4;
+                    // 彻底释放策略侧通过 alloc 构建的返回值内存
+                    dealloc_fn.call(&mut store, (result_ptr, total_len))
+                        .map_err(|e| EngineError::Plugin(format!("Failed to dealloc result buffer: {}", e)))?;
+                }
+            }
         }
 
         Ok(())
@@ -192,8 +223,16 @@ impl WasmEngine {
                  len: i32| {
                     let memory = caller.get_export("memory").and_then(|e| e.into_memory());
                     if let Some(memory) = memory {
-                        let mut buf = vec![0u8; len as usize];
-                        if memory.read(&caller, ptr as usize, &mut buf).is_ok() {
+                        let usize_len = match usize::try_from(len) {
+                            Ok(l) => l,
+                            Err(_) => return,
+                        };
+                        let mut buf = vec![0u8; usize_len];
+                        let usize_ptr = match usize::try_from(ptr) {
+                            Ok(p) => p,
+                            Err(_) => return,
+                        };
+                        if memory.read(&caller, usize_ptr, &mut buf).is_ok() {
                             let msg = String::from_utf8_lossy(&buf);
                             match level {
                                 1 => error!("WASM [ERROR]: {}", msg),
@@ -211,10 +250,12 @@ impl WasmEngine {
             .func_wrap(
                 "env",
                 "host_now",
-                |caller: Caller<'_, Arc<Mutex<PluginContext>>>| -> i64 {
+                |caller: Caller<'_, Arc<Mutex<PluginContext>>>| -> Result<i64, anyhow::Error> {
                     let plugin_ctx = caller.data();
-                    let ctx = plugin_ctx.lock().unwrap_or_else(|e| e.into_inner());
-                    ctx.time_provider.now().timestamp_millis()
+                    let ctx = plugin_ctx.lock().map_err(|e| anyhow::anyhow!("Plugin context poisoned: {}", e))?;
+                    ctx.time_provider.now()
+                        .map(|t| t.timestamp_millis())
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))
                 },
             )
             .map_err(|e| EngineError::Plugin(e.to_string()))?;
@@ -232,85 +273,78 @@ impl WasmEngine {
                  tf_len: i32,
                  limit: i32,
                  out_ptr: i32|
-                 -> i32 {
+                 -> Result<i32, anyhow::Error> {
                     let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
                         Some(m) => m,
-                        None => return 0,
+                        None => return Ok(0),
                     };
 
                     // 读取 symbol 字符串
-                    let mut sym_buf = vec![0u8; sym_len as usize];
-                    if memory.read(&caller, sym_ptr as usize, &mut sym_buf).is_err() {
-                        return 0;
+                    let usize_sym_len = usize::try_from(sym_len).map_err(|e| anyhow::anyhow!("Invalid sym_len: {}", e))?;
+                    let mut sym_buf = vec![0u8; usize_sym_len];
+                    let usize_sym_ptr = usize::try_from(sym_ptr).map_err(|e| anyhow::anyhow!("Invalid sym_ptr: {}", e))?;
+                    if memory.read(&caller, usize_sym_ptr, &mut sym_buf).is_err() {
+                        return Ok(0);
                     }
                     let symbol = match String::from_utf8(sym_buf) {
                         Ok(s) => s,
-                        Err(_) => return 0,
+                        Err(_) => return Ok(0),
                     };
 
                     // 读取 timeframe 字符串
-                    let mut tf_buf = vec![0u8; tf_len as usize];
-                    if memory.read(&caller, tf_ptr as usize, &mut tf_buf).is_err() {
-                        return 0;
+                    let usize_tf_len = usize::try_from(tf_len).map_err(|e| anyhow::anyhow!("Invalid tf_len: {}", e))?;
+                    let mut tf_buf = vec![0u8; usize_tf_len];
+                    let usize_tf_ptr = usize::try_from(tf_ptr).map_err(|e| anyhow::anyhow!("Invalid tf_ptr: {}", e))?;
+                    if memory.read(&caller, usize_tf_ptr, &mut tf_buf).is_err() {
+                        return Ok(0);
                     }
                     let tf_str = match String::from_utf8(tf_buf) {
                         Ok(s) => s,
-                        Err(_) => return 0,
+                        Err(_) => return Ok(0),
                     };
 
-                    let tf = match tf_str.parse::<TimeFrame>() {
+                    let tf_parsed = match tf_str.parse::<TimeFrame>() {
                         Ok(t) => t,
-                        Err(_) => return 0,
+                        Err(_) => return Ok(0),
                     };
 
                     // 获取上下文数据
                     let plugin_ctx = caller.data().clone();
-                    let (end_at, market) = {
-                        let ctx = plugin_ctx.lock().unwrap_or_else(|e| e.into_inner());
-                        (ctx.time_provider.now(), ctx.market.clone())
+                    let (end_at, market, bridge) = {
+                        let ctx = plugin_ctx.lock().map_err(|e| anyhow::anyhow!("Plugin context poisoned: {}", e))?;
+                        (ctx.time_provider.now().map_err(|e| anyhow::anyhow!(e.to_string()))?, ctx.market.clone(), ctx.bridge.clone())
                     };
 
                     // 阻塞式桥接异步调用
-                    let result = futures::executor::block_on(async {
-                        let stock = market.get_stock(&symbol).await.map_err(|e| e.to_string())?;
+                    let result: Result<Result<Vec<Candle>, String>, anyhow::Error> = bridge.call(async move {
+                        let stock = market.get_stock(&symbol).await.map_err(|e: MarketError| e.to_string())?;
                         // 计算起始时间 (limit * 周期 * 缓冲系数)
-                        let duration = tf.duration() * (limit * 2);
+                        let duration = tf_parsed.duration() * (limit * 2);
                         let start = end_at - duration;
                         let end = end_at;
 
-                        stock
-                            .fetch_history(tf, start, end)
+                        let h = stock
+                            .fetch_history(tf_parsed, start, end)
                             .await
-                            .map(|h| h.into_iter().rev().take(limit as usize).rev().collect::<Vec<_>>())
-                            .map_err(|e| e.to_string())
-                    });
+                            .map_err(|e: MarketError| e.to_string())?;
+                        
+                        let usize_limit = usize::try_from(limit).map_err(|e| format!("Invalid limit: {}", e))?;
+                        Ok(h.into_iter().rev().take(usize_limit).rev().collect::<Vec<_>>())
+                    }).map_err(|e: EngineError| anyhow::anyhow!(e.to_string()));
 
                     match result {
-                        Ok(candles) => {
-                            let json =
-                                serde_json::to_string(&candles).unwrap_or_else(|_| "[]".to_string());
+                        Ok(Ok(candles)) => {
+                            let json = serde_json::to_string(&candles).map_err(|e| anyhow::anyhow!(e.to_string()))?;
                             let json_bytes = json.as_bytes();
                             // 写入长度（4字节 LE）+ JSON 数据
-                            let len_bytes = (json_bytes.len() as u32).to_le_bytes();
-                            if memory
-                                .write(&mut caller, out_ptr as usize, &len_bytes)
-                                .is_err()
-                            {
-                                return 0;
-                            }
-                            if memory
-                                .write(
-                                    &mut caller,
-                                    (out_ptr as usize) + 4,
-                                    json_bytes,
-                                )
-                                .is_err()
-                            {
-                                return 0;
-                            }
-                            json_bytes.len() as i32
+                            let json_len_u32 = u32::try_from(json_bytes.len()).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                            let len_bytes = json_len_u32.to_le_bytes();
+                            let usize_out_ptr = usize::try_from(out_ptr).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                            if memory.write(&mut caller, usize_out_ptr, &len_bytes).is_err() { return Ok(0); }
+                            if memory.write(&mut caller, usize_out_ptr + 4, json_bytes).is_err() { return Ok(0); }
+                            Ok(i32::try_from(json_bytes.len()).map_err(|e| anyhow::anyhow!("JSON len overflow: {}", e))?)
                         }
-                        Err(_) => 0,
+                        _ => Ok(0),
                     }
                 },
             )
@@ -321,39 +355,52 @@ impl WasmEngine {
             mut caller: Caller<'_, Arc<Mutex<PluginContext>>>,
             sym_ptr: i32,
             sym_len: i32,
-            price_f64: f64, // 使用 f64 传递价格以简化 FFI
-            vol_f64: f64,   // 使用 f64 传递数量以简化 FFI
+            price_ptr: i32, // 改为字符串指针以维持精度
+            price_len: i32,
+            vol_ptr: i32,   // 改为字符串指针
+            vol_len: i32,
             out_ptr: i32,
             direction: okane_core::trade::entity::OrderDirection,
-        | -> i32 {
+        | -> Result<i32, anyhow::Error> {
             let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
                 Some(m) => m,
-                None => return 0,
+                None => return Ok(0),
             };
 
-            // 读取 symbol
-            let mut sym_buf = vec![0u8; sym_len as usize];
-            if memory.read(&caller, sym_ptr as usize, &mut sym_buf).is_err() {
-                return 0;
-            }
-            let symbol = match String::from_utf8(sym_buf) {
-                Ok(s) => s,
-                Err(_) => return 0,
-            };
+            // 1. 读取 symbol
+            let usize_sym_len = usize::try_from(sym_len).map_err(|e| anyhow::anyhow!("Invalid sym_len: {}", e))?;
+            let mut sym_buf = vec![0u8; usize_sym_len];
+            let usize_sym_ptr = usize::try_from(sym_ptr).map_err(|e| anyhow::anyhow!("Invalid sym_ptr: {}", e))?;
+            if memory.read(&caller, usize_sym_ptr, &mut sym_buf).is_err() { return Ok(0); }
+            let symbol = String::from_utf8_lossy(&sym_buf).to_string();
 
-            // 获取 trade_port 和 account_id
-            let plugin_ctx = caller.data().clone();
-            let (trade_port, account_id) = {
-                let ctx = plugin_ctx.lock().unwrap_or_else(|e| e.into_inner());
-                (ctx.trade_port.clone(), ctx.account_id.clone())
-            };
-
-            let req_price = if price_f64 > 0.0 {
-                rust_decimal::Decimal::from_f64_retain(price_f64)
+            // 2. 读取 price (String)
+            let req_price = if price_ptr != 0 {
+                let usize_price_len = usize::try_from(price_len).map_err(|e| anyhow::anyhow!("Invalid price_len: {}", e))?;
+                let mut price_buf = vec![0u8; usize_price_len];
+                let usize_price_ptr = usize::try_from(price_ptr).map_err(|e| anyhow::anyhow!("Invalid price_ptr: {}", e))?;
+                if memory.read(&caller, usize_price_ptr, &mut price_buf).is_err() { return Ok(0); }
+                let price_str = String::from_utf8_lossy(&price_buf);
+                let dec = price_str.parse::<rust_decimal::Decimal>().map_err(|e| anyhow::anyhow!("Invalid price string: {}", e))?;
+                Some(dec)
             } else {
                 None
             };
-            let req_vol = rust_decimal::Decimal::from_f64_retain(vol_f64).unwrap_or(rust_decimal::Decimal::ZERO);
+
+            // 3. 读取 volume (String)
+            let usize_vol_len = usize::try_from(vol_len).map_err(|e| anyhow::anyhow!("Invalid vol_len: {}", e))?;
+            let mut vol_buf = vec![0u8; usize_vol_len];
+            let usize_vol_ptr = usize::try_from(vol_ptr).map_err(|e| anyhow::anyhow!("Invalid vol_ptr: {}", e))?;
+            if memory.read(&caller, usize_vol_ptr, &mut vol_buf).is_err() { return Ok(0); }
+            let vol_str = String::from_utf8_lossy(&vol_buf);
+            let req_vol = vol_str.parse::<rust_decimal::Decimal>().map_err(|e| anyhow::anyhow!("Invalid volume string: {}", e))?;
+
+            // 获取 trade_port 和 account_id 和 bridge
+            let plugin_ctx = caller.data().clone();
+            let (trade_port, account_id, bridge) = {
+                let ctx = plugin_ctx.lock().map_err(|e| anyhow::anyhow!("Plugin context poisoned: {}", e))?;
+                (ctx.trade_port.clone(), ctx.account_id.clone(), ctx.bridge.clone())
+            };
 
             let order = okane_core::trade::entity::Order::new(
                 okane_core::trade::entity::OrderId(uuid::Uuid::new_v4().to_string()),
@@ -366,41 +413,50 @@ impl WasmEngine {
             );
 
             // 阻塞调用下单
-            let result = futures::executor::block_on(async {
-                trade_port.submit_order(order).await
-            });
+            let result: Result<Result<OrderId, String>, anyhow::Error> = bridge.call(async move {
+                trade_port.submit_order(order).await.map_err(|e| e.to_string())
+            }).map_err(|e| anyhow::anyhow!(e.to_string()));
 
             match result {
-                Ok(oid) => {
-                    let json = format!("{{\"order_id\": \"{}\"}}", oid.0);
+                Ok(Ok(oid)) => {
+                    let json = serde_json::json!({"order_id": oid.0}).to_string();
                     let json_bytes = json.as_bytes();
-                    let len_bytes = (json_bytes.len() as u32).to_le_bytes();
-                    if memory.write(&mut caller, out_ptr as usize, &len_bytes).is_err() { return 0; }
-                    if memory.write(&mut caller, (out_ptr as usize) + 4, json_bytes).is_err() { return 0; }
-                    json_bytes.len() as i32
+                    let json_len_u32 = u32::try_from(json_bytes.len()).map_err(|e| anyhow::anyhow!(e))?;
+                    let len_bytes = json_len_u32.to_le_bytes();
+                    let usize_out_ptr = usize::try_from(out_ptr).map_err(|e| anyhow::anyhow!(e))?;
+                    if memory.write(&mut caller, usize_out_ptr, &len_bytes).is_err() { return Ok(0); }
+                    if memory.write(&mut caller, usize_out_ptr + 4, json_bytes).is_err() { return Ok(0); }
+                    Ok(i32::try_from(json_bytes.len()).map_err(|e| anyhow::anyhow!(e))?)
                 }
-                Err(e) => {
-                    let json = format!("{{\"error\": \"{}\"}}", e);
+                _ => {
+                    let err_msg = match result {
+                        Ok(Err(e)) => e,
+                        Err(e) => e.to_string(),
+                        _ => "Unknown error".to_string(),
+                    };
+                    let json = serde_json::json!({"error": err_msg}).to_string();
                     let json_bytes = json.as_bytes();
-                    let len_bytes = (json_bytes.len() as u32).to_le_bytes();
-                    if memory.write(&mut caller, out_ptr as usize, &len_bytes).is_err() { return 0; }
-                    if memory.write(&mut caller, (out_ptr as usize) + 4, json_bytes).is_err() { return 0; }
-                    json_bytes.len() as i32
+                    let json_len_u32 = u32::try_from(json_bytes.len()).map_err(|e| anyhow::anyhow!(e))?;
+                    let len_bytes = json_len_u32.to_le_bytes();
+                    let usize_out_ptr = usize::try_from(out_ptr).map_err(|e| anyhow::anyhow!(e))?;
+                    memory.write(&mut caller, usize_out_ptr, &len_bytes).ok();
+                    memory.write(&mut caller, usize_out_ptr + 4, json_bytes).ok();
+                    Ok(i32::try_from(json_bytes.len()).map_err(|e| anyhow::anyhow!(e))?)
                 }
             }
         };
 
-        // host_buy(sym_ptr: i32, sym_len: i32, price: f64, vol: f64, out_ptr: i32) -> i32
+        // host_buy(sym_ptr, sym_len, price_ptr, price_len, vol_ptr, vol_len, out_ptr)
         linker
-            .func_wrap("env", "host_buy", move |caller: Caller<'_, Arc<Mutex<PluginContext>>>, sym_ptr: i32, sym_len: i32, price: f64, vol: f64, out_ptr: i32| -> i32 {
-                process_order(caller, sym_ptr, sym_len, price, vol, out_ptr, okane_core::trade::entity::OrderDirection::Buy)
+            .func_wrap("env", "host_buy", move |caller: Caller<'_, Arc<Mutex<PluginContext>>>, sym_ptr: i32, sym_len: i32, price_ptr: i32, price_len: i32, vol_ptr: i32, vol_len: i32, out_ptr: i32| -> Result<i32, anyhow::Error> {
+                process_order(caller, sym_ptr, sym_len, price_ptr, price_len, vol_ptr, vol_len, out_ptr, okane_core::trade::entity::OrderDirection::Buy)
             })
             .map_err(|e| EngineError::Plugin(e.to_string()))?;
 
-        // host_sell(sym_ptr: i32, sym_len: i32, price: f64, vol: f64, out_ptr: i32) -> i32
+        // host_sell(sym_ptr, sym_len, price_ptr, price_len, vol_ptr, vol_len, out_ptr)
         linker
-            .func_wrap("env", "host_sell", move |caller: Caller<'_, Arc<Mutex<PluginContext>>>, sym_ptr: i32, sym_len: i32, price: f64, vol: f64, out_ptr: i32| -> i32 {
-                process_order(caller, sym_ptr, sym_len, price, vol, out_ptr, okane_core::trade::entity::OrderDirection::Sell)
+            .func_wrap("env", "host_sell", move |caller: Caller<'_, Arc<Mutex<PluginContext>>>, sym_ptr: i32, sym_len: i32, price_ptr: i32, price_len: i32, vol_ptr: i32, vol_len: i32, out_ptr: i32| -> Result<i32, anyhow::Error> {
+                process_order(caller, sym_ptr, sym_len, price_ptr, price_len, vol_ptr, vol_len, out_ptr, okane_core::trade::entity::OrderDirection::Sell)
             })
             .map_err(|e| EngineError::Plugin(e.to_string()))?;
 

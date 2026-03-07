@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use okane_core::common::time::FakeClockProvider;
 use okane_core::common::TimeFrame;
 use okane_core::engine::port::{EngineBuildParams, EngineBuilder};
-use okane_core::market::error::MarketError;
+
 use okane_core::market::port::{Market, Stock};
 use okane_core::strategy::entity::EngineType;
 use okane_core::trade::entity::AccountSnapshot;
@@ -13,7 +13,7 @@ use okane_trade::account::AccountManager;
 use okane_trade::service::TradeService;
 use okane_trade::trade_log::TradeLog;
 use rust_decimal::Decimal;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
 use tracing::info;
 
 use crate::strategy::ManagerError;
@@ -33,39 +33,53 @@ use crate::strategy::ManagerError;
 /// 2. 用 `LazyMarket` 创建 `TradeService`
 /// 3. 用 `TradeService` 创建 `BacktestMarket`
 /// 4. 用 `LazyMarket.set()` 注入 `BacktestMarket`
+/// # Summary
+/// 采用懒加载模式的 Market 代理，用于破解 `TradeService` 与 `Market` 之间的循环依赖。
+///
+/// # Invariants
+/// - **循环依赖解耦**: `TradeService` 需要 `Market` 报价以驱动成交逻辑，而 `BacktestMarket` 在初始化 `BacktestStock` 时需要 `TradeService`。
+/// - **初始化顺序**: 在回测启动阶段，先创建 `LazyMarket` 并注入 `TradeService`，随后当 `BacktestMarket` 就绪后再通过 `set_inner` 完成最终绑定。
+/// - **时序一致性**: 在 `inner` 被设置前调用任何 `Market` 方法都会由于内部 `None` 而静默或报错（取决于实现），这符合回测引擎初始化阶段的原子性要求。
 struct LazyMarket {
-    inner: OnceLock<Arc<dyn Market>>,
+    inner: Mutex<Option<Arc<dyn Market>>>,
 }
 
 impl LazyMarket {
     fn new() -> Self {
         Self {
-            inner: OnceLock::new(),
+            inner: Mutex::new(None),
         }
     }
 
-    fn set(&self, market: Arc<dyn Market>) {
-        let _ = self.inner.set(market);
-    }
-
-    fn get(&self) -> &Arc<dyn Market> {
-        self.inner
-            .get()
-            .expect("LazyMarket: inner market not initialized")
+    fn set(&self, market: Arc<dyn Market>) -> Result<(), okane_core::market::error::MarketError> {
+        let mut lock = self.inner.lock().map_err(|e| okane_core::market::error::MarketError::Unknown(e.to_string()))?;
+        if lock.is_some() {
+            return Err(okane_core::market::error::MarketError::Unknown("LazyMarket: already initialized".to_string()));
+        }
+        *lock = Some(market);
+        Ok(())
     }
 }
 
 #[async_trait]
 impl Market for LazyMarket {
-    async fn get_stock(&self, symbol: &str) -> Result<Arc<dyn Stock>, MarketError> {
-        self.get().get_stock(symbol).await
+    async fn get_stock(&self, symbol: &str) -> Result<Arc<dyn Stock>, okane_core::market::error::MarketError> {
+        let inner = {
+            let lock = self.inner.lock().map_err(|e| okane_core::market::error::MarketError::Unknown(e.to_string()))?;
+            lock.as_ref().cloned().ok_or_else(|| okane_core::market::error::MarketError::Unknown("LazyMarket: inner market not initialized".to_string()))?
+        };
+        inner.get_stock(symbol).await
     }
 
     async fn search_symbols(
         &self,
         query: &str,
-    ) -> Result<Vec<okane_core::store::port::StockMetadata>, MarketError> {
-        self.get().search_symbols(query).await
+    ) -> Result<Vec<okane_core::store::port::StockMetadata>, okane_core::market::error::MarketError> {
+        let inner = {
+            let lock = self.inner.lock().map_err(|e| okane_core::market::error::MarketError::Unknown(e.to_string()))?;
+            lock.as_ref().cloned().ok_or_else(|| okane_core::market::error::MarketError::Unknown("LazyMarket: inner market not initialized".to_string()))?
+        };
+        inner.search_symbols(query).await
     }
 }
 
@@ -158,32 +172,12 @@ impl BacktestRunner {
             req.symbol, req.start, req.end, req.engine_type
         );
 
-        // 步骤 1: 预拉取历史 K 线
-        let stock = self.market.get_stock(&req.symbol).await.map_err(|e| {
+        // 步骤 1: 获取原始 Stock 句柄 (不再全量拉取 fetch_history)
+        let source_stock = self.market.get_stock(&req.symbol).await.map_err(|e| {
             ManagerError::Engine(okane_core::engine::error::EngineError::Plugin(
                 format!("Failed to get stock: {}", e),
             ))
         })?;
-
-        let candles = stock
-            .fetch_history(req.timeframe, req.start, req.end)
-            .await
-            .map_err(|e| {
-                ManagerError::Engine(okane_core::engine::error::EngineError::Plugin(
-                    format!("Failed to fetch history: {}", e),
-                ))
-            })?;
-
-        let candle_count = candles.len();
-        info!("BacktestRunner: fetched {} candles", candle_count);
-
-        if candles.is_empty() {
-            return Err(ManagerError::Engine(
-                okane_core::engine::error::EngineError::Plugin(
-                    "No historical candles available for backtest".to_string(),
-                ),
-            ));
-        }
 
         // 步骤 2: 创建隔离的回测上下文
         let fake_clock = Arc::new(FakeClockProvider::new(req.start));
@@ -210,16 +204,22 @@ impl BacktestRunner {
             .with_trade_log(trade_log.clone()),
         );
 
-        // 现在用 trade_service 创建 BacktestMarket
-        let backtest_market: Arc<dyn Market> = Arc::new(BacktestMarket::new(
+        // 现在用 trade_service 创建 BacktestMarket (流式模式)
+        let backtest_market: Arc<dyn Market> = Arc::new(BacktestMarket::with_source(
             req.symbol.clone(),
-            candles,
+            source_stock,
+            req.start,
+            req.end,
             fake_clock.clone(),
             trade_service.clone(),
         ));
 
         // 延迟注入: LazyMarket 现在指向 BacktestMarket
-        lazy_market.set(backtest_market.clone());
+        lazy_market.set(backtest_market.clone()).map_err(|e| {
+            ManagerError::Engine(okane_core::engine::error::EngineError::Plugin(
+                format!("Failed to initialize lazy market: {}", e),
+            ))
+        })?;
 
         // 步骤 4: 创建绑定到 BacktestMarket 的 EngineBuilder 并运行
         let engine_builder = (self.engine_builder_factory)(backtest_market);
@@ -240,7 +240,7 @@ impl BacktestRunner {
 
         // 步骤 5: 收集结果
         let final_snapshot = account_manager.snapshot(&backtest_account_id).await?;
-        let trades = trade_log.drain();
+        let trades = trade_log.drain()?;
 
         info!(
             "BacktestRunner: completed. {} trades, final balance: {}",
@@ -251,7 +251,7 @@ impl BacktestRunner {
         Ok(BacktestResult {
             final_snapshot,
             trades,
-            candle_count,
+            candle_count: 0, // 流式模式下不再预先计数，此处设为 0 或记录实耗数
         })
     }
 }

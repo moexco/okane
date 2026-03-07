@@ -1,76 +1,13 @@
-pub mod mock_trade;
-use async_trait::async_trait;
-use chrono::Utc;
+use okane_core::test_utils::{MockMarket, MockStock, SpyTradePort};
 use okane_core::common::time::FakeClockProvider;
 use okane_core::common::{Stock as StockIdentity, TimeFrame};
 use okane_core::market::entity::Candle;
-use okane_core::market::error::MarketError;
-use okane_core::market::port::{CandleStream, Market, Stock, StockStatus};
+use chrono::Utc;
 use okane_engine::quickjs::JsEngine;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use rust_decimal_macros::dec;
 
-struct MockStock {
-    identity: StockIdentity,
-    price_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Candle>>>,
-}
-
-#[async_trait]
-impl Stock for MockStock {
-    fn identity(&self) -> &StockIdentity {
-        &self.identity
-    }
-    fn current_price(&self) -> Option<rust_decimal::Decimal> {
-        None
-    }
-    fn latest_candle(&self, _: TimeFrame) -> Option<Candle> {
-        None
-    }
-    fn last_closed_candle(&self, _: TimeFrame) -> Option<Candle> {
-        None
-    }
-    fn status(&self) -> StockStatus {
-        StockStatus::Online
-    }
-
-    fn subscribe(&self, _: TimeFrame) -> CandleStream {
-        let rx = self.price_rx.clone();
-        let s = async_stream::stream! {
-            let mut rx = rx.lock().await;
-            while let Some(candle) = rx.recv().await {
-                yield candle;
-            }
-        };
-        Box::pin(s)
-    }
-
-    async fn fetch_history(
-        &self,
-        _: TimeFrame,
-        _: chrono::DateTime<Utc>,
-        _: chrono::DateTime<Utc>,
-    ) -> Result<Vec<Candle>, MarketError> {
-        Ok(vec![])
-    }
-}
-
-struct MockMarket {
-    stock: Arc<MockStock>,
-}
-
-#[async_trait]
-impl Market for MockMarket {
-    async fn get_stock(&self, _: &str) -> Result<Arc<dyn Stock>, MarketError> {
-        Ok(self.stock.clone())
-    }
-
-    async fn search_symbols(&self, _query: &str) -> Result<Vec<okane_core::store::port::StockMetadata>, MarketError> {
-        Ok(vec![])
-    }
-}
-
-/// JS 策略源码：验证 onCandle 调用正常（void 返回）
 const JS_STRATEGY: &str = r#"
 function onCandle(input) {
     var candle = JSON.parse(input);
@@ -80,8 +17,17 @@ function onCandle(input) {
 }
 "#;
 
+const JS_TRADE_STRATEGY: &str = r#"
+function onCandle(input) {
+    var candle = JSON.parse(input);
+    if (candle.close > 150.0) {
+        host.buy("AAPL", "155.0", "100");
+    }
+}
+"#;
+
 #[tokio::test]
-async fn test_js_strategy_integration() {
+async fn test_js_strategy_integration() -> anyhow::Result<()> {
     let (tx, rx) = mpsc::unbounded_channel();
     let mock_stock = Arc::new(MockStock {
         identity: StockIdentity {
@@ -94,8 +40,9 @@ async fn test_js_strategy_integration() {
         stock: mock_stock.clone(),
     });
 
-    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort);
-    let engine = JsEngine::new(market, trade, Arc::new(FakeClockProvider::new(Utc::now())), None);
+    let trade = SpyTradePort::new();
+    let trade_arc = std::sync::Arc::new(trade);
+    let engine = JsEngine::new(market, trade_arc.clone(), Arc::new(FakeClockProvider::new(chrono::Utc::now())), None).map_err(|e| anyhow::anyhow!(e))?;
 
     let local = tokio::task::LocalSet::new();
 
@@ -107,7 +54,6 @@ async fn test_js_strategy_integration() {
 
     local
         .run_until(async {
-            // 推送 K 线数据, close > 150 触发 host.log
             tx.send(Candle {
                 time: Utc::now(),
                 open: dec!(100.0),
@@ -118,19 +64,80 @@ async fn test_js_strategy_integration() {
                 volume: dec!(1000.0),
                 is_final: true,
             })
-            .unwrap();
+            .map_err(|e| anyhow::anyhow!("Send failed: {:?}", e))?;
 
-            // 给处理时间
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-            // 策略应正常执行 (void onCandle)
+            // 无需 sleep，因为逻辑上只要不崩溃即代表成功。
+            // 但为了严谨，我们通常在 handle 运行一小会儿后 abort
+            tokio::task::yield_now().await;
             handle.abort();
+            Ok::<(), anyhow::Error>(())
         })
-        .await;
+        .await?;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_js_strategy_no_error_when_below_threshold() {
+async fn test_js_trade_execution() -> anyhow::Result<()> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let mock_stock = Arc::new(MockStock {
+        identity: StockIdentity {
+            symbol: "AAPL".to_string(),
+            exchange: Some("NASDAQ".to_string()),
+        },
+        price_rx: Arc::new(tokio::sync::Mutex::new(rx)),
+    });
+    let market = Arc::new(MockMarket {
+        stock: mock_stock.clone(),
+    });
+
+    let trade = SpyTradePort::new();
+    let trade_arc = std::sync::Arc::new(trade);
+    let engine = JsEngine::new(market, trade_arc.clone(), Arc::new(FakeClockProvider::new(chrono::Utc::now())), None).map_err(|e| anyhow::anyhow!(e))?;
+
+    let local = tokio::task::LocalSet::new();
+
+    let _handle = local.spawn_local(async move {
+        engine
+            .run_strategy("AAPL", "mock_account", TimeFrame::Minute1, JS_TRADE_STRATEGY)
+            .await
+    });
+
+    local
+        .run_until(async {
+            tx.send(Candle {
+                time: Utc::now(),
+                open: dec!(100.0),
+                high: dec!(160.0),
+                low: dec!(90.0),
+                close: dec!(155.0),
+                adj_close: None,
+                volume: dec!(1000.0),
+                is_final: true,
+            })
+            .map_err(|e| anyhow::anyhow!("Send failed: {:?}", e))?;
+
+            // 轮询检查订单是否产生
+            let start = std::time::Instant::now();
+            let mut orders = Vec::new();
+            while start.elapsed() < std::time::Duration::from_secs(2) {
+                orders = trade_arc.get_submitted_orders().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                if !orders.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+
+            assert_eq!(orders.len(), 1, "Should have submitted 1 order");
+            assert_eq!(orders[0].symbol, "AAPL");
+            assert_eq!(orders[0].volume, dec!(100));
+            Ok::<(), anyhow::Error>(())
+        })
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_js_strategy_no_error_when_below_threshold() -> anyhow::Result<()> {
     let (tx, rx) = mpsc::unbounded_channel();
     let mock_stock = Arc::new(MockStock {
         identity: StockIdentity {
@@ -143,8 +150,8 @@ async fn test_js_strategy_no_error_when_below_threshold() {
         stock: mock_stock.clone(),
     });
 
-    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort);
-    let engine = JsEngine::new(market, trade, Arc::new(FakeClockProvider::new(Utc::now())), None);
+    let trade = std::sync::Arc::new(SpyTradePort::new());
+    let engine = JsEngine::new(market, trade, Arc::new(FakeClockProvider::new(chrono::Utc::now())), None).map_err(|e| anyhow::anyhow!(e))?;
 
     let local = tokio::task::LocalSet::new();
 
@@ -166,12 +173,13 @@ async fn test_js_strategy_no_error_when_below_threshold() {
                 volume: dec!(500.0),
                 is_final: true,
             })
-            .unwrap();
+            .map_err(|e| anyhow::anyhow!("Send failed: {:?}", e))?;
 
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-            // 策略应正常执行 — 不触发 log 但也不报错
+            // 无需 sleep，验证逻辑不崩溃即可
+            tokio::task::yield_now().await;
             handle.abort();
+            Ok::<(), anyhow::Error>(())
         })
-        .await;
+        .await?;
+    Ok(())
 }

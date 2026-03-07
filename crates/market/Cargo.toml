@@ -3,6 +3,9 @@ name = "okane-market"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 async-stream = "0.3.6"
 async-trait = "0.1.89"
@@ -20,5 +23,7 @@ rust_decimal = "1.40.0"
 rust_decimal_macros = "1.40.0"
 
 [dev-dependencies]
+anyhow = "1.0.95"
+okane-core = { version = "0.1.0", path = "../core", features = ["test-utils"] }
 okane-feed = { path = "../feed" }
 tempfile = "3.26.0"

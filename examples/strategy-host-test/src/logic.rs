@@ -26,7 +26,8 @@ unsafe extern "C" {
 
 #[unsafe(no_mangle)]
 pub fn alloc(len: i32) -> *mut u8 {
-    let mut buf = Vec::with_capacity(len as usize);
+    let usize_len = usize::try_from(len).unwrap_or(0);
+    let mut buf = Vec::with_capacity(usize_len);
     let ptr = buf.as_mut_ptr();
     std::mem::forget(buf);
     ptr
@@ -36,7 +37,8 @@ pub fn alloc(len: i32) -> *mut u8 {
 /// `ptr` must point to a valid, allocated buffer of at least `len` bytes.
 #[unsafe(no_mangle)]
 pub unsafe fn on_candle(ptr: *mut u8, len: i32) -> i32 {
-    let _input_bytes = unsafe { Vec::from_raw_parts(ptr, len as usize, len as usize) };
+    let usize_len = usize::try_from(len).unwrap_or(0);
+    let _input_bytes = unsafe { Vec::from_raw_parts(ptr, usize_len, usize_len) };
 
     let now = unsafe { host_now() };
 
@@ -46,10 +48,10 @@ pub unsafe fn on_candle(ptr: *mut u8, len: i32) -> i32 {
 
     let bytes_written = unsafe {
         host_fetch_history(
-            sym.as_ptr() as i32, sym.len() as i32,
-            tf.as_ptr() as i32, tf.len() as i32,
+            i32::try_from(sym.as_ptr() as usize).unwrap_or(0), i32::try_from(sym.len()).unwrap_or(0),
+            i32::try_from(tf.as_ptr() as usize).unwrap_or(0), i32::try_from(tf.len()).unwrap_or(0),
             5,
-            out_buf.as_mut_ptr() as i32,
+            i32::try_from(out_buf.as_mut_ptr() as usize).unwrap_or(0),
         )
     };
 
@@ -69,14 +71,18 @@ pub unsafe fn on_candle(ptr: *mut u8, len: i32) -> i32 {
     };
 
     if let Ok(mut json) = serde_json::to_vec(&sig) {
-        let len_bytes = (json.len() as u32).to_le_bytes();
+        let len_u32 = match u32::try_from(json.len()) {
+            Ok(l) => l,
+            Err(_) => return 0,
+        };
+        let len_bytes = len_u32.to_le_bytes();
         let mut out = Vec::with_capacity(4 + json.len());
         out.extend_from_slice(&len_bytes);
         out.append(&mut json);
 
         let out_ptr = out.as_mut_ptr();
         std::mem::forget(out);
-        return out_ptr as i32;
+        return i32::try_from(out_ptr as usize).unwrap_or_default();
     }
 
     0

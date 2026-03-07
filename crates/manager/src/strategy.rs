@@ -23,6 +23,8 @@ pub enum ManagerError {
     Engine(#[from] EngineError),
     #[error("Trade error: {0}")]
     Trade(#[from] okane_core::trade::port::TradeError),
+    #[error("Core error: {0}")]
+    Core(#[from] okane_core::error::CoreError),
     #[error("Strategy not found: {0}")]
     NotFound(String),
     #[error("Strategy already running: {0}")]

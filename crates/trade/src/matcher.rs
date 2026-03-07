@@ -72,7 +72,7 @@ mod tests {
     use rust_decimal_macros::dec;
 
     #[test]
-    fn test_execute_order_market_price() {
+    fn test_execute_order_market_price() -> Result<(), Box<dyn std::error::Error>> {
         let matcher = LocalMatchEngine::new(dec!(0.001)); // 0.1% commission
         let mut order = Order::new(
             OrderId("order1".to_string()),
@@ -84,17 +84,19 @@ mod tests {
             1000,
         );
 
-        let trade = matcher.execute_order(&mut order, dec!(150.0), 1001).unwrap();
+        let trade = matcher.execute_order(&mut order, dec!(150.0), 1001)
+            .ok_or("Failed to execute order")?;
 
         assert_eq!(trade.price, dec!(150.0));
         assert_eq!(trade.volume, dec!(100));
         assert_eq!(trade.commission, dec!(15.0)); // 150 * 100 * 0.001 = 15
         assert_eq!(order.status, OrderStatus::Filled);
         assert_eq!(order.filled_volume, dec!(100));
+        Ok(())
     }
 
     #[test]
-    fn test_execute_order_limit_price() {
+    fn test_execute_order_limit_price() -> Result<(), Box<dyn std::error::Error>> {
         let matcher = LocalMatchEngine::new(dec!(0.001));
         let mut order = Order::new(
             OrderId("order1".to_string()),
@@ -107,11 +109,13 @@ mod tests {
         );
 
         // Since market price is lower (better) than limit price, it will execute at market price.
-        let trade = matcher.execute_order(&mut order, dec!(140.0), 1001).unwrap();
+        let trade = matcher.execute_order(&mut order, dec!(140.0), 1001)
+            .ok_or("Failed to execute order")?;
 
         assert_eq!(trade.price, dec!(140.0));
         assert_eq!(trade.volume, dec!(100));
         assert_eq!(order.status, OrderStatus::Filled);
+        Ok(())
     }
 
     #[test]

@@ -7,7 +7,6 @@ use okane_market::manager::MarketImpl;
 use okane_store::market::SqliteMarketStore;
 use okane_store::strategy::SqliteStrategyStore;
 use okane_store::system::SqliteSystemStore;
-use okane_trade::account::AccountManager;
 use okane_trade::service::TradeService;
 use okane_core::trade::port::TradePort;
 use okane_core::common::time::RealTimeProvider;
@@ -69,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     okane_store::config::set_root_dir(std::path::PathBuf::from(app_config.database.data_dir.clone()));
 
     // 2. 实例化基础设施层
-    let feed = Arc::new(YahooProvider::new());
+    let feed = Arc::new(YahooProvider::new()?);
     let market_store = Arc::new(SqliteMarketStore::new()?);
     let strategy_store = Arc::new(SqliteStrategyStore::new()?);
 
@@ -79,11 +78,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4. 实例化引擎工厂（App 层知道具体实现，Manager 不知道）
     let engine_builder = Arc::new(EngineFactory::new(market.clone()));
 
-    // 5. 实例化交易服务（目前使用本地撮合和内存账户）
-    let account_manager = Arc::new(AccountManager::default());
-    let pending_port = Arc::new(okane_store::pending_order::MemoryPendingOrderStore::new());
+    // 5. 实例化交易服务（从内存切换到持久化 SQLite 存储）
+    let account_store = Arc::new(okane_store::account::SqliteAccountStore::new()?);
+    let pending_port = Arc::new(okane_store::pending_order_sqlx::SqlitePendingOrderStore::new()?);
     let matcher = std::sync::Arc::new(okane_trade::matcher::LocalMatchEngine::new(rust_decimal::Decimal::ZERO));
-    let trade_service: Arc<dyn TradePort> = Arc::new(TradeService::new(account_manager, matcher, market.clone(), pending_port, Arc::new(okane_core::common::time::RealTimeProvider)));
+    let trade_service: Arc<dyn TradePort> = Arc::new(TradeService::new(account_store, matcher, market.clone(), pending_port, Arc::new(okane_core::common::time::RealTimeProvider)));
 
     // 6. 实例化系统级存储（提供给鉴权系统 + 用户通知配置查询）
     let system_store: Arc<dyn okane_core::store::port::SystemStore> =

@@ -3,6 +3,9 @@ name = "okane-core"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 async-trait = "0.1.89"
 chrono = { version = "0.4.43", features = ["serde"] }
@@ -13,3 +16,16 @@ serde_json = "1.0.149"
 thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = "0.3.22"
+
+# Test Utils optional dependencies
+tokio = { version = "1.43.0", features = ["sync", "rt"], optional = true }
+async-stream = { version = "0.3.6", optional = true }
+dashmap = { version = "6.1.0", optional = true }
+uuid = { version = "1.12.1", features = ["v4"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.43.0", features = ["full"] }
+
+[features]
+default = []
+test-utils = ["tokio", "async-stream", "dashmap", "uuid"]

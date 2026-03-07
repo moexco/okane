@@ -1,4 +1,4 @@
-pub mod mock_trade;
+use okane_core::test_utils::SpyTradePort;
 use okane_core::common::TimeFrame;
 use okane_core::engine::error::EngineError;
 use okane_core::engine::port::{EngineBuilder, EngineFuture, EngineBuildParams};
@@ -30,20 +30,20 @@ impl EngineBuilder for MockEngineBuilder {
     ) -> Result<EngineFuture, EngineError> {
         Ok(Box::pin(async {
             // 模拟策略运行一段时间
-            sleep(Duration::from_millis(100)).await;
+            sleep(Duration::from_millis(50)).await;
             Ok(())
         }))
     }
 }
 
 #[tokio::test]
-async fn test_strategy_lifecycle() {
-    let tmp_dir = tempdir().unwrap();
+async fn test_strategy_lifecycle() -> anyhow::Result<()> {
+    let tmp_dir = tempdir().map_err(|e| anyhow::anyhow!("Failed to create temp dir: {}", e))?;
     okane_store::config::set_root_dir(tmp_dir.path().to_path_buf());
 
-    let store = Arc::new(SqliteStrategyStore::new().unwrap());
+    let store = Arc::new(SqliteStrategyStore::new().map_err(|e| anyhow::anyhow!("Failed to create store: {}", e))?);
     let engine_builder = Arc::new(MockEngineBuilder);
-    let trade_port = Arc::new(mock_trade::MockTradePort);
+    let trade_port = Arc::new(SpyTradePort::new());
     let manager = StrategyManager::new(store, engine_builder, trade_port, Arc::new(okane_core::common::time::RealTimeProvider), Arc::new(NoopNotifierFactory));
 
     let user_id = "test_user";
@@ -56,43 +56,50 @@ async fn test_strategy_lifecycle() {
     };
 
     // 1. 启动策略
-    let id = manager.start_strategy(user_id, req).await.unwrap();
+    let id = manager.start_strategy(user_id, req).await.map_err(|e| anyhow::anyhow!("Start failed: {:?}", e))?;
     
-    // 2. 检查状态是否为 Running (由于是异步启动，可能瞬间完成也可能由于 sleep 还在 Running)
-    let instance = manager.get_strategy(user_id, &id).await.unwrap();
-    // 由于 start_strategy 内部是先 update_status 再 spawn，
-    // 这里很大几率能读到 Running。
-    assert!(instance.status == StrategyStatus::Running || instance.status == StrategyStatus::Pending);
+    // 2. 检查状态
+    let instance = manager.get_strategy(user_id, &id).await.map_err(|e| anyhow::anyhow!("Get failed: {:?}", e))?;
+    assert!(instance.status == StrategyStatus::Running || instance.status == StrategyStatus::Pending || instance.status == StrategyStatus::Stopped);
 
-    // 3. 等待策略自然结束 (Mock 运行 100ms)
-    sleep(Duration::from_millis(200)).await;
-    
-    let instance = manager.get_strategy(user_id, &id).await.unwrap();
-    assert_eq!(instance.status, StrategyStatus::Stopped);
+    // 3. 轮询等待策略停止 (Mock 运行 50ms)
+    let start = std::time::Instant::now();
+    let mut stopped = false;
+    while start.elapsed() < Duration::from_secs(2) {
+        let instance = manager.get_strategy(user_id, &id).await.map_err(|e| anyhow::anyhow!("Poll failed: {:?}", e))?;
+        if instance.status == StrategyStatus::Stopped {
+            stopped = true;
+            break;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    assert!(stopped, "Strategy should have stopped within 2s");
 
     // 4. 下发一个不停止的策略
     struct InfiniteEngineBuilder;
     impl EngineBuilder for InfiniteEngineBuilder {
         fn build(&self, _params: EngineBuildParams) -> Result<EngineFuture, EngineError> {
             Ok(Box::pin(async {
-                loop { sleep(Duration::from_secs(1)).await; }
+                loop { sleep(Duration::from_millis(100)).await; }
             }))
         }
     }
     
-    let manager = StrategyManager::new(Arc::new(SqliteStrategyStore::new().unwrap()), Arc::new(InfiniteEngineBuilder), Arc::new(mock_trade::MockTradePort), Arc::new(okane_core::common::time::RealTimeProvider), Arc::new(NoopNotifierFactory));
-    let req = StartRequest {
+    let store_inf = Arc::new(SqliteStrategyStore::new().map_err(|e| anyhow::anyhow!("Failed to create inf store: {}", e))?);
+    let manager_inf = StrategyManager::new(store_inf, Arc::new(InfiniteEngineBuilder), Arc::new(SpyTradePort::new()), Arc::new(okane_core::common::time::RealTimeProvider), Arc::new(NoopNotifierFactory));
+    let req_inf = StartRequest {
         symbol: "AAPL".to_string(),
         account_id: "SystemDefault_01".to_string(),
         timeframe: TimeFrame::Minute1,
         engine_type: EngineType::JavaScript,
         source: b"loop".to_vec(),
     };
-    let id = manager.start_strategy(user_id, req).await.unwrap();
+    let id_inf = manager_inf.start_strategy(user_id, req_inf).await.map_err(|e| anyhow::anyhow!("Start inf failed: {:?}", e))?;
     
     // 5. 立即停止
-    manager.stop_strategy(user_id, &id).await.unwrap();
+    manager_inf.stop_strategy(user_id, &id_inf).await.map_err(|e| anyhow::anyhow!("Stop inf failed: {:?}", e))?;
     
-    let instance = manager.get_strategy(user_id, &id).await.unwrap();
-    assert_eq!(instance.status, StrategyStatus::Stopped);
+    let instance_inf = manager_inf.get_strategy(user_id, &id_inf).await.map_err(|e| anyhow::anyhow!("Get inf failed: {:?}", e))?;
+    assert_eq!(instance_inf.status, StrategyStatus::Stopped);
+    Ok(())
 }

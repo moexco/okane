@@ -26,19 +26,19 @@ impl Stock for HistoricalMockStock {
     fn identity(&self) -> &StockIdentity {
         &self.identity
     }
-    fn current_price(&self) -> Option<Decimal> {
-        self.history.last().map(|c| c.close)
+    fn current_price(&self) -> Result<Option<Decimal>, MarketError> {
+        Ok(self.history.last().map(|c| c.close))
     }
-    fn latest_candle(&self, _: TimeFrame) -> Option<Candle> { None }
-    fn last_closed_candle(&self, _: TimeFrame) -> Option<Candle> { None }
+    fn latest_candle(&self, _: TimeFrame) -> Result<Option<Candle>, MarketError> { Ok(None) }
+    fn last_closed_candle(&self, _: TimeFrame) -> Result<Option<Candle>, MarketError> { Ok(None) }
     fn status(&self) -> StockStatus { StockStatus::Online }
-    fn subscribe(&self, _: TimeFrame) -> CandleStream {
+    fn subscribe(&self, _: TimeFrame) -> Result<CandleStream, MarketError> {
         let (_tx, rx) = mpsc::unbounded_channel::<Candle>();
         let s = async_stream::stream! {
             let mut rx = rx;
             while let Some(c) = rx.recv().await { yield c; }
         };
-        Box::pin(s)
+        Ok(Box::pin(s))
     }
     async fn fetch_history(
         &self,
@@ -67,8 +67,10 @@ impl Market for HistoricalMarket {
 
 
 #[tokio::test]
-async fn test_end_to_end_backtest_with_time_travel() {
-    let base_time = Utc.with_ymd_and_hms(2025, 1, 1, 9, 30, 0).unwrap();
+async fn test_end_to_end_backtest_with_time_travel() -> anyhow::Result<()> {
+    let base_time = Utc.with_ymd_and_hms(2025, 1, 1, 9, 30, 0)
+        .single()
+        .ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
     
     // 造 3 根 K 线:
     // T0: 开盘 100，收盘 110
@@ -89,7 +91,7 @@ async fn test_end_to_end_backtest_with_time_travel() {
     let account_manager = Arc::new(AccountManager::new());
     
     let account_id = AccountId("test-account".to_string());
-    account_manager.ensure_account_exists(account_id.clone(), Decimal::from_str_exact("10000.0").unwrap());
+    account_manager.ensure_account_exists(account_id.clone(), Decimal::from_str_exact("10000.0").map_err(|e| anyhow::anyhow!(e))?);
 
     let pending_port = Arc::new(okane_store::pending_order::MemoryPendingOrderStore::new());
     let matcher = std::sync::Arc::new(okane_trade::matcher::LocalMatchEngine::new(Decimal::ZERO));
@@ -100,9 +102,11 @@ async fn test_end_to_end_backtest_with_time_travel() {
     let driver = BacktestDriver::new(market.clone(), trade_service.clone(), fake_clock.clone());
     
     // 运行整个回测
-    driver.run("VOO", TimeFrame::Minute1, base_time, 3).await.unwrap();
+    driver.run("VOO", TimeFrame::Minute1, base_time, 3).await.map_err(|e| anyhow::anyhow!(e))?;
+
 
     // 检查最终账户流水状态
-    let snapshot = account_manager.snapshot(&account_id).await.unwrap();
+    let snapshot = account_manager.snapshot(&account_id).await.map_err(|e| anyhow::anyhow!(e))?;
     tracing::info!("Final snapshot: {:?}", snapshot);
+    Ok(())
 }

@@ -2,3 +2,38 @@
 resolver = "2"
 members = ["crates/*", "examples/*"]
 exclude = ["examples/js-strategy-demo"]
+
+[workspace.lints.clippy]
+# 拦截 let _ = 忽略 Result/Option 的情况
+let_underscore_must_use = "warn"
+# 拦截未 await 的 Future
+let_underscore_future = "warn"
+# 禁用 .expect()
+expect_used = "warn"
+# 禁用 .unwrap()
+unwrap_used = "warn"
+# 甚至可以把 panic 标记为警告
+panic = "warn"
+unwrap_or_default = "warn"
+result_filter_map = "warn"
+
+# 拦截所有可以无损转换的 as（例如 u32 as u64），强制改为使用更安全的 .into()
+cast_lossless = "warn"
+
+# 拦截可能导致高位截断的强转（例如 u64 as u32），防止因数值过大导致数据丢失
+cast_possible_truncation = "warn"
+
+# 拦截可能导致符号位翻转的强转（例如大的 u32 as i32），防止正数意外变为负数
+cast_possible_wrap = "warn"
+
+# 拦截从整数到浮点数可能导致的精度丢失（例如 i64 as f32），防止大额数值不准确
+cast_precision_loss = "warn"
+
+# 拦截有符号转无符号的强转（例如 i8 as u8），防止负数转换后变成巨大的正数
+cast_sign_loss = "warn"
+
+# 拦截使用 as 进行的指针类型转换，强制改用语义更明确的 .cast() 方法
+ptr_as_ptr = "warn"
+
+# 拦截将函数指针转换为数值类型的行为，防止底层的内存地址非法操作
+fn_to_numeric_cast = "warn"

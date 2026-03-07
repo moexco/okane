@@ -3,6 +3,9 @@ name = "okane-manager"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 chrono = { version = "0.4.43", features = ["serde"] }
 dashmap = "6.1.0"
@@ -17,8 +20,10 @@ tokio = { version = "1.49.0", features = ["rt", "sync"] }
 tracing = "0.1.43"
 uuid = { version = "1.16.0", features = ["v4"] }
 [dev-dependencies]
+okane-core = { version = "0.1.0", path = "../core", features = ["test-utils"] }
 tempfile = "3.10.1"
-tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread", "time"] }
 okane-store = { version = "0.1.0", path = "../store" }
 okane-engine = { version = "0.1.0", path = "../engine" }
 async-trait = "0.1.89"
+anyhow = "1.0.102"

@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use okane_cache::mem::MemCache;
 use okane_core::cache::port::CacheExt;
 use okane_core::common::{Stock as StockIdentity, TimeFrame};
+use okane_core::error::CoreError;
 use okane_core::market::entity::Candle;
 use okane_core::market::error::MarketError;
 use okane_core::market::port::{CandleStream, MarketDataProvider, Stock, StockStatus};
@@ -151,32 +152,22 @@ impl StockInner {
     ///
     /// # Returns
     /// 无。
-    pub async fn update_and_broadcast(&self, candle: Candle, timeframe: TimeFrame) {
+    pub async fn update_and_broadcast(&self, candle: Candle, timeframe: TimeFrame) -> Result<(), MarketError> {
         // 更新价格和快照
-        if let Err(e) = self.cache.set("p", &candle.close).await {
-            error!("Failed to cache price for {}: {}", self.identity.symbol, e);
-        }
-        if let Err(e) = self.cache.set(Self::l_key(timeframe), &candle).await {
-            error!("Failed to cache latest candle for {}: {}", self.identity.symbol, e);
-        }
+        self.cache.set("p", &candle.close).await.map_err(|e| MarketError::Unknown(format!("Cache error: {}", e)))?;
+        self.cache.set(Self::l_key(timeframe), &candle).await.map_err(|e| MarketError::Unknown(format!("Cache error: {}", e)))?;
 
         // 更新滚动缓冲区 (k:rollingbuff)
         let key = Self::k_key(timeframe);
-        let mut buffer = self
-            .cache
-            .get::<RollingBuffer<Candle>>(key)
-            .await
-            .unwrap_or_default()
-            .unwrap_or_else(|| RollingBuffer::new(DEFAULT_CANDLE_BUFFER_SIZE));
+        let mut buffer = match self.cache.get::<RollingBuffer<Candle>>(key).await {
+            Ok(Some(b)) => b,
+            Ok(None) | Err(_) => RollingBuffer::new(DEFAULT_CANDLE_BUFFER_SIZE),
+        };
         buffer.push(candle.clone());
-        if let Err(e) = self.cache.set(key, &buffer).await {
-            error!("Failed to cache rolling buffer for {}: {}", self.identity.symbol, e);
-        }
+        self.cache.set(key, &buffer).await.map_err(|e| MarketError::Unknown(format!("Cache error: {}", e)))?;
 
         if candle.is_final {
-            if let Err(e) = self.cache.set(Self::lc_key(timeframe), &candle).await {
-                error!("Failed to cache last closed candle for {}: {}", self.identity.symbol, e);
-            }
+            self.cache.set(Self::lc_key(timeframe), &candle).await.map_err(|e| MarketError::Unknown(format!("Cache error: {}", e)))?;
             let store = self.store.clone();
             let id = self.identity.clone();
             let c = candle.clone();
@@ -187,12 +178,13 @@ impl StockInner {
             });
         }
 
-        let channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
+        let channels = self.channels.lock().map_err(|e| MarketError::Unknown(format!("Lock poisoned: {}", e)))?;
         if let Some(tx) = channels.get(&timeframe)
             && let Err(e) = tx.send(candle)
         {
             error!("Failed to send candle for timeframe {:?}: {}", timeframe, e);
         }
+        Ok(())
     }
 }
 
@@ -243,8 +235,11 @@ impl Stock for StockInner {
     ///
     /// # Returns
     /// 价格选项。
-    fn current_price(&self) -> Option<Decimal> {
-        futures::executor::block_on(async { self.cache.get::<Decimal>("p").await.ok().flatten() })
+    fn current_price(&self) -> Result<Option<Decimal>, MarketError> {
+        futures::executor::block_on(async { 
+            self.cache.get::<Decimal>("p").await
+                .map_err(|e| MarketError::Unknown(format!("Cache error: {}", e)))
+        })
     }
 
     /// # Summary
@@ -258,13 +253,12 @@ impl Stock for StockInner {
     ///
     /// # Returns
     /// K 线选项。
-    fn latest_candle(&self, timeframe: TimeFrame) -> Option<Candle> {
+    fn latest_candle(&self, timeframe: TimeFrame) -> Result<Option<Candle>, MarketError> {
         futures::executor::block_on(async {
             self.cache
                 .get::<Candle>(Self::l_key(timeframe))
                 .await
-                .ok()
-                .flatten()
+                .map_err(|e| MarketError::Unknown(format!("Cache error: {}", e)))
         })
     }
 
@@ -279,13 +273,12 @@ impl Stock for StockInner {
     ///
     /// # Returns
     /// K 线选项。
-    fn last_closed_candle(&self, timeframe: TimeFrame) -> Option<Candle> {
+    fn last_closed_candle(&self, timeframe: TimeFrame) -> Result<Option<Candle>, MarketError> {
         futures::executor::block_on(async {
             self.cache
                 .get::<Candle>(Self::lc_key(timeframe))
                 .await
-                .ok()
-                .flatten()
+                .map_err(|e| MarketError::Unknown(format!("Cache error: {}", e)))
         })
     }
 
@@ -300,22 +293,24 @@ impl Stock for StockInner {
     ///
     /// # Returns
     /// 异步行情流。
-    fn subscribe(&self, timeframe: TimeFrame) -> CandleStream {
-        let mut channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
-        let tx = channels.entry(timeframe).or_insert_with(|| {
-            let (tx, _) = broadcast::channel(128);
-            tx
-        });
+    fn subscribe(&self, timeframe: TimeFrame) -> Result<CandleStream, MarketError> {
+        let (_tx, rx) = {
+            let mut channels = self.channels.lock().map_err(|_| MarketError::Core(CoreError::Poisoned("channels lock".to_string())))?;
+            let tx = channels.entry(timeframe).or_insert_with(|| {
+                let (tx, _) = broadcast::channel(128);
+                tx
+            });
+            (tx.clone(), tx.subscribe())
+        };
 
-        let rx = tx.subscribe();
         let stream = async_stream::stream! {
-            let mut rx = rx;
+            let mut rx: broadcast::Receiver<Candle> = rx;
             while let Ok(candle) = rx.recv().await {
                 yield candle;
             }
         };
 
-        Box::pin(stream)
+        Ok(Box::pin(stream))
     }
 
     /// # Summary
@@ -439,7 +434,9 @@ impl StockFetcher {
         {
             while let Some(candle) = futures::StreamExt::next(&mut stream).await {
                 if let Some(stock) = self.inner.upgrade() {
-                    stock.update_and_broadcast(candle, TimeFrame::Minute1).await;
+                    if let Err(e) = stock.update_and_broadcast(candle, TimeFrame::Minute1).await {
+                        error!("Fetcher: Failed to update stock: {}", e);
+                    }
                 } else {
                     break;
                 }
@@ -524,18 +521,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_stock_aggregate_lifecycle() {
+    async fn test_stock_aggregate_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
         let provider = Arc::new(MockProvider);
         let store = Arc::new(MockStore);
         let market = MarketImpl::new(provider, store);
         let symbol = "TEST";
         {
-            let stock = market.get_stock(symbol).await.expect("Should get stock");
+            let stock = market.get_stock(symbol).await?;
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-            assert!(stock.current_price().is_some());
+            assert!(stock.current_price()?.is_some());
             assert_eq!(market.active_count(), 1);
         }
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         assert_eq!(market.active_count(), 0);
+        Ok(())
     }
 }

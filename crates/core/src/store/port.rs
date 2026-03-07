@@ -164,6 +164,26 @@ pub trait SystemStore: Send + Sync {
     /// 存在返回 `Some(User)`，否则返回 `None`。
     async fn get_user(&self, id: &str) -> Result<Option<User>, StoreError>;
 
+    // --- 账户从属 ---
+
+    /// 获取子账户的所有者 user_id
+    async fn get_account_owner(&self, account_id: &str) -> Result<Option<String>, StoreError>;
+
+    /// 将新创建的账户绑定给目标用户
+    async fn bind_account(&self, user_id: &str, account_id: &str) -> Result<(), StoreError>;
+
+    /// 获取某用户拥有的所有金融账号 ID 列表
+    async fn get_user_accounts(&self, user_id: &str) -> Result<Vec<String>, StoreError>;
+
+    /// 快速验证某用户是否对子账户具有所有权
+    async fn verify_account_ownership(&self, user_id: &str, account_id: &str) -> Result<bool, StoreError> {
+        if let Some(owner) = self.get_account_owner(account_id).await? {
+            Ok(owner == user_id)
+        } else {
+            Ok(false)
+        }
+    }
+
     /// # Summary
     /// 保存或更新用户信息。
     ///

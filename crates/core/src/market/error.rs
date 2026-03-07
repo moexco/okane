@@ -1,4 +1,5 @@
 use thiserror::Error;
+use crate::error::CoreError;
 
 /// # Summary
 /// 市场数据域错误枚举，处理网络、解析及数据缺失等问题。
@@ -16,6 +17,9 @@ pub enum MarketError {
     // 请求的数据未找到 (404 或内容为空)
     #[error("Data not found")]
     NotFound,
+    // 内核底层错误（如锁污染）
+    #[error("Core error: {0}")]
+    Core(#[from] CoreError),
     // 未知或未分类的错误
     #[error("Unknown error: {0}")]
     Unknown(String),

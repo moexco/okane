@@ -1,29 +1,16 @@
+use crate::bridge::AsyncBridge;
 use crate::runtime::{EngineBase, PluginContext};
 use futures::StreamExt;
 use okane_core::common::TimeFrame;
 use okane_core::common::time::TimeProvider;
 use okane_core::engine::error::EngineError;
 use okane_core::market::port::Market;
+use okane_core::market::error::MarketError;
+use okane_core::market::entity::Candle;
 use rquickjs::{AsyncContext, AsyncRuntime, Function, Object, Value, async_with};
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
-/// 辅助函数：在 QuickJS 同步环境（运行于 LocalSet）中安全地等待异步任务完成
-///
-/// 详述：由于 JsEngine 在 tokio::task::LocalSet 中执行，不能调用 tokio::task::block_in_place
-/// (会 panic: can call blocking only when running on the multi-threaded runtime)。
-/// 为了在 sync 的 host 绑定中执行 async 代码，我们新建一个 OS 线程去执行 `tokio::runtime::Handle::block_on`，
-/// 并使用 `std::thread::scope` 安全借用栈上的参数。
-fn block_on_async<F, R>(future: F) -> R
-where
-    F: std::future::Future<Output = R> + Send,
-    R: Send,
-{
-    let handle = tokio::runtime::Handle::current();
-    std::thread::scope(|s| {
-        s.spawn(move || handle.block_on(future)).join().unwrap_or_else(|_| panic!("Background thread panicked during block_on_async"))
-    })
-}
 
 /// # Summary
 /// 基于 QuickJS 的策略执行引擎。
@@ -37,6 +24,7 @@ pub struct JsEngine {
     trade_port: Arc<dyn okane_core::trade::port::TradePort>,
     time_provider: Arc<dyn TimeProvider>,
     notifier: Option<Arc<dyn okane_core::notify::port::Notifier>>,
+    bridge: Arc<AsyncBridge>,
 }
 
 const JS_MEM_LIMIT: usize = 32 * 1024 * 1024;
@@ -56,13 +44,14 @@ impl JsEngine {
         trade_port: Arc<dyn okane_core::trade::port::TradePort>,
         time_provider: Arc<dyn TimeProvider>,
         notifier: Option<Arc<dyn okane_core::notify::port::Notifier>>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, EngineError> {
+        Ok(Self {
             base: EngineBase::new(market),
             trade_port,
             time_provider,
             notifier,
-        }
+            bridge: Arc::new(AsyncBridge::new()?),
+        })
     }
 
     /// # Summary
@@ -104,7 +93,7 @@ impl JsEngine {
 
         let ctx = AsyncContext::full(&rt)
             .await
-            .map_err(|e| EngineError::Plugin(e.to_string()))?;
+            .map_err(|_| EngineError::Plugin("log set failed".to_string()))?;
 
         // 共享的插件上下文
         let plugin_ctx = Arc::new(Mutex::new(PluginContext {
@@ -113,14 +102,17 @@ impl JsEngine {
             account_id: account_id.to_string(),
             time_provider: self.time_provider.clone(),
             notifier: self.notifier.clone(),
+            bridge: self.bridge.clone(),
         }));
 
         // 在 JS 全局注入 host 对象并加载策略源码
         let js_source_owned = js_source.to_string();
         let plugin_ctx_clone = plugin_ctx.clone();
 
+        let bridge_clone = self.bridge.clone();
+
         async_with!(ctx => |ctx| {
-            if let Err(e) = Self::setup_host_and_load(&ctx, &js_source_owned, plugin_ctx_clone) {
+            if let Err(e) = Self::setup_host_and_load(&ctx, &js_source_owned, plugin_ctx_clone, bridge_clone) {
                 error!("JsEngine: Failed to setup host or load strategy: {}", e);
             }
         })
@@ -133,7 +125,7 @@ impl JsEngine {
         while let Some(candle) = stream.next().await {
             // 序列化 K 线数据
             let candle_json = serde_json::to_string(&candle)
-                .map_err(|e| EngineError::Plugin(e.to_string()))?;
+                .map_err(|_| EngineError::Plugin("log set failed".to_string()))?;
 
             // 调用 JS 的 onCandle 函数 (void — 策略通过 host.* API 直接执行动作)
             let candle_json_clone = candle_json.clone();
@@ -164,6 +156,7 @@ impl JsEngine {
         ctx: &rquickjs::Ctx<'_>,
         js_source: &str,
         plugin_ctx: Arc<Mutex<PluginContext>>,
+        bridge: Arc<AsyncBridge>,
     ) -> Result<(), EngineError> {
         let globals = ctx.globals();
         let host = Object::new(ctx.clone()).map_err(|e| EngineError::Plugin(e.to_string()))?;
@@ -179,102 +172,109 @@ impl JsEngine {
                     _ => debug!("JS [DEBUG]: {}", msg),
                 }
             })
-            .map_err(|e| EngineError::Plugin(e.to_string()))?,
+            .map_err(|_| EngineError::Plugin("log setup failed".to_string()))?,
         )
-        .map_err(|e| EngineError::Plugin(e.to_string()))?;
+        .map_err(|_| EngineError::Plugin("log set failed".to_string()))?;
 
         // host.now() -> number (milliseconds)
         let ctx_for_now = plugin_ctx.clone();
         host.set(
             "now",
-            Function::new(ctx.clone(), move || -> i64 {
-                let ctx = ctx_for_now.lock().unwrap_or_else(|e| e.into_inner());
-                ctx.time_provider.now().timestamp_millis()
+            Function::new(ctx.clone(), move || -> Result<i64, rquickjs::Error> {
+                let ctx = ctx_for_now.lock().map_err(|_| rquickjs::Error::Exception)?;
+                ctx.time_provider.now()
+                    .map(|t: chrono::DateTime<chrono::Utc>| t.timestamp_millis())
+                    .map_err(|_| rquickjs::Error::Exception)
             })
-            .map_err(|e| EngineError::Plugin(e.to_string()))?,
+            .map_err(|_| EngineError::Plugin("log setup failed".to_string()))?,
         )
-        .map_err(|e| EngineError::Plugin(e.to_string()))?;
+        .map_err(|_| EngineError::Plugin("log set failed".to_string()))?;
 
         // host.fetchHistory(symbol: string, tf: string, limit: number) -> string (JSON)
         let ctx_for_fetch = plugin_ctx.clone();
+        let bridge_for_fetch = bridge.clone();
         host.set(
             "fetchHistory",
-            Function::new(ctx.clone(), move |symbol: String, tf: String, limit: i32| -> String {
-                let ctx_mutex = ctx_for_fetch.lock().unwrap_or_else(|e| e.into_inner());
-                let end_at = ctx_mutex.time_provider.now();
+            Function::new(ctx.clone(), move |symbol: String, tf: String, limit: i32| -> Result<String, rquickjs::Error> {
+                let ctx_mutex = ctx_for_fetch.lock().map_err(|_| rquickjs::Error::Exception)?;
+                let end_at = ctx_mutex.time_provider.now().map_err(|_| rquickjs::Error::Exception)?;
                 let market = ctx_mutex.market.clone();
                 drop(ctx_mutex);
 
                 let tf_parsed = match tf.parse::<TimeFrame>() {
                     Ok(t) => t,
-                    Err(e) => return format!("{{\"error\": \"{}\"}}", e),
+                    Err(e) => return Ok(serde_json::json!({"error": e.to_string()}).to_string()),
                 };
 
-                // 阻塞式桥接异步调用
-                match block_on_async(async {
-                    let stock = market.get_stock(&symbol).await.map_err(|e| e.to_string())?;
+                match bridge_for_fetch.call(async move {
+                    let stock = market.get_stock(&symbol).await.map_err(|e: MarketError| e.to_string())?;
                     let end = end_at;
                     let duration = tf_parsed.duration() * (limit * 2);
                     let start = end - duration;
 
-                    stock
+                    let h = stock
                         .fetch_history(tf_parsed, start, end)
                         .await
-                        .map(|h| h.into_iter().rev().take(limit as usize).rev().collect::<Vec<_>>())
-                        .map_err(|e| e.to_string())
+                        .map_err(|e: MarketError| e.to_string())?;
+                    
+                    let usize_limit = usize::try_from(limit).map_err(|e| format!("Invalid limit: {}", e))?;
+                    Ok::<Vec<Candle>, String>(h.into_iter().rev().take(usize_limit).rev().collect::<Vec<_>>())
                 }) {
-                    Ok(candles) => serde_json::to_string(&candles).unwrap_or_else(|e| {
-                        format!("{{\"error\": \"{}\"}}", e)
-                    }),
-                    Err(e) => format!("{{\"error\": \"{}\"}}", e),
+                    Ok(Ok(candles)) => Ok(serde_json::to_string(&candles).map_err(|_| rquickjs::Error::Exception)?),
+                    Ok(Err(e)) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
+                    Err(e) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
                 }
             })
-            .map_err(|e| EngineError::Plugin(e.to_string()))?,
+            .map_err(|_| EngineError::Plugin("log setup failed".to_string()))?,
         )
-        .map_err(|e| EngineError::Plugin(e.to_string()))?;
+        .map_err(|_| EngineError::Plugin("log set failed".to_string()))?;
 
         // host.notify(subject: string, content: string) -> string ("ok" | error)
         let ctx_for_notify = plugin_ctx.clone();
+        let bridge_for_notify = bridge.clone();
         host.set(
             "notify",
-            Function::new(ctx.clone(), move |subject: String, content: String| -> String {
-                let ctx_mutex = ctx_for_notify.lock().unwrap_or_else(|e| e.into_inner());
+            Function::new(ctx.clone(), move |subject: String, content: String| -> Result<String, rquickjs::Error> {
+                let ctx_mutex = ctx_for_notify.lock().map_err(|_| rquickjs::Error::Exception)?;
                 let notifier = ctx_mutex.notifier.clone();
                 drop(ctx_mutex);
 
                 match notifier {
                     Some(n) => {
-                        match block_on_async(async {
-                            n.notify(&subject, &content).await
+                        match bridge_for_notify.call(async move {
+                            n.notify(&subject, &content).await.map_err(|e| e.to_string())
                         }) {
-                            Ok(()) => "ok".to_string(),
-                            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+                            Ok(Ok(())) => Ok("ok".to_string()),
+                            Ok(Err(e)) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
+                            Err(e) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
                         }
                     }
                     None => {
                         warn!("JS called host.notify but no notifier is configured");
-                        "{\"error\": \"notifier not configured\"}".to_string()
+                        Ok(serde_json::json!({"error": "notifier not configured"}).to_string())
                     }
                 }
             })
-            .map_err(|e| EngineError::Plugin(e.to_string()))?,
+            .map_err(|_| EngineError::Plugin("log setup failed".to_string()))?,
         )
-        .map_err(|e| EngineError::Plugin(e.to_string()))?;
+        .map_err(|_| EngineError::Plugin("log set failed".to_string()))?;
 
-        // host.buy(symbol: string, price: number | null, volume: number) -> string (OrderId | Error)
+        // host.buy(symbol: string, price: string | null, volume: string) -> string (OrderId | Error)
         let ctx_for_buy = plugin_ctx.clone();
+        let bridge_for_buy = bridge.clone();
         host.set(
             "buy",
-            Function::new(ctx.clone(), move |symbol: String, price: Option<f64>, volume: f64| -> String {
-                let ctx_mutex = ctx_for_buy.lock().unwrap_or_else(|e| e.into_inner());
+            Function::new(ctx.clone(), move |symbol: String, price: Option<String>, volume: String| -> Result<String, rquickjs::Error> {
+                let ctx_mutex = ctx_for_buy.lock().map_err(|_| rquickjs::Error::Exception)?;
                 let trade_port = ctx_mutex.trade_port.clone();
                 let account_id = ctx_mutex.account_id.clone();
                 drop(ctx_mutex);
 
-                info!("host.buy: symbol={}, price={:?}, volume={}", symbol, price, volume);
-
-                let req_price = price.and_then(rust_decimal::Decimal::from_f64_retain);
-                let req_vol = rust_decimal::Decimal::from_f64_retain(volume).unwrap_or(rust_decimal::Decimal::ZERO);
+                let req_price = match price {
+                    Some(p) => Some(p.parse::<rust_decimal::Decimal>().map_err(|_| rquickjs::Error::Exception)?),
+                    None => None,
+                };
+                let req_vol = volume.parse::<rust_decimal::Decimal>().map_err(|_| rquickjs::Error::Exception)?;
                 
                 let order = okane_core::trade::entity::Order::new(
                     okane_core::trade::entity::OrderId(uuid::Uuid::new_v4().to_string()),
@@ -286,31 +286,34 @@ impl JsEngine {
                     0,
                 );
 
-                match block_on_async(async {
-                    trade_port.submit_order(order).await
+                match bridge_for_buy.call(async move {
+                    trade_port.submit_order(order).await.map_err(|e| e.to_string())
                 }) {
-                    Ok(oid) => oid.0,
-                    Err(e) => format!("{{\"error\": \"{}\"}}", e),
+                    Ok(Ok(oid)) => Ok(oid.0),
+                    Ok(Err(e)) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
+                    Err(e) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
                 }
             })
-            .map_err(|e| EngineError::Plugin(e.to_string()))?,
+            .map_err(|_| EngineError::Plugin("log setup failed".to_string()))?,
         )
-        .map_err(|e| EngineError::Plugin(e.to_string()))?;
+        .map_err(|_| EngineError::Plugin("log set failed".to_string()))?;
 
-        // host.sell(symbol: string, price: number | null, volume: number) -> string (OrderId | Error)
+        // host.sell(symbol: string, price: string | null, volume: string) -> string (OrderId | Error)
         let ctx_for_sell = plugin_ctx.clone();
+        let bridge_for_sell = bridge.clone();
         host.set(
             "sell",
-            Function::new(ctx.clone(), move |symbol: String, price: Option<f64>, volume: f64| -> String {
-                let ctx_mutex = ctx_for_sell.lock().unwrap_or_else(|e| e.into_inner());
+            Function::new(ctx.clone(), move |symbol: String, price: Option<String>, volume: String| -> Result<String, rquickjs::Error> {
+                let ctx_mutex = ctx_for_sell.lock().map_err(|_| rquickjs::Error::Exception)?;
                 let trade_port = ctx_mutex.trade_port.clone();
                 let account_id = ctx_mutex.account_id.clone();
                 drop(ctx_mutex);
 
-                info!("host.sell: symbol={}, price={:?}, volume={}", symbol, price, volume);
-
-                let req_price = price.and_then(rust_decimal::Decimal::from_f64_retain);
-                let req_vol = rust_decimal::Decimal::from_f64_retain(volume).unwrap_or(rust_decimal::Decimal::ZERO);
+                let req_price = match price {
+                    Some(p) => Some(p.parse::<rust_decimal::Decimal>().map_err(|_| rquickjs::Error::Exception)?),
+                    None => None,
+                };
+                let req_vol = volume.parse::<rust_decimal::Decimal>().map_err(|_| rquickjs::Error::Exception)?;
                 
                 let order = okane_core::trade::entity::Order::new(
                     okane_core::trade::entity::OrderId(uuid::Uuid::new_v4().to_string()),
@@ -322,91 +325,91 @@ impl JsEngine {
                     0,
                 );
 
-                match block_on_async(async {
-                    trade_port.submit_order(order).await
+                match bridge_for_sell.call(async move {
+                    trade_port.submit_order(order).await.map_err(|e| e.to_string())
                 }) {
-                    Ok(oid) => oid.0,
-                    Err(e) => format!("{{\"error\": \"{}\"}}", e),
+                    Ok(Ok(oid)) => Ok(oid.0),
+                    Ok(Err(e)) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
+                    Err(e) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
                 }
             })
-            .map_err(|e| EngineError::Plugin(e.to_string()))?,
+            .map_err(|_| EngineError::Plugin("log setup failed".to_string()))?,
         )
-        .map_err(|e| EngineError::Plugin(e.to_string()))?;
+        .map_err(|_| EngineError::Plugin("log set failed".to_string()))?;
 
         // host.getAccount() -> string (JSON AccountSnapshot)
-        // 返回当前策略绑定账户的资金和持仓快照
         let ctx_for_get_account = plugin_ctx.clone();
+        let bridge_for_get_account = bridge.clone();
         host.set(
             "getAccount",
-            Function::new(ctx.clone(), move || -> String {
-                let ctx_mutex = ctx_for_get_account.lock().unwrap_or_else(|e| e.into_inner());
+            Function::new(ctx.clone(), move || -> Result<String, rquickjs::Error> {
+                let ctx_mutex = ctx_for_get_account.lock().map_err(|_| rquickjs::Error::Exception)?;
                 let trade_port = ctx_mutex.trade_port.clone();
                 let account_id = ctx_mutex.account_id.clone();
                 drop(ctx_mutex);
 
-                match block_on_async(async {
-                    trade_port.get_account(okane_core::trade::entity::AccountId(account_id)).await
+                match bridge_for_get_account.call(async move {
+                    trade_port.get_account(okane_core::trade::entity::AccountId(account_id)).await.map_err(|e| e.to_string())
                 }) {
-                    Ok(snapshot) => serde_json::to_string(&snapshot).unwrap_or_else(|e| {
-                        format!("{{\"error\": \"{}\"}}", e)
-                    }),
-                    Err(e) => format!("{{\"error\": \"{}\"}}", e),
+                    Ok(Ok(snapshot)) => Ok(serde_json::to_string(&snapshot).map_err(|_| rquickjs::Error::Exception)?),
+                    Ok(Err(e)) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
+                    Err(e) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
                 }
             })
-            .map_err(|e| EngineError::Plugin(e.to_string()))?,
+            .map_err(|_| EngineError::Plugin("log setup failed".to_string()))?,
         )
-        .map_err(|e| EngineError::Plugin(e.to_string()))?;
+        .map_err(|_| EngineError::Plugin("log set failed".to_string()))?;
 
         // host.getOrder(orderId: string) -> string (JSON Order | null)
-        // 查询单笔订单详情
         let ctx_for_get_order = plugin_ctx.clone();
+        let bridge_for_get_order = bridge.clone();
         host.set(
             "getOrder",
-            Function::new(ctx.clone(), move |order_id: String| -> String {
-                let ctx_mutex = ctx_for_get_order.lock().unwrap_or_else(|e| e.into_inner());
+            Function::new(ctx.clone(), move |order_id: String| -> Result<String, rquickjs::Error> {
+                let ctx_mutex = ctx_for_get_order.lock().map_err(|_| rquickjs::Error::Exception)?;
                 let trade_port = ctx_mutex.trade_port.clone();
                 drop(ctx_mutex);
 
-                match block_on_async(async {
-                    trade_port.get_order(&okane_core::trade::entity::OrderId(order_id)).await
+                match bridge_for_get_order.call(async move {
+                    trade_port.get_order(&okane_core::trade::entity::OrderId(order_id)).await.map_err(|e| e.to_string())
                 }) {
-                    Ok(Some(order)) => serde_json::to_string(&order).unwrap_or_else(|e| {
-                        format!("{{\"error\": \"{}\"}}", e)
-                    }),
-                    Ok(None) => "null".to_string(),
-                    Err(e) => format!("{{\"error\": \"{}\"}}", e),
+                    Ok(Ok(Some(order))) => Ok(serde_json::to_string(&order).map_err(|_| rquickjs::Error::Exception)?),
+                    Ok(Ok(None)) => Ok("null".to_string()),
+                    Ok(Err(e)) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
+                    Err(e) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
                 }
             })
-            .map_err(|e| EngineError::Plugin(e.to_string()))?,
+            .map_err(|_| EngineError::Plugin("log setup failed".to_string()))?,
         )
-        .map_err(|e| EngineError::Plugin(e.to_string()))?;
+        .map_err(|_| EngineError::Plugin("log set failed".to_string()))?;
 
         // host.cancelOrder(orderId: string) -> string ("ok" | error)
-        // 撤销一笔尚未完全成交的订单
         let ctx_for_cancel = plugin_ctx.clone();
+        let bridge_for_cancel = bridge.clone();
         host.set(
             "cancelOrder",
-            Function::new(ctx.clone(), move |order_id: String| -> String {
-                let ctx_mutex = ctx_for_cancel.lock().unwrap_or_else(|e| e.into_inner());
+            Function::new(ctx.clone(), move |order_id: String| -> Result<String, rquickjs::Error> {
+                let ctx_mutex = ctx_for_cancel.lock().map_err(|_| rquickjs::Error::Exception)?;
                 let trade_port = ctx_mutex.trade_port.clone();
                 drop(ctx_mutex);
 
                 info!("host.cancelOrder: orderId={}", order_id);
 
-                match block_on_async(async {
-                    trade_port.cancel_order(okane_core::trade::entity::OrderId(order_id)).await
+                match bridge_for_cancel.call(async move {
+                    trade_port.cancel_order(okane_core::trade::entity::OrderId(order_id)).await.map_err(|e| e.to_string())
                 }) {
-                    Ok(()) => "ok".to_string(),
-                    Err(e) => format!("{{\"error\": \"{}\"}}", e),
+                    Ok(Ok(())) => Ok("ok".to_string()),
+                    Ok(Err(e)) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
+                    Err(e) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
                 }
             })
-            .map_err(|e| EngineError::Plugin(e.to_string()))?,
+            .map_err(|_| EngineError::Plugin("log setup failed".to_string()))?,
         )
-        .map_err(|e| EngineError::Plugin(e.to_string()))?;
+        .map_err(|_| EngineError::Plugin("log set failed".to_string()))?;
 
         globals
             .set("host", host)
-            .map_err(|e| EngineError::Plugin(e.to_string()))?;
+            .map_err(|_| EngineError::Plugin("log set failed".to_string()))?;
 
         // 加载策略源码
         ctx.eval::<Value, _>(js_source)

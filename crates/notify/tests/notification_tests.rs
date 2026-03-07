@@ -13,18 +13,18 @@ use std::env;
 /// 4. 发送测试消息并断言结果。
 #[tokio::test]
 #[ignore] // 默认忽略，仅在手动测试时通过环境变量开启
-async fn test_telegram_notification() {
+async fn test_telegram_notification() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
-    let bot_token = env::var("OKANE_TG_BOT_TOKEN").expect("OKANE_TG_BOT_TOKEN must be set");
-    let chat_id = env::var("OKANE_TG_CHAT_ID").expect("OKANE_TG_CHAT_ID must be set");
+    let bot_token = env::var("OKANE_TG_BOT_TOKEN").map_err(|_| anyhow::anyhow!("OKANE_TG_BOT_TOKEN must be set"))?;
+    let chat_id = env::var("OKANE_TG_CHAT_ID").map_err(|_| anyhow::anyhow!("OKANE_TG_CHAT_ID must be set"))?;
 
     let notifier = TelegramNotifier::new(bot_token, chat_id);
-    let _result = notifier
+    notifier
         .notify("Okane 测试", "这是一条来自 Telegram 集成测试的消息")
-        .await;
+        .await
+        .map_err(|e| anyhow::anyhow!("Telegram notification should succeed: {:?}", e))?;
 
-    // result 已经被修改为 () 或者是 JoinHandle 的 Result，我们只取到了 (),
-    // 因为 notify 内部 spawn 并没有同步等待。原测试逻辑可能存在瑕疵。
+    Ok(())
 }
 
 /// # Summary
@@ -37,19 +37,20 @@ async fn test_telegram_notification() {
 /// 4. 发送测试邮件并断言结果。
 #[tokio::test]
 #[ignore] // 默认忽略
-async fn test_email_notification() {
+async fn test_email_notification() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
-    let host = env::var("OKANE_EMAIL_HOST").expect("OKANE_EMAIL_HOST must be set");
-    let user = env::var("OKANE_EMAIL_USER").expect("OKANE_EMAIL_USER must be set");
-    let pass = env::var("OKANE_EMAIL_PASS").expect("OKANE_EMAIL_PASS must be set");
-    let from = env::var("OKANE_EMAIL_FROM").expect("OKANE_EMAIL_FROM must be set");
-    let to = env::var("OKANE_EMAIL_TO").expect("OKANE_EMAIL_TO must be set");
+    let host = env::var("OKANE_EMAIL_HOST").map_err(|_| anyhow::anyhow!("OKANE_EMAIL_HOST must be set"))?;
+    let user = env::var("OKANE_EMAIL_USER").map_err(|_| anyhow::anyhow!("OKANE_EMAIL_USER must be set"))?;
+    let pass = env::var("OKANE_EMAIL_PASS").map_err(|_| anyhow::anyhow!("OKANE_EMAIL_PASS must be set"))?;
+    let from = env::var("OKANE_EMAIL_FROM").map_err(|_| anyhow::anyhow!("OKANE_EMAIL_FROM must be set"))?;
+    let to = env::var("OKANE_EMAIL_TO").map_err(|_| anyhow::anyhow!("OKANE_EMAIL_TO must be set"))?;
 
-    let notifier = EmailNotifier::new(&host, &user, &pass, &from, &to);
-    let _result = notifier
-        .expect("Failed to initialize EmailNotifier")
+    let notifier = EmailNotifier::new(&host, &user, &pass, &from, &to)
+        .map_err(|e| anyhow::anyhow!("Failed to initialize EmailNotifier: {:?}", e))?;
+    notifier
         .notify("Okane 测试", "这是一条来自 Email 集成测试的消息")
-        .await;
+        .await
+        .map_err(|e| anyhow::anyhow!("Email notification should succeed: {:?}", e))?;
 
-    // 同上，notify 不返回值或返回内部 JoinHandle 的 Result
+    Ok(())
 }

@@ -11,9 +11,9 @@ use crate::types::{ApiResponse, CreateUserRequest, UserResponse};
 use crate::error::ApiError;
 use crate::server::AppState;
 use okane_core::store::port::{User, UserRole};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, utoipa::ToSchema)]
+#[derive(Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UpdateSettingsRequest {
     pub setting_key: String,
     pub setting_value: String,

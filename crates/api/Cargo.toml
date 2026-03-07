@@ -11,6 +11,9 @@ keywords = ["quantitative", "trading", "api", "axum", "openapi"]
 categories = ["web-programming::http-server"]
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 # --- Web 框架 ---
 axum = { version = "0.8", features = ["json"] }
@@ -45,8 +48,11 @@ thiserror = "2"
 bcrypt = "0.18.0"
 chrono = "0.4.44"
 uuid = { version = "1.21.0", features = ["v4"] }
+base64 = "0.22.1"
 
 [dev-dependencies]
+anyhow = "1.0.95"
+okane-core = { version = "0.1.0", path = "../core", features = ["test-utils"] }
 async-trait = "0.1.89"
 okane-engine = { path = "../engine" }
 okane-feed = { path = "../feed" }

@@ -60,13 +60,19 @@ impl TradePort for TradeService {
         let order_id = order.id.clone();
         
         let stock = self.market.get_stock(&order.symbol).await.map_err(|e| {
-            TradeError::BrokerIntegrationError(format!("无法获取行情: {}", e))
+            TradeError::BrokerIntegrationError(format!("Failed to get market data: {}", e))
         })?;
         
-        // FIXME: 如果是停牌、退市或者根本没有最新价，直接拒绝
-        let latest_price = stock.current_price().ok_or_else(|| TradeError::InternalError("股票暂无最新报价".into()))?;
+        // 检查标的状态：停牌、退市等情况直接拒绝
+        let status = stock.status();
+        if status != okane_core::market::port::StockStatus::Online {
+            return Err(TradeError::InternalError(format!("Stock status is {:?}, order rejected", status)));
+        }
 
-        // 预估单价 (限价取限价，市价取最新价)
+        let latest_price = stock.current_price().map_err(|e| TradeError::InternalError(e.to_string()))?.ok_or_else(|| TradeError::InternalError("No latest price available for stock".into()))?;
+
+        // 预估单价 (限价单取限价，市价单取市场最新的成交价进行预估撮合)。
+        // OK: Intentional business fallback for Market Orders
         let est_price = order.price.unwrap_or(latest_price);
         let est_req_funds = est_price * order.volume;
 
@@ -78,14 +84,19 @@ impl TradePort for TradeService {
         // 如果是市价单 (price == None)，立刻尝试撮合。
         // 如果是限价单，先放入 Pending 队列等待下一个 Tick。
         if order.price.is_none() {
-            let now_ms = self.time_provider.now().timestamp_millis();
+            let now_ms = self.time_provider.now().map_err(|e| TradeError::InternalError(e.to_string()))?.timestamp_millis();
             order.status = OrderStatus::Submitted;
             
             if let Some(trade) = self.matcher.execute_order(&mut order, latest_price, now_ms) {
                 if let Some(log) = &self.trade_log {
-                    log.record(&trade);
+                    log.record(&trade).map_err(|e| TradeError::InternalError(e.to_string()))?;
                 }
                 self.account_port.process_trade(&order.account_id, &trade, est_req_funds).await?;
+            }
+
+            // 核心修复：如果市价单未完全成交，需放入队列（闭环处理）
+            if order.status != OrderStatus::Filled && order.status != OrderStatus::Canceled {
+                self.pending_port.save(order).await?;
             }
         } else {
             // 限价单，等待未来穿越
@@ -126,7 +137,6 @@ impl TradePort for TradeService {
 #[async_trait]
 impl BacktestTradePort for TradeService {
     async fn tick(&self, symbol: &str, candle: &Candle) -> Result<(), TradeError> {
-        let mut filled_orders = Vec::new();
 
         let high = candle.high;
         let low = candle.low;
@@ -146,20 +156,23 @@ impl BacktestTradePort for TradeService {
                     
                     if let Some(trade) = self.matcher.execute_order(&mut order, exec_price, now_ms) {
                         if let Some(log) = &self.trade_log {
-                            log.record(&trade);
+                            log.record(&trade).map_err(|e| TradeError::InternalError(e.to_string()))?;
                         }
                         let est_req_funds = limit_price * trade.volume; // 原本冻结的总数
                         if let Err(e) = self.account_port.process_trade(&order.account_id, &trade, est_req_funds).await {
                             tracing::warn!("Backtest tick: Failed process trade on account {}: {}", order.id.0, e);
                         }
                     }
-                    filled_orders.push(order.id.clone());
+                    
+                    // 核心修复：只有达到终态才移除，否则更新（部分成交）
+                    if order.status == OrderStatus::Filled || order.status == OrderStatus::Canceled {
+                        self.pending_port.remove(&order.id).await?;
+                    } else {
+                        // 如果有部分成交或状态变更，更新持久化存储
+                        self.pending_port.save(order).await?;
+                    }
                 }
             }
-        }
-
-        for id in filled_orders {
-            self.pending_port.remove(&id).await?;
         }
 
         Ok(())

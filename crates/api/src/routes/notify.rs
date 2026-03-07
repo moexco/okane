@@ -29,7 +29,7 @@ pub async fn get_notify_config(
         .get_user_notify_config(&user.id)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
-        .unwrap_or_default();
+        .ok_or_else(|| ApiError::NotFound("Notify config not found".to_string()))?;
 
     Ok(Json(ApiResponse::ok(NotifyConfigResponse::from(config))))
 }

@@ -6,7 +6,8 @@ use chrono::{DateTime, Utc};
 
 use okane_core::common::TimeFrame;
 use crate::server::AppState;
-use crate::types::{ApiErrorResponse, ApiResponse, CandleResponse, StockMetadataResponse};
+use crate::error::ApiError;
+use crate::types::{ApiResponse, CandleResponse, StockMetadataResponse};
 use utoipa::ToSchema;
 
 #[derive(Deserialize, ToSchema)]
@@ -33,14 +34,14 @@ pub struct SearchQuery {
 pub async fn search_stocks(
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
-) -> Result<Json<ApiResponse<Vec<StockMetadataResponse>>>, Json<ApiErrorResponse>> {
+) -> Result<Json<ApiResponse<Vec<StockMetadataResponse>>>, ApiError> {
     // 模糊搜索直接路由到上游数据源，不走本地数据库
     match state.market_port.search_symbols(&query.q).await {
         Ok(upstream_results) => {
             let dtos = upstream_results.into_iter().map(Into::into).collect();
             Ok(Json(ApiResponse::ok(dtos)))
         }
-        Err(e) => Err(Json(ApiErrorResponse::from_msg(format!("Upstream search error: {}", e)))),
+        Err(e) => Err(ApiError::Internal(format!("Upstream search error: {}", e))),
     }
 }
 
@@ -75,23 +76,23 @@ pub async fn get_candles(
     State(state): State<AppState>,
     Path(symbol): Path<String>,
     Query(query): Query<CandlesQuery>,
-) -> Result<Json<ApiResponse<Vec<CandleResponse>>>, Json<ApiErrorResponse>> {
+) -> Result<Json<ApiResponse<Vec<CandleResponse>>>, ApiError> {
     let tf = TimeFrame::from_str(&query.tf)
-        .map_err(|e| Json(ApiErrorResponse::from_msg(format!("Invalid timeframe: {}", e))))?;
+        .map_err(|e| ApiError::BadRequest(format!("Invalid timeframe: {}", e)))?;
     
     let start = DateTime::parse_from_rfc3339(&query.start)
-        .map_err(|_| Json(ApiErrorResponse::from_msg("Invalid start time format, expected RFC3339")))?
+        .map_err(|_| ApiError::BadRequest("Invalid start time format, expected RFC3339".to_string()))?
         .with_timezone(&Utc);
         
     let end = DateTime::parse_from_rfc3339(&query.end)
-        .map_err(|_| Json(ApiErrorResponse::from_msg("Invalid end time format, expected RFC3339")))?
+        .map_err(|_| ApiError::BadRequest("Invalid end time format, expected RFC3339".to_string()))?
         .with_timezone(&Utc);
 
     let stock_agg = state.market_port.get_stock(&symbol).await
-        .map_err(|e| Json(ApiErrorResponse::from_msg(format!("Market error: {}", e))))?;
+        .map_err(|e| ApiError::Internal(format!("Market error: {}", e)))?;
         
-    let history = stock_agg.fetch_history(tf, start, end).await
-        .map_err(|e| Json(ApiErrorResponse::from_msg(format!("Fetch history error: {}", e))))?;
+    let history: Vec<okane_core::market::entity::Candle> = stock_agg.fetch_history(tf, start, end).await
+        .map_err(|e| ApiError::Internal(format!("Fetch history error: {}", e)))?;
         
     let dtos = history.into_iter().map(Into::into).collect();
     Ok(Json(ApiResponse::ok(dtos)))

@@ -3,6 +3,9 @@ name = "okane-notify"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 async-trait = "0.1.89"
 lettre = { version = "0.11.19", features = ["tokio1", "rustls-tls", "builder", "tokio1-rustls-tls", "smtp-transport", "hostname"], default-features = false }
@@ -14,5 +17,6 @@ serde_json = "1.0.149"
 thiserror = "2.0.18"
 
 [dev-dependencies]
+anyhow = "1.0.102"
 dotenvy = "0.15.7"
 tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }

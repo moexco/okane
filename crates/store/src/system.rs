@@ -6,6 +6,7 @@ use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+use std::path::PathBuf;
 use rust_decimal::Decimal;
 use std::fs;
 
@@ -32,6 +33,13 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT NOT NULL DEFAULT 'Standard',
     force_password_change BOOLEAN NOT NULL DEFAULT FALSE,
     created_at DATETIME NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS accounts (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    created_at DATETIME NOT NULL,
+    FOREIGN KEY(owner_id) REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS watchlists (
@@ -112,7 +120,15 @@ impl SqliteSystemStore {
     /// # Returns
     /// * `Result<Self, StoreError>` - 存储实例 or 数据库错误。
     pub async fn new() -> Result<Self, StoreError> {
-        let root = crate::config::get_root_dir()?;
+        Self::new_with_path(None).await
+    }
+
+    /// 创建新的 SqliteSystemStore，支持指定路径（主要用于测试隔离）。
+    pub async fn new_with_path(root_path: Option<PathBuf>) -> Result<Self, StoreError> {
+        let root = match root_path {
+            Some(p) => p,
+            None => crate::config::get_root_dir()?,
+        };
         fs::create_dir_all(&root).map_err(|e| StoreError::Database(e.to_string()))?;
 
         let db_path = root.join(DEFAULT_SYSTEM_DB);
@@ -139,7 +155,7 @@ impl SqliteSystemStore {
         let count: (i64,) = sqlx::query_as(SQL_COUNT_USERS)
             .fetch_one(&pool)
             .await
-            .unwrap_or((0,));
+            .map_err(|e| StoreError::Database(e.to_string()))?;
 
         if count.0 == 0 {
             // 生成 12 位随机密码
@@ -319,14 +335,18 @@ impl SystemStore for SqliteSystemStore {
             .into_iter()
             .map(|r| {
                 use std::str::FromStr;
-                Position {
+                let quantity = Decimal::from_str(&r.1)
+                    .map_err(|e| StoreError::Database(format!("Failed to parse Decimal '{}': {}", r.1, e)))?;
+                let avg_price = Decimal::from_str(&r.2)
+                    .map_err(|e| StoreError::Database(format!("Failed to parse Decimal '{}': {}", r.2, e)))?;
+                Ok(Position {
                     symbol: r.0,
-                    quantity: Decimal::from_str(&r.1).unwrap_or_default(),
-                    avg_price: Decimal::from_str(&r.2).unwrap_or_default(),
+                    quantity,
+                    avg_price,
                     last_updated: r.3,
-                }
+                })
             })
-            .collect())
+            .collect::<Result<Vec<_>, StoreError>>()?)
     }
 
     /// # Summary
@@ -407,6 +427,37 @@ impl SystemStore for SqliteSystemStore {
         .execute(&self.pool)
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn get_account_owner(&self, account_id: &str) -> Result<Option<String>, StoreError> {
+        let row: Option<(String,)> = sqlx::query_as("SELECT owner_id FROM accounts WHERE id = ?")
+            .bind(account_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(row.map(|r| r.0))
+    }
+
+    async fn get_user_accounts(&self, user_id: &str) -> Result<Vec<String>, StoreError> {
+        let rows = sqlx::query_as::<_, (String,)>("SELECT id FROM accounts WHERE owner_id = ?")
+            .bind(user_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    async fn bind_account(&self, user_id: &str, account_id: &str) -> Result<(), StoreError> {
+        let now = Utc::now();
+        sqlx::query("INSERT INTO accounts (id, owner_id, created_at) VALUES (?, ?, ?)")
+            .bind(account_id)
+            .bind(user_id)
+            .bind(now)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
         Ok(())
     }
 

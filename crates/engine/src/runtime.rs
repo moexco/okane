@@ -1,3 +1,4 @@
+use crate::bridge::AsyncBridge;
 use okane_core::common::time::TimeProvider;
 
 use okane_core::common::TimeFrame;
@@ -34,6 +35,8 @@ pub struct PluginContext {
     pub time_provider: Arc<dyn TimeProvider>,
     /// 通知推送端口 (可选)
     pub notifier: Option<Arc<dyn okane_core::notify::port::Notifier>>,
+    /// Sync-async bridge for host function callbacks
+    pub bridge: Arc<AsyncBridge>,
 }
 
 /// # Summary
@@ -75,6 +78,6 @@ impl EngineBase {
             .get_stock(symbol)
             .await
             .map_err(|e| EngineError::Market(e.to_string()))?;
-        Ok(stock.subscribe(timeframe))
+        stock.subscribe(timeframe).map_err(|e| EngineError::Market(e.to_string()))
     }
 }

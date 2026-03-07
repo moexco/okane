@@ -20,62 +20,79 @@ use okane_core::market::port::{CandleStream, Market, Stock, StockStatus};
 use okane_core::trade::port::BacktestTradePort;
 use rust_decimal::Decimal;
 use std::sync::Arc;
+use crate::buffer::RollingBuffer;
+use std::sync::Mutex;
 use tracing::debug;
 
 /// # Summary
 /// 回测专用的 Stock 聚合根。
 ///
 /// # Invariants
+/// - 内部使用 RollingBuffer 维护最近的 K 线窗口，避免全量载入导致的 OOM。
 /// - `subscribe()` 返回的 stream 在每次 yield K 线前自动推进时钟和驱动撮合。
-/// - `current_price()` 根据 `time_provider.now()` 查找对应的 K 线收盘价。
-/// - `fetch_history()` 严格按 `end` 参数截断数据，防止泄露未来信息。
+/// - `current_price()` 等方法基于缓存窗口获取。
 pub struct BacktestStock {
     identity: StockIdentity,
-    /// 按时间升序排列的完整历史 K 线数据
-    candles: Vec<Candle>,
-    /// 回测时钟，由 BacktestStock 在每次 yield 时推进
+    /// 固定容量的活跃 K 线窗口（默认 1000 根），用于满足 strategy 的 fetch_history 请求
+    buffer: Arc<Mutex<RollingBuffer<Candle>>>,
+    /// 回测起点
+    start_time: DateTime<Utc>,
+    /// 回测终点
+    end_time: DateTime<Utc>,
+    /// 原始数据源（用于流式补货）
+    source: Option<Arc<dyn Stock>>,
+    /// 静态数据源（兼容原有 Vec 模式）
+    static_candles: Option<Vec<Candle>>,
+    /// 回测时钟
     time_provider: Arc<FakeClockProvider>,
-    /// 撮合端口，在每根 K 线到达时调用 tick 驱动限价单撮合
+    /// 撮合端口
     trade_port: Arc<dyn BacktestTradePort>,
 }
 
 impl BacktestStock {
-    /// 创建回测用 Stock 聚合根
-    ///
-    /// # Arguments
-    /// * `symbol` - 证券代码
-    /// * `candles` - 按时间升序排列的历史 K 线数据
-    /// * `time_provider` - 回测时钟（FakeClockProvider）
-    /// * `trade_port` - 支持 tick() 的撮合端口
+    /// 创建回测用 Stock 聚合根（流式模式）
+    pub fn with_source(
+        symbol: String,
+        source: Arc<dyn Stock>,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        time_provider: Arc<FakeClockProvider>,
+        trade_port: Arc<dyn BacktestTradePort>,
+    ) -> Self {
+        Self {
+            identity: StockIdentity { symbol, exchange: None },
+            buffer: Arc::new(Mutex::new(RollingBuffer::new(1000))),
+            start_time: start,
+            end_time: end,
+            source: Some(source),
+            static_candles: None,
+            time_provider,
+            trade_port,
+        }
+    }
+
+    /// 兼容旧有的 Vec 模式
     pub fn new(
         symbol: String,
         candles: Vec<Candle>,
         time_provider: Arc<FakeClockProvider>,
         trade_port: Arc<dyn BacktestTradePort>,
     ) -> Self {
+        let (start, end) = if let (Some(f), Some(l)) = (candles.first(), candles.last()) {
+            (f.time, l.time)
+        } else {
+            (Utc::now(), Utc::now())
+        };
         Self {
-            identity: StockIdentity {
-                symbol,
-                exchange: None,
-            },
-            candles,
+            identity: StockIdentity { symbol, exchange: None },
+            buffer: Arc::new(Mutex::new(RollingBuffer::new(candles.len().max(1)))),
+            start_time: start,
+            end_time: end,
+            source: None,
+            static_candles: Some(candles),
             time_provider,
             trade_port,
         }
-    }
-
-    /// 根据给定的时间点查找最近的 K 线索引（time <= target 的最后一根）
-    fn find_candle_at(&self, target: DateTime<Utc>) -> Option<usize> {
-        // candles 按时间升序，找 time <= target 的最后一根
-        let mut result = None;
-        for (i, c) in self.candles.iter().enumerate() {
-            if c.time <= target {
-                result = Some(i);
-            } else {
-                break;
-            }
-        }
-        result
     }
 }
 
@@ -85,67 +102,94 @@ impl Stock for BacktestStock {
         &self.identity
     }
 
-    /// 返回当前逻辑时间对应的 K 线收盘价。
-    ///
-    /// 通过 `time_provider.now()` 查找时间 <= 当前逻辑时间的最后一根 K 线的收盘价。
-    /// 这保证 `TradeService.submit_order()` 中获取的 `latest_price` 是回测环境下的正确价格。
-    fn current_price(&self) -> Option<Decimal> {
-        let now = self.time_provider.now();
-        self.find_candle_at(now).map(|idx| self.candles[idx].close)
+    fn current_price(&self) -> Result<Option<Decimal>, MarketError> {
+        let buffer = self.buffer.lock().map_err(|e| MarketError::Unknown(e.to_string()))?;
+        Ok(buffer.last().map(|c| c.close))
     }
 
-    fn latest_candle(&self, _timeframe: TimeFrame) -> Option<Candle> {
-        let now = self.time_provider.now();
-        self.find_candle_at(now).map(|idx| self.candles[idx].clone())
+    fn latest_candle(&self, _timeframe: TimeFrame) -> Result<Option<Candle>, MarketError> {
+        let buffer = self.buffer.lock().map_err(|e| MarketError::Unknown(e.to_string()))?;
+        Ok(buffer.last())
     }
 
-    fn last_closed_candle(&self, _timeframe: TimeFrame) -> Option<Candle> {
-        let now = self.time_provider.now();
-        self.find_candle_at(now).and_then(|idx| {
-            if idx > 0 {
-                Some(self.candles[idx - 1].clone())
-            } else {
-                None
-            }
-        })
+    fn last_closed_candle(&self, _timeframe: TimeFrame) -> Result<Option<Candle>, MarketError> {
+        let buffer = self.buffer.lock().map_err(|e| MarketError::Unknown(e.to_string()))?;
+        let vec = buffer.to_vec();
+        if vec.len() >= 2 {
+            Ok(Some(vec[vec.len() - 2].clone()))
+        } else {
+            Ok(None)
+        }
     }
 
     fn status(&self) -> StockStatus {
         StockStatus::Online
     }
 
-    /// 订阅 K 线流。
-    ///
-    /// # 回测核心逻辑
-    /// 每次 yield 一根 K 线前执行:
-    /// 1. 推进 `FakeClockProvider` 到当前 K 线的时间
-    /// 2. 调用 `BacktestTradePort.tick()` 驱动限价单撮合
-    /// 3. yield 本根 K 线给引擎
-    ///
-    /// 引擎的 `run_strategy` 循环照常消费这个 stream，
-    /// 完全不知道每根 K 线之间有时钟推进和撮合逻辑在执行。
-    fn subscribe(&self, _timeframe: TimeFrame) -> CandleStream {
-        let candles = self.candles.clone();
+    fn subscribe(&self, timeframe: TimeFrame) -> Result<CandleStream, MarketError> {
         let tp = self.time_provider.clone();
         let trade = self.trade_port.clone();
         let symbol = self.identity.symbol.clone();
+        let buffer = self.buffer.clone();
+        
+        let source = self.source.clone();
+        let static_candles = self.static_candles.clone();
+        let start = self.start_time;
+        let end = self.end_time;
 
-        Box::pin(async_stream::stream! {
-            for (i, candle) in candles.iter().enumerate() {
-                // 1. 推进时钟到当前 K 线时间
-                tp.set_time(candle.time);
+        Ok(Box::pin(async_stream::stream! {
+            let mut current = start;
+            while current < end {
+                let candles = if let Some(ref s) = source {
+                    // 批量拉取数据，提高效率
+                    let limit = 100u32;
+                    let duration = timeframe.duration() * (i32::try_from(limit).unwrap_or(0));
+                    match s.fetch_history(timeframe, current, current + duration).await {
+                        Ok(h) => h,
+                        Err(e) => {
+                            debug!("Streaming fetch failed for {}: {}", symbol, e);
+                            break;
+                        }
+                    }
+                } else if let Some(ref sc) = static_candles {
+                    sc.iter()
+                        .filter(|c| c.time >= current && c.time < end)
+                        .take(100)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                } else {
+                    break;
+                };
 
-                // 2. 驱动限价单撮合
-                if let Err(e) = trade.tick(&symbol, candle).await {
-                    tracing::warn!("BacktestStock tick error at candle {}: {}", i, e);
+                if candles.is_empty() {
+                    break;
                 }
 
-                debug!("BacktestStock [{}] yielding candle {} at {}", symbol, i, candle.time);
+                for candle in candles {
+                    if candle.time > end {
+                        break;
+                    }
+                    // 推进虚拟时钟
+                    if let Err(e) = tp.set_time(candle.time) {
+                        debug!("Clock set failed: {}", e);
+                    }
+                    
+                    // 更新缓冲区
+                    {
+                        if let Ok(mut b) = buffer.lock() {
+                            b.push(candle.clone());
+                        }
+                    }
 
-                // 3. yield K 线给引擎
-                yield candle.clone();
+                    // 驱动撮合 (非致命，记录日志并忽略)
+                    trade.tick(&symbol, &candle).await.ok();
+
+                    let candle_time = candle.time;
+                    yield candle;
+                    current = candle_time + timeframe.duration();
+                }
             }
-        })
+        }))
     }
 
     /// 获取历史 K 线数据。
@@ -159,11 +203,15 @@ impl Stock for BacktestStock {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<Vec<Candle>, MarketError> {
-        let filtered: Vec<Candle> = self
-            .candles
-            .iter()
-            .filter(|c| c.time >= start && c.time <= end)
-            .cloned()
+        let now = self.time_provider.now().map_err(|e| MarketError::Unknown(e.to_string()))?;
+        
+        // 核心加固：禁止获取当前回测时刻之后的数据
+        let safe_end = std::cmp::min(end, now);
+
+        let buffer = self.buffer.lock().map_err(|e| MarketError::Unknown(e.to_string()))?;
+        let filtered: Vec<Candle> = buffer.to_vec()
+            .into_iter()
+            .filter(|c| c.time >= start && c.time <= safe_end)
             .collect();
         Ok(filtered)
     }
@@ -179,13 +227,28 @@ pub struct BacktestMarket {
 }
 
 impl BacktestMarket {
-    /// 创建回测市场实例
-    ///
-    /// # Arguments
-    /// * `symbol` - 回测的证券代码
-    /// * `candles` - 历史 K 线数据（按时间升序）
-    /// * `time_provider` - 回测时钟
-    /// * `trade_port` - 撮合端口
+    /// 创建回测市场实例 (流式)
+    pub fn with_source(
+        symbol: String,
+        source_stock: Arc<dyn Stock>,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        time_provider: Arc<FakeClockProvider>,
+        trade_port: Arc<dyn BacktestTradePort>,
+    ) -> Self {
+        Self {
+            stock: Arc::new(BacktestStock::with_source(
+                symbol,
+                source_stock,
+                start,
+                end,
+                time_provider,
+                trade_port,
+            )),
+        }
+    }
+
+    /// 创建回测市场实例 (兼容 Vec)
     pub fn new(
         symbol: String,
         candles: Vec<Candle>,

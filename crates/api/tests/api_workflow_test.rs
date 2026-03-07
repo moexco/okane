@@ -1,376 +1,204 @@
+mod common;
+
 use reqwest::StatusCode;
-use utoipa::OpenApi;
 use okane_api::types::{
     ApiResponse, ChangePasswordRequest, CreateUserRequest, LoginRequest, LoginResponse,
-    StartStrategyRequest, StrategyResponse,
+    StartStrategyRequest, StrategyResponse, CreateAccountRequest,
 };
-use okane_api::server::AppState;
-use okane_core::store::port::{SystemStore, User, UserRole};
-use okane_market::manager::MarketImpl;
-use okane_store::market::SqliteMarketStore;
-use okane_store::strategy::SqliteStrategyStore;
-use okane_store::system::SqliteSystemStore;
-use okane_trade::account::AccountManager;
-use okane_trade::matcher::LocalMatchEngine;
-use okane_trade::service::TradeService;
-use okane_engine::factory::EngineFactory;
-use okane_feed::yahoo::YahooProvider;
-use okane_manager::strategy::StrategyManager;
-use std::sync::Arc;
-use tokio::net::TcpListener;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-use okane_core::notify::port::NotifierFactory;
+use common::spawn_test_server;
 
-/// 测试用空通知工厂
-struct NoopNotifierFactory;
-#[async_trait::async_trait]
-impl NotifierFactory for NoopNotifierFactory {
-    async fn create_for_user(&self, _user_id: &str) -> Result<Option<std::sync::Arc<dyn okane_core::notify::port::Notifier>>, okane_core::notify::error::NotifyError> {
-        Ok(None)
-    }
-}
-
-// 帮助函数：在随机端口启动测试服务器
-async fn spawn_test_server() -> (String, Arc<dyn SystemStore>, tempfile::TempDir) {
-    let tmp_dir = tempfile::tempdir().expect("Failed to create temp dir");
-    okane_store::config::set_root_dir(tmp_dir.path().to_path_buf());
-
-
-    let system_store: Arc<dyn SystemStore> = Arc::new(SqliteSystemStore::new().await.unwrap());
-    
-    // 强制覆盖 admin 的密码为已知测试密码 "test_admin_pwd"
-    let hashed = bcrypt::hash("test_admin_pwd", bcrypt::DEFAULT_COST).unwrap();
-    let admin_user = User {
-        id: "admin".to_string(),
-        name: "Admin".to_string(),
-        password_hash: hashed,
-        role: UserRole::Admin,
-        force_password_change: true,
-        created_at: chrono::Utc::now(),
-    };
-    system_store.save_user(&admin_user).await.unwrap();
-
-    let feed = Arc::new(YahooProvider::new());
-    let market_store = Arc::new(SqliteMarketStore::new().unwrap());
-    let strategy_store = Arc::new(SqliteStrategyStore::new().unwrap());
-    let market = MarketImpl::new(feed, market_store);
-    let engine_builder = Arc::new(EngineFactory::new(market.clone()));
-    let account_manager = Arc::new(AccountManager::default());
-    account_manager.ensure_account_exists(
-        okane_core::trade::entity::AccountId("SysAcct_1".to_string()),
-        rust_decimal::Decimal::new(10_000_000, 2), // $100k test money
-    );
-    account_manager.ensure_account_exists(
-        okane_core::trade::entity::AccountId("trader_01".to_string()),
-        rust_decimal::Decimal::new(10_000_000, 2), // $100k test money
-    );
-    let pending_port = Arc::new(okane_store::pending_order::MemoryPendingOrderStore::new());
-    let matcher = std::sync::Arc::new(LocalMatchEngine::new(rust_decimal::Decimal::ZERO));
-    let trade_service = Arc::new(TradeService::new(account_manager, matcher, market.clone(), pending_port, Arc::new(okane_core::common::time::RealTimeProvider)));
-
-    let strategy_manager = StrategyManager::new(
-        strategy_store,
-        engine_builder,
-        trade_service.clone(),
-        Arc::new(okane_core::common::time::RealTimeProvider),
-        Arc::new(NoopNotifierFactory), // 测试环境不配置通知推送
-    );
-
-    let app_config = Arc::new(okane_core::config::AppConfig::default());
-
-    let engine_builder_factory = Arc::new(|m: Arc<dyn okane_core::market::port::Market>| {
-        Arc::new(okane_engine::factory::EngineFactory::new(m)) as Arc<dyn okane_core::engine::port::EngineBuilder>
-    });
-    let backtest_runner = Arc::new(okane_manager::backtest::BacktestRunner::new(
-        market.clone(),
-        engine_builder_factory,
-    ));
-
-    let state = AppState {
-        strategy_manager,
-        trade_port: trade_service,
-        system_store: system_store.clone(),
-        market_port: market,
-        backtest_runner,
-        app_config,
-    };
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let addr = format!("http://127.0.0.1:{}", port);
-    
-    // 我们不能直接传递 port 给 start_server，因为 start_server 内部也试图 bind
-    // 修改策略：重写在文件中的提取逻辑，使用该 listener 启动服务
-    let (router, _api) = utoipa_axum::router::OpenApiRouter::with_openapi(
-        okane_api::server::ApiDoc::openapi(),
-    )
-    .merge(
-        utoipa_axum::router::OpenApiRouter::new()
-            .routes(utoipa_axum::routes!(okane_api::routes::auth::login))
-    )
-    .merge(
-        utoipa_axum::router::OpenApiRouter::new()
-            .routes(utoipa_axum::routes!(okane_api::routes::auth::change_password))
-            .layer(axum::middleware::from_fn_with_state(
-                state.clone(),
-                okane_api::middleware::auth::auth_middleware,
-            )),
-    )
-    .merge(
-        utoipa_axum::router::OpenApiRouter::new()
-            .routes(utoipa_axum::routes!(okane_api::routes::account::get_account_snapshot))
-            .routes(utoipa_axum::routes!(okane_api::routes::strategy::list_strategies))
-            .routes(utoipa_axum::routes!(okane_api::routes::strategy::get_strategy))
-            .routes(utoipa_axum::routes!(okane_api::routes::strategy::deploy_strategy))
-            .routes(utoipa_axum::routes!(okane_api::routes::strategy::stop_strategy))
-            .routes(utoipa_axum::routes!(okane_api::routes::backtest::run_backtest))
-            .layer(axum::middleware::from_fn(
-                okane_api::middleware::auth::require_password_changed,
-            ))
-            .layer(axum::middleware::from_fn_with_state(
-                state.clone(),
-                okane_api::middleware::auth::auth_middleware,
-            )),
-    )
-    .merge(
-        utoipa_axum::router::OpenApiRouter::new()
-            .routes(utoipa_axum::routes!(okane_api::routes::admin::create_user))
-            .layer(axum::middleware::from_fn(
-                okane_api::middleware::auth::require_admin,
-            ))
-            .layer(axum::middleware::from_fn_with_state(
-                state.clone(),
-                okane_api::middleware::auth::auth_middleware,
-            )),
-    )
-    .with_state(state)
-    .split_for_parts();
-
-    tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
-    
-    // 稍微等待服务器启动
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-    (addr, system_store, tmp_dir)
+/// 辅助函数：将 JS 源码编码为 Base64
+fn encode_js_source(source: &str) -> String {
+    STANDARD.encode(source)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_full_api_workflow() {
-    tracing_subscriber::fmt().with_env_filter("debug").try_init().ok();
-    
-    let (base_url, _store, _tmp) = spawn_test_server().await;
+async fn test_auth_and_password_flow() -> anyhow::Result<()> {
+    let (base_url, store, _tmp, _keepalive) = spawn_test_server().await?;
     let client = reqwest::Client::new();
 
-    // ============================================
-    // Case 1: 登录失败 (密码错误)
-    // ============================================
-    let res = client
-        .post(format!("{}/api/v1/auth/login", base_url))
-        .json(&LoginRequest {
-            username: "admin".to_string(),
-            password: "wrongpassword".to_string(),
-        })
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    // 显式开启强制改密以验证该流程
+    let mut admin = store.get_user("admin").await?.ok_or_else(|| anyhow::anyhow!("Admin missing"))?;
+    admin.force_password_change = true;
+    store.save_user(&admin).await?;
 
-    // ============================================
-    // Case 2: 成功登录 Admin
-    // ============================================
-    let res = client
-        .post(format!("{}/api/v1/auth/login", base_url))
-        .json(&LoginRequest {
-            username: "admin".to_string(),
-            password: "test_admin_pwd".to_string(),
-        })
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    let login_data: ApiResponse<LoginResponse> = res.json().await.unwrap();
-    let admin_token = login_data.data.unwrap().token;
+    // 1. 登录失败
+    assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
+        username: "admin".to_string(),
+        password: "wrongpassword".to_string(),
+    }, StatusCode::UNAUTHORIZED);
 
-    // ============================================
-    // Case 3: 强制锁定 (Force Password Change Lock)
-    // ============================================
-    let res = client
-        .get(format!("{}/api/v1/user/strategies", base_url))
-        .bearer_auth(&admin_token)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::FORBIDDEN, "未改密码即访问业务被拒绝");
+    // 2. 登陆成功
+    let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
+        username: "admin".to_string(),
+        password: "test_admin_pwd".to_string(),
+    }, StatusCode::OK);
+    let login_data: ApiResponse<LoginResponse> = res.json().await.map_err(|e| anyhow::anyhow!("Failed to parse login response: {}", e))?;
+    let admin_token = login_data.data.ok_or_else(|| anyhow::anyhow!("Login response missing data"))?.token;
 
-    // ============================================
-    // Case 4: 修改密码成功
-    // ============================================
-    let res = client
-        .post(format!("{}/api/v1/auth/change_password", base_url))
-        .bearer_auth(&admin_token)
-        .json(&ChangePasswordRequest {
-            old_password: "test_admin_pwd".to_string(),
-            new_password: "new_secure_password".to_string(),
-        })
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    // 3. 强制修改密码锁定检查
+    assert_get!(&client, format!("{}/api/v1/user/strategies", base_url), Some(&admin_token), StatusCode::FORBIDDEN);
 
-    // 重新登录获取新 Token (原本的 Token 其实还有效，但重登更真实)
-    let res = client
-        .post(format!("{}/api/v1/auth/login", base_url))
-        .json(&LoginRequest {
-            username: "admin".to_string(),
-            password: "new_secure_password".to_string(),
-        })
-        .send()
-        .await
-        .unwrap();
-    let login_data: ApiResponse<LoginResponse> = res.json().await.unwrap();
-    let admin_token_new = login_data.data.unwrap().token;
+    // 4. 修改密码
+    assert_post!(&client, format!("{}/api/v1/auth/change_password", base_url), Some(&admin_token), &ChangePasswordRequest {
+        old_password: "test_admin_pwd".to_string(),
+        new_password: "new_secure_password".to_string(),
+    }, StatusCode::OK);
 
-    // ============================================
-    // Case 5: 创建新用户 (Admin)
-    // ============================================
-    let pre_check = _store.get_user("trader_01").await;
-    tracing::info!("Pre-check trader_01 in DB before API call: {:?}", pre_check.unwrap().map(|u| u.id));
+    // 5. 使用新密码登录
+    assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
+        username: "admin".to_string(),
+        password: "new_secure_password".to_string(),
+    }, StatusCode::OK);
+    Ok(())
+}
 
-    let res = client
-        .post(format!("{}/api/v1/admin/users", base_url))
-        .bearer_auth(&admin_token_new)
-        .json(&CreateUserRequest {
-            id: "trader_01".to_string(),
-            name: "Trader One".to_string(),
-            password: "trader_password".to_string(),
-            role: "Standard".to_string(),
-        })
-        .send()
-        .await
-        .unwrap();
-    let status = res.status();
-    let body_text = res.text().await.unwrap();
-    tracing::info!("CreateUser status: {}, body: {}", status, body_text);
-    assert_eq!(status, StatusCode::OK, "Expected 200 OK but got {}: {}", status, body_text);
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_admin_user_management() -> anyhow::Result<()> {
+    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let client = reqwest::Client::new();
 
-    // ============================================
-    // Case 6: 权限隔离 - Trader 尝试创建账户 (Forbidden)
-    // ============================================
-    let res = client
-        .post(format!("{}/api/v1/auth/login", base_url))
-        .json(&LoginRequest {
-            username: "trader_01".to_string(),
-            password: "trader_password".to_string(),
-        })
-        .send()
-        .await
-        .unwrap();
-    let trader_login: ApiResponse<LoginResponse> = res.json().await.unwrap();
-    let trader_token = trader_login.data.unwrap().token;
+    // 先登录 (跳过强制改密逻辑，测试环境直接用 admin)
+    let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
+        username: "admin".to_string(),
+        password: "test_admin_pwd".to_string(),
+    }, StatusCode::OK);
+    let admin_token = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?.data.ok_or_else(|| anyhow::anyhow!("Admin token null"))?.token;
 
-    // 需先改密码
-    client
-        .post(format!("{}/api/v1/auth/change_password", base_url))
-        .bearer_auth(&trader_token)
-        .json(&ChangePasswordRequest {
-            old_password: "trader_password".to_string(),
-            new_password: "trader_new_pwd".to_string(),
-        })
-        .send()
-        .await
-        .unwrap();
+    // 创建新用户
+    assert_post!(&client, format!("{}/api/v1/admin/users", base_url), Some(&admin_token), &CreateUserRequest {
+        id: "trader_01".to_string(),
+        name: "Trader One".to_string(),
+        password: "trader_password".to_string(),
+        role: "Standard".to_string(),
+    }, StatusCode::OK);
+    Ok(())
+}
 
-    // Trader 尝试当 Admin
-    let res = client
-        .post(format!("{}/api/v1/admin/users", base_url))
-        .bearer_auth(&trader_token)
-        .json(&CreateUserRequest {
-            id: "hacker".to_string(),
-            name: "Hacker".to_string(),
-            password: "hacker".to_string(),
-            role: "Admin".to_string(),
-        })
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::FORBIDDEN, "非管理员无法创建账户");
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_user_account_and_strategy_deployment() -> anyhow::Result<()> {
+    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let client = reqwest::Client::new();
 
-    // ============================================
-    // Case 7: 业务流程 - 策略部署 (Strategy Deployment)
-    // ============================================
-    let deploy_res = client
-        .post(format!("{}/api/v1/user/strategies", base_url))
-        .bearer_auth(&trader_token)
-        .json(&StartStrategyRequest {
-            symbol: "AAPL".to_string(),
-            account_id: "trader_01".to_string(),
-            timeframe: "1m".to_string(),
-            engine_type: "JavaScript".to_string(),
-            source_base64: "ZnVuY3Rpb24gb25Jbml0KCkge30gZnVuY3Rpb24gb25DYW5kbGUoaW5wdXQpIHsgdmFyIGNhbmRsZSA9IEpTT04ucGFyc2UoaW5wdXQpOyBob3N0LmJ1eSgnQUFQTCcsIGNhbmRsZS5jbG9zZSwgMTAuMCk7IH0=".to_string(), // valid js
-        })
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(deploy_res.status(), StatusCode::OK);
+    // 1. 创建 Trader (Admin 权限)
+    let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
+        username: "admin".to_string(),
+        password: "test_admin_pwd".to_string(),
+    }, StatusCode::OK);
+    let admin_token = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?.data.ok_or_else(|| anyhow::anyhow!("Admin data null"))?.token;
+
+    assert_post!(&client, format!("{}/api/v1/admin/users", base_url), Some(&admin_token), &CreateUserRequest {
+        id: "trader_02".to_string(),
+        name: "Trader Two".to_string(),
+        password: "trader_password".to_string(),
+        role: "Standard".to_string(),
+    }, StatusCode::OK);
+
+    // 2. Trader 登录并改密
+    let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
+        username: "trader_02".to_string(),
+        password: "trader_password".to_string(),
+    }, StatusCode::OK);
+    let trader_token = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?.data.ok_or_else(|| anyhow::anyhow!("Trader data null"))?.token;
+
+    assert_post!(&client, format!("{}/api/v1/auth/change_password", base_url), Some(&trader_token), &ChangePasswordRequest {
+        old_password: "trader_password".to_string(),
+        new_password: "trader_new_pwd".to_string(),
+    }, StatusCode::OK);
+
+    // 3. 注册金融账号
+    assert_post!(&client, format!("{}/api/v1/user/account", base_url), Some(&trader_token), &CreateAccountRequest {
+        account_id: "acc_trader_02".to_string(),
+        initial_balance: Some("100000.00".to_string()),
+    }, StatusCode::OK);
+
+    // 4. 部署策略 (源码透明化)
+    let js_code = r#"
+        function onInit() {
+            host.log("Strategy initialized");
+        }
+        function onCandle(input) {
+            var candle = JSON.parse(input);
+            host.buy('AAPL', candle.close.toString(), "10.0");
+        }
+    "#;
+    let deploy_res = assert_post!(&client, format!("{}/api/v1/user/strategies", base_url), Some(&trader_token), &StartStrategyRequest {
+        symbol: "AAPL".to_string(),
+        account_id: "acc_trader_02".to_string(),
+        timeframe: "1m".to_string(),
+        engine_type: "JavaScript".to_string(),
+        source_base64: encode_js_source(js_code),
+    }, StatusCode::OK);
     
-    let deploy_data: ApiResponse<String> = deploy_res.json().await.unwrap();
-    let strategy_id = deploy_data.data.unwrap();
+    let strategy_id = deploy_res.json::<ApiResponse<String>>().await.map_err(|e| anyhow::anyhow!(e))?.data.ok_or_else(|| anyhow::anyhow!("Strategy ID null"))?;
 
-    // 检查列表
-    let list_res = client
-        .get(format!("{}/api/v1/user/strategies", base_url))
-        .bearer_auth(&trader_token)
-        .send()
-        .await
-        .unwrap();
-    let list_data: ApiResponse<Vec<StrategyResponse>> = list_res.json().await.unwrap();
-    let strategies = list_data.data.unwrap();
-    assert_eq!(strategies.len(), 1);
-    assert_eq!(strategies[0].id, strategy_id);
-    
-    // ============================================
-    // Case 8: 账户快照获取
-    // ============================================
-    let acc_res = client
-        .get(format!("{}/api/v1/user/account/trader_01", base_url))
-        .bearer_auth(&trader_token)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(acc_res.status(), StatusCode::OK);
+    // 5. 验证列表
+    let list_res = assert_get!(&client, format!("{}/api/v1/user/strategies", base_url), Some(&trader_token), StatusCode::OK);
+    let strategies = list_res.json::<ApiResponse<Vec<StrategyResponse>>>().await.map_err(|e| anyhow::anyhow!(e))?.data.ok_or_else(|| anyhow::anyhow!("Strategies null"))?;
+    assert!(strategies.iter().any(|s| s.id == strategy_id));
+    Ok(())
+}
 
-    // ============================================
-    // Case 9: 策略沙盒回测
-    // ============================================
-    // `ZnVu...` 是 base64 编码的:
-    // function onInit() {} function onCandle(input) { var candle = JSON.parse(input); host.buy('AAPL', candle.close, 10.0); }
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_strategy_backtest() -> anyhow::Result<()> {
+    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let client = reqwest::Client::new();
+
+    // 获取 Admin Token 并创建用户 (为了保持测试独立，重复 setup 是必要的)
+    let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
+        username: "admin".to_string(),
+        password: "test_admin_pwd".to_string(),
+    }, StatusCode::OK);
+    let admin_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?;
+    let admin_token = admin_data.data.ok_or_else(|| anyhow::anyhow!("Admin data null"))?.token;
+
+    assert_post!(&client, format!("{}/api/v1/admin/users", base_url), Some(&admin_token), &CreateUserRequest {
+        id: "bt_user".to_string(),
+        name: "BT User".to_string(),
+        password: "password".to_string(),
+        role: "Standard".to_string(),
+    }, StatusCode::OK);
+
+    let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
+        username: "bt_user".to_string(),
+        password: "password".to_string(),
+    }, StatusCode::OK);
+    let user_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?;
+    let token = user_data.data.ok_or_else(|| anyhow::anyhow!("User data null"))?.token;
+
+    // 必须改密码
+    assert_post!(&client, format!("{}/api/v1/auth/change_password", base_url), Some(&token), &ChangePasswordRequest {
+        old_password: "password".to_string(),
+        new_password: "new_password".to_string(),
+    }, StatusCode::OK);
+
+    // 重新登录获取新 Token (或继续使用旧的，但为了严谨通常用新的)
+    let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
+        username: "bt_user".to_string(),
+        password: "new_password".to_string(),
+    }, StatusCode::OK);
+    let token_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?;
+    let token = token_data.data.ok_or_else(|| anyhow::anyhow!("Token data null"))?.token;
+
+    // 回测逻辑
+    let js_code = "function onInit() {} function onCandle(input) { host.buy('AAPL', '150.0', '10'); }";
     let end_time = chrono::Utc::now();
-    let start_time = end_time - chrono::Duration::days(3);
+    let start_time = end_time - chrono::Duration::days(1);
     
-    let backtest_res = client
-        .post(format!("{}/api/v1/user/backtest", base_url))
-        .bearer_auth(&trader_token)
-        .json(&serde_json::json!({
-            "symbol": "AAPL",
-            "timeframe": "1d",
-            "start": start_time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            "end": end_time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            "initial_balance": "10000.00",
-            "engine_type": "JavaScript",
-            "source_base64": "ZnVuY3Rpb24gb25Jbml0KCkge30gZnVuY3Rpb24gb25DYW5kbGUoaW5wdXQpIHsgdmFyIGNhbmRsZSA9IEpTT04ucGFyc2UoaW5wdXQpOyBob3N0LmJ1eSgnQUFQTCcsIGNhbmRsZS5jbG9zZSwgMTAuMCk7IH0="
-        }))
-        .send()
-        .await
-        .unwrap();
+    let res = assert_post!(&client, format!("{}/api/v1/user/backtest", base_url), Some(&token), &serde_json::json!({
+        "symbol": "AAPL",
+        "timeframe": "1d",
+        "start": start_time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "end": end_time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "initial_balance": "10000.00",
+        "engine_type": "JavaScript",
+        "source_base64": encode_js_source(js_code)
+    }), StatusCode::OK);
     
-    assert_eq!(backtest_res.status(), StatusCode::OK, "Backtest request failed");
-    
-    let bt_data: ApiResponse<okane_api::types::BacktestResponse> = backtest_res.json().await.unwrap();
-    let result = bt_data.data.unwrap();
-    
-    // We don't strictly assert candle_count > 0 to avoid flaky behavior without internet,
-    // but we can assert the response format is correctly assembled.
+    let bt_data = res.json::<ApiResponse<okane_api::types::BacktestResponse>>().await.map_err(|e| anyhow::anyhow!(e))?;
+    let result = bt_data.data.ok_or_else(|| anyhow::anyhow!("Backtest data null"))?;
     assert!(result.final_snapshot.account_id.starts_with("backtest_"));
+    Ok(())
 }

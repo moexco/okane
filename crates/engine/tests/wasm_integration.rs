@@ -1,77 +1,20 @@
-pub mod mock_trade;
-use async_trait::async_trait;
-use chrono::Utc;
+use okane_core::test_utils::{MockMarket, MockStock, SpyTradePort};
 use okane_core::common::time::FakeClockProvider;
 use okane_core::common::{Stock as StockIdentity, TimeFrame};
 use okane_core::market::entity::Candle;
-use okane_core::market::error::MarketError;
-use okane_core::market::port::{CandleStream, Market, Stock, StockStatus};
+use chrono::Utc;
 use okane_engine::wasm::WasmEngine;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use rust_decimal_macros::dec;
 
-struct MockStock {
-    identity: StockIdentity,
-    rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Candle>>>,
-}
-
-#[async_trait]
-impl Stock for MockStock {
-    fn identity(&self) -> &StockIdentity {
-        &self.identity
-    }
-    fn current_price(&self) -> Option<rust_decimal::Decimal> {
-        None
-    }
-    fn latest_candle(&self, _: TimeFrame) -> Option<Candle> {
-        None
-    }
-    fn last_closed_candle(&self, _: TimeFrame) -> Option<Candle> {
-        None
-    }
-    fn status(&self) -> StockStatus {
-        StockStatus::Online
-    }
-    fn subscribe(&self, _: TimeFrame) -> CandleStream {
-        let rx = self.rx.clone();
-        let s = async_stream::stream! {
-            let mut rx = rx.lock().await;
-            while let Some(c) = rx.recv().await { yield c; }
-        };
-        Box::pin(s)
-    }
-    async fn fetch_history(
-        &self,
-        _: TimeFrame,
-        _: chrono::DateTime<Utc>,
-        _: chrono::DateTime<Utc>,
-    ) -> Result<Vec<Candle>, MarketError> {
-        Ok(vec![])
-    }
-}
-
-struct MockMarket {
-    stock: Arc<MockStock>,
-}
-#[async_trait]
-impl Market for MockMarket {
-    async fn get_stock(&self, _: &str) -> Result<Arc<dyn Stock>, MarketError> {
-        Ok(self.stock.clone())
-    }
-
-    async fn search_symbols(&self, _query: &str) -> Result<Vec<okane_core::store::port::StockMetadata>, MarketError> {
-        Ok(vec![])
-    }
-}
-
-/// 构建 WASM 示例并返回字节码路径
-fn build_wasm_example(package: &str) -> Vec<u8> {
+/// 构建 WASM 示例并返回字节码
+fn build_wasm_example(package: &str) -> anyhow::Result<Vec<u8>> {
     let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .unwrap()
+        .ok_or_else(|| anyhow::anyhow!("Parent not found"))?
         .parent()
-        .unwrap();
+        .ok_or_else(|| anyhow::anyhow!("Grandparent not found"))?;
 
     let status = std::process::Command::new("cargo")
         .args([
@@ -84,9 +27,11 @@ fn build_wasm_example(package: &str) -> Vec<u8> {
         ])
         .current_dir(workspace_root)
         .status()
-        .expect("Failed to run cargo build for WASM example");
+        .map_err(|e| anyhow::anyhow!("Failed to run cargo build: {}", e))?;
 
-    assert!(status.success(), "WASM build failed for {}", package);
+    if !status.success() {
+        return Err(anyhow::anyhow!("WASM build failed for {}", package));
+    }
 
     let wasm_name = package.replace('-', "_");
     let wasm_path = workspace_root
@@ -94,12 +39,12 @@ fn build_wasm_example(package: &str) -> Vec<u8> {
         .join(format!("{}.wasm", wasm_name));
 
     std::fs::read(&wasm_path)
-        .unwrap_or_else(|e| panic!("Failed to read {}: {}", wasm_path.display(), e))
+        .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", wasm_path.display(), e))
 }
 
 #[tokio::test]
-async fn test_wasm_strategy_dummy_execution() {
-    let wasm_bytes = build_wasm_example("strategy-dummy");
+async fn test_wasm_strategy_dummy_execution() -> anyhow::Result<()> {
+    let wasm_bytes = build_wasm_example("strategy-dummy")?;
 
     let (tx, rx) = mpsc::unbounded_channel();
     let mock_stock = Arc::new(MockStock {
@@ -107,11 +52,11 @@ async fn test_wasm_strategy_dummy_execution() {
             symbol: "AAPL".to_string(),
             exchange: None,
         },
-        rx: Arc::new(tokio::sync::Mutex::new(rx)),
+        price_rx: Arc::new(tokio::sync::Mutex::new(rx)),
     });
     let market = Arc::new(MockMarket { stock: mock_stock });
-    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort);
-    let engine = WasmEngine::new(market, trade, Arc::new(FakeClockProvider::new(Utc::now())), None);
+    let trade = Arc::new(SpyTradePort::new());
+    let engine = WasmEngine::new(market, trade.clone(), Arc::new(FakeClockProvider::new(chrono::Utc::now())), None).map_err(|e| anyhow::anyhow!(e))?;
 
     let handle = tokio::spawn(async move {
         engine
@@ -130,17 +75,29 @@ async fn test_wasm_strategy_dummy_execution() {
         volume: dec!(1000.0),
         is_final: true,
     })
-    .unwrap();
+    .map_err(|e| anyhow::anyhow!("Send failed: {:?}", e))?;
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    // 轮询检查订单是否产生 (WASM 的 on_candle 逻辑应触发 host.buy)
+    let start = std::time::Instant::now();
+    let mut orders = Vec::new();
+    while start.elapsed() < std::time::Duration::from_secs(3) {
+        orders = trade.get_submitted_orders().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        if !orders.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 
-    // 策略应正常执行 (void on_candle)
+    assert_eq!(orders.len(), 1, "WASM strategy should have submitted 1 order");
+    assert_eq!(orders[0].symbol, "AAPL");
+
     handle.abort();
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_wasm_strategy_dummy_below_threshold() {
-    let wasm_bytes = build_wasm_example("strategy-dummy");
+async fn test_wasm_strategy_dummy_below_threshold() -> anyhow::Result<()> {
+    let wasm_bytes = build_wasm_example("strategy-dummy")?;
 
     let (tx, rx) = mpsc::unbounded_channel();
     let mock_stock = Arc::new(MockStock {
@@ -148,11 +105,11 @@ async fn test_wasm_strategy_dummy_below_threshold() {
             symbol: "AAPL".to_string(),
             exchange: None,
         },
-        rx: Arc::new(tokio::sync::Mutex::new(rx)),
+        price_rx: Arc::new(tokio::sync::Mutex::new(rx)),
     });
     let market = Arc::new(MockMarket { stock: mock_stock });
-    let trade = std::sync::Arc::new(crate::mock_trade::MockTradePort);
-    let engine = WasmEngine::new(market, trade, Arc::new(FakeClockProvider::new(Utc::now())), None);
+    let trade = Arc::new(SpyTradePort::new());
+    let engine = WasmEngine::new(market, trade.clone(), Arc::new(FakeClockProvider::new(chrono::Utc::now())), None).map_err(|e| anyhow::anyhow!(e))?;
 
     let handle = tokio::spawn(async move {
         engine
@@ -171,10 +128,13 @@ async fn test_wasm_strategy_dummy_below_threshold() {
         volume: dec!(500.0),
         is_final: true,
     })
-    .unwrap();
+    .map_err(|e| anyhow::anyhow!("Send failed: {:?}", e))?;
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    // 确认没有订单产生
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    let submitted = trade.get_submitted_orders().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    assert!(submitted.is_empty(), "WASM strategy should NOT have submitted orders below threshold");
 
-    // 策略应正常执行 — 不触发动作不报错
     handle.abort();
+    Ok(())
 }

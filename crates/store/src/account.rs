@@ -12,6 +12,11 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use tracing::{info, warn};
 
+/// Safely parse a database string into Decimal, returning an explicit error instead of defaulting to 0.
+fn parse_decimal(s: &str) -> Result<Decimal, TradeError> {
+    Decimal::from_str(s).map_err(|e| TradeError::InternalError(format!("Failed to parse Decimal '{}': {}", s, e)))
+}
+
 /// # Summary
 /// 针对单个系统实体账户的高频高并发 SQLite 分片实现。
 /// 通过一户一库 (account_<id>.db) 避免 SQLite 本身的全表写锁瓶颈。
@@ -118,7 +123,7 @@ impl SqliteAccountStore {
             .await
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
-        let mut avail = Decimal::from_str(&row.0).unwrap_or_default();
+        let mut avail = parse_decimal(&row.0)?;
         avail += amount;
 
         sqlx::query(SQL_UPDATE_ASSET_AVAIL)
@@ -154,8 +159,8 @@ impl AccountPort for SqliteAccountStore {
             .await
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
-        let mut avail = Decimal::from_str(&row.0).unwrap_or_default();
-        let mut frozen = Decimal::from_str(&row.1).unwrap_or_default();
+        let mut avail = parse_decimal(&row.0)?;
+        let mut frozen = parse_decimal(&row.1)?;
 
         if avail < amount {
             return Err(TradeError::InsufficientFunds {
@@ -197,8 +202,8 @@ impl AccountPort for SqliteAccountStore {
             .await
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
-        let mut avail = Decimal::from_str(&row.0).unwrap_or_default();
-        let mut frozen = Decimal::from_str(&row.1).unwrap_or_default();
+        let mut avail = parse_decimal(&row.0)?;
+        let mut frozen = parse_decimal(&row.1)?;
 
         let actual_unfreeze = if amount > frozen {
             warn!("账户 {} 解冻异常: 试图解冻 {} 但仅剩 {}", account_id.0, amount, frozen);
@@ -240,8 +245,8 @@ impl AccountPort for SqliteAccountStore {
             .fetch_one(&mut *tx)
             .await
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
-        let mut avail = Decimal::from_str(&row.0).unwrap_or_default();
-        let mut frozen = Decimal::from_str(&row.1).unwrap_or_default();
+        let mut avail = parse_decimal(&row.0)?;
+        let mut frozen = parse_decimal(&row.1)?;
 
         let mut ledger_asset_change = Decimal::ZERO;
         let mut ledger_frozen_change = Decimal::ZERO;
@@ -295,8 +300,8 @@ impl AccountPort for SqliteAccountStore {
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
         if let Some((qv, qp)) = existing_pos {
-            pos_vol = Decimal::from_str(&qv).unwrap_or_default();
-            pos_price = Decimal::from_str(&qp).unwrap_or_default();
+            pos_vol = parse_decimal(&qv)?;
+            pos_price = parse_decimal(&qp)?;
         }
 
         if (pos_vol.is_sign_positive() && delta_volume.is_sign_positive())
@@ -351,8 +356,8 @@ impl AccountPort for SqliteAccountStore {
             .await
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
-        let available_balance = Decimal::from_str(&row.0).unwrap_or_default();
-        let frozen_balance = Decimal::from_str(&row.1).unwrap_or_default();
+        let available_balance = parse_decimal(&row.0)?;
+        let frozen_balance = parse_decimal(&row.1)?;
         let total_equity = available_balance + frozen_balance;
 
         let cur_positions = sqlx::query_as::<_, (String, String, String)>("SELECT symbol, quantity, avg_price FROM positions")
@@ -362,13 +367,13 @@ impl AccountPort for SqliteAccountStore {
 
         let mut positions = Vec::new();
         for p in cur_positions {
-            let vol = Decimal::from_str(&p.1).unwrap_or_default();
+            let vol = parse_decimal(&p.1)?;
             if !vol.is_zero() {
                 positions.push(Position {
                     account_id: account_id.clone(),
                     symbol: p.0,
                     volume: vol,
-                    average_price: Decimal::from_str(&p.2).unwrap_or_default(),
+                    average_price: parse_decimal(&p.2)?,
                 });
             }
         }

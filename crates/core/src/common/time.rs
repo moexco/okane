@@ -6,7 +6,7 @@ use std::sync::RwLock;
 /// 所有的引擎沙盒与历史回放必须通过此接口获取当前挂载时间。
 pub trait TimeProvider: Send + Sync {
     /// 获取当前挂载的时间
-    fn now(&self) -> DateTime<Utc>;
+    fn now(&self) -> Result<DateTime<Utc>, crate::error::CoreError>;
 }
 
 /// # Summary
@@ -14,8 +14,8 @@ pub trait TimeProvider: Send + Sync {
 pub struct RealTimeProvider;
 
 impl TimeProvider for RealTimeProvider {
-    fn now(&self) -> DateTime<Utc> {
-        Utc::now()
+    fn now(&self) -> Result<DateTime<Utc>, crate::error::CoreError> {
+        Ok(Utc::now())
     }
 }
 
@@ -37,14 +37,17 @@ impl FakeClockProvider {
     }
 
     /// 强制修改时钟的当前时间
-    pub fn set_time(&self, new_time: DateTime<Utc>) {
-        let mut time = self.current_time.write().unwrap_or_else(|e| e.into_inner());
+    pub fn set_time(&self, new_time: DateTime<Utc>) -> Result<(), crate::error::CoreError> {
+        let mut time = self.current_time.write().map_err(|e| crate::error::CoreError::Poisoned(e.to_string()))?;
         *time = new_time;
+        Ok(())
     }
 }
 
 impl TimeProvider for FakeClockProvider {
-    fn now(&self) -> DateTime<Utc> {
-        *self.current_time.read().unwrap_or_else(|e| e.into_inner())
+    fn now(&self) -> Result<DateTime<Utc>, crate::error::CoreError> {
+        self.current_time.read()
+            .map(|t| *t)
+            .map_err(|e| crate::error::CoreError::Poisoned(e.to_string()))
     }
 }

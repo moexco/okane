@@ -4,3 +4,4 @@ pub mod strategy;
 pub mod system;
 pub mod account;
 pub mod pending_order;
+pub mod pending_order_sqlx;

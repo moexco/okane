@@ -54,7 +54,15 @@ impl SqliteStrategyStore {
     /// # Summary
     /// 创建新的 SqliteStrategyStore 实例。
     pub fn new() -> Result<Self, StoreError> {
-        let base_path = crate::config::get_root_dir()?.join("strategy");
+        Self::new_with_path(None)
+    }
+
+    /// 创建新的 SqliteStrategyStore 实例，支持指定路径。
+    pub fn new_with_path(root_path: Option<PathBuf>) -> Result<Self, StoreError> {
+        let base_path = match root_path {
+            Some(p) => p.join("strategy"),
+            None => crate::config::get_root_dir()?.join("strategy"),
+        };
         if !base_path.exists() {
             std::fs::create_dir_all(&base_path).map_err(|e| StoreError::Database(e.to_string()))?;
         }
@@ -92,26 +100,7 @@ impl SqliteStrategyStore {
     }
 }
 
-fn status_to_str(s: &StrategyStatus) -> String {
-    match s {
-        StrategyStatus::Pending => "Pending".to_string(),
-        StrategyStatus::Running => "Running".to_string(),
-        StrategyStatus::Stopped => "Stopped".to_string(),
-        StrategyStatus::Failed(msg) => format!("Failed:{}", msg),
-    }
-}
-
-fn str_to_status(s: &str) -> StrategyStatus {
-    match s {
-        "Pending" => StrategyStatus::Pending,
-        "Running" => StrategyStatus::Running,
-        "Stopped" => StrategyStatus::Stopped,
-        other if other.starts_with("Failed:") => {
-            StrategyStatus::Failed(other.strip_prefix("Failed:").unwrap_or("").to_string())
-        }
-        _ => StrategyStatus::Failed(format!("Unknown status: {}", s)),
-    }
-}
+// 移除本地 status_to_str 和 str_to_status 辅助函数，直接使用 StrategyStatus 的 Display 和 FromStr 实现。
 
 #[async_trait]
 impl StrategyStore for SqliteStrategyStore {
@@ -128,7 +117,7 @@ impl StrategyStore for SqliteStrategyStore {
         .bind(instance.timeframe.to_string())
         .bind(instance.engine_type.to_string())
         .bind(&instance.source)
-        .bind(status_to_str(&instance.status))
+        .bind(instance.status.to_string())
         .bind(instance.created_at)
         .bind(instance.updated_at)
         .execute(&pool)
@@ -155,7 +144,7 @@ impl StrategyStore for SqliteStrategyStore {
             timeframe: row.3.parse().map_err(|e: String| StoreError::Database(e))?,
             engine_type: row.4.parse().map_err(|e: String| StoreError::Database(e))?,
             source: row.5,
-            status: str_to_status(&row.6),
+            status: row.6.parse().unwrap_or_else(|e| StrategyStatus::Failed(format!("Parse error: {}", e))),
             created_at: row.7,
             updated_at: row.8,
         })
@@ -164,7 +153,7 @@ impl StrategyStore for SqliteStrategyStore {
     async fn update_status(&self, user_id: &str, id: &str, status: StrategyStatus) -> Result<(), StoreError> {
         let pool = self.get_or_init_pool(user_id).await?;
         sqlx::query(SQL_UPDATE_STATUS)
-            .bind(status_to_str(&status))
+            .bind(status.to_string())
             .bind(Utc::now())
             .bind(id)
             .execute(&pool)
@@ -190,7 +179,7 @@ impl StrategyStore for SqliteStrategyStore {
                 timeframe: row.3.parse().map_err(|e: String| StoreError::Database(e))?,
                 engine_type: row.4.parse().map_err(|e: String| StoreError::Database(e))?,
                 source: row.5,
-                status: str_to_status(&row.6),
+                status: row.6.parse().unwrap_or_else(|e| StrategyStatus::Failed(format!("Parse error: {}", e))),
                 created_at: row.7,
                 updated_at: row.8,
             })

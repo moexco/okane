@@ -45,21 +45,16 @@ impl AccountState {
 
     /// # Logic
     /// 撤单时解冻准备金，归还到可用余额。
-    pub fn unfreeze_funds(&mut self, amount: Decimal) {
-        // 如果系统正常运行，amount 不应超过 frozen_balance，但此处做个防御
-        let actual_unfreeze = if amount > self.frozen_balance {
-            tracing::warn!(
-                "账户 {} 解冻异常: 试图解冻 {} 但仅剩 {}",
-                self.account_id.0,
-                amount,
-                self.frozen_balance
-            );
-            self.frozen_balance
-        } else {
-            amount
-        };
-        self.frozen_balance -= actual_unfreeze;
-        self.available_balance += actual_unfreeze;
+    pub fn unfreeze_funds(&mut self, amount: Decimal) -> Result<(), TradeError> {
+        if amount > self.frozen_balance {
+            return Err(TradeError::InternalError(format!(
+                "Account Reconciliation Failure: Tried to unfreeze {} but only {} frozen for account {}",
+                amount, self.frozen_balance, self.account_id.0
+            )));
+        }
+        self.frozen_balance -= amount;
+        self.available_balance += amount;
+        Ok(())
     }
 
     /// # Logic
@@ -189,8 +184,7 @@ impl AccountPort for AccountManager {
     async fn unfreeze_funds(&self, account_id: &AccountId, amount: rust_decimal::Decimal) -> Result<(), TradeError> {
         let account_lock = self.get_account(account_id)?;
         let mut acct = account_lock.write().await;
-        acct.unfreeze_funds(amount);
-        Ok(())
+        acct.unfreeze_funds(amount)
     }
 
     async fn process_trade(&self, account_id: &AccountId, trade: &Trade, est_req_funds: rust_decimal::Decimal) -> Result<(), TradeError> {
@@ -202,7 +196,7 @@ impl AccountPort for AccountManager {
             acct.deduct_funds(actual_cost);
             let over_frozen = est_req_funds - actual_cost;
             if over_frozen > rust_decimal::Decimal::ZERO {
-                acct.unfreeze_funds(over_frozen);
+                acct.unfreeze_funds(over_frozen)?;
             }
         } else {
             let actual_gain = trade.price * trade.volume - trade.commission;

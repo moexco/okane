@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 /// # Invariants
 /// - AccountId 在整个系统中必须全局唯一。
 /// - 策略只与 AccountId 绑定，而不关心物理的 Broker 通道。
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize, Default)]
 pub struct AccountId(pub String);
 
 /// # Summary
@@ -146,7 +146,7 @@ impl Position {
 /// # Summary
 /// 系统账户聚合根的数据快照。
 /// 包含资金概况及全量持仓明细。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AccountSnapshot {
     pub account_id: AccountId,
     /// 账户可用资金余额（可用于开仓下单的现金）

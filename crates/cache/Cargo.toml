@@ -3,6 +3,9 @@ name = "okane-cache"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 async-trait = "0.1.89"
 dashmap = "6.1.0"

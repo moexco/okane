@@ -24,11 +24,13 @@ pub async fn auth_middleware(
     let token = match auth_header {
         Some(header_val) => {
             let s = header_val.to_str().map_err(|_| ApiError::Unauthorized("Invalid auth header".into()))?;
-            if !s.starts_with("Bearer ") {
-                tracing::warn!("Invalid Bearer format: {}", s);
-                return Err(ApiError::Unauthorized("Invalid Bearer format".into()));
+            match s.strip_prefix("Bearer ") {
+                Some(t) => t.to_string(),
+                None => {
+                    tracing::warn!("Invalid Bearer format: {}", s);
+                    return Err(ApiError::Unauthorized("Invalid Bearer format".into()));
+                }
             }
-            s[7..].to_string()
         }
         None => {
             tracing::warn!("Missing Authorization header");

@@ -10,7 +10,7 @@ use crate::wasm::WasmEngine;
 
 /// # Summary
 /// `EngineBuilder` 的具体实现。
-/// 根据 `EngineType` 选择 `JsEngine` 或 `WasmEngine` 构建执行任务。
+/// 根据 `EngineType` 选择 `JsEngine` 或 `WasmEngine`。
 ///
 /// # Invariants
 /// - 持有 `Arc<dyn Market>` 用于创建具体引擎实例。
@@ -77,7 +77,15 @@ impl EngineBuilder for EngineFactory {
 
                         let local = tokio::task::LocalSet::new();
                         local.block_on(&rt, async move {
-                            let engine = JsEngine::new(market, params.trade_port, params.time_provider, params.notifier);
+                            let engine = match JsEngine::new(market, params.trade_port, params.time_provider, params.notifier) {
+                                Ok(e) => e,
+                                Err(err) => {
+                                    if let Err(e) = tx.send(Err(err)) {
+                                        tracing::warn!("Failed to send JsEngine init err: {:?}", e);
+                                    }
+                                    return;
+                                }
+                            };
                             let result = engine
                                 .run_strategy(&params.symbol, &params.account_id, params.timeframe, &js_source)
                                 .await;
@@ -93,9 +101,8 @@ impl EngineBuilder for EngineFactory {
                 }))
             }
             EngineType::Wasm => {
-                // WasmEngine 的 Future 是 Send 的，可以直接包装
                 Ok(Box::pin(async move {
-                    let engine = WasmEngine::new(market, params.trade_port, params.time_provider, params.notifier);
+                    let engine = WasmEngine::new(market, params.trade_port, params.time_provider, params.notifier)?;
                     engine
                         .run_strategy(&params.symbol, &params.account_id, params.timeframe, &params.source)
                         .await

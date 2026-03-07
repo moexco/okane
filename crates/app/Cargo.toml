@@ -3,6 +3,9 @@ name = "okane-app"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 config = "0.15.19"
 okane-api = { version = "0.1.0", path = "../api" }

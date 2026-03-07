@@ -3,6 +3,9 @@ name = "okane-engine"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 async-trait = "0.1.89"
 chrono = "0.4.43"
@@ -17,8 +20,10 @@ tokio = { version = "1.49.0", features = ["sync", "rt", "time", "macros"] }
 tracing = "0.1.44"
 uuid = { version = "1.20.0", features = ["v4"] }
 wasmtime = { version = "41.0.3", features = ["async"] }
+anyhow = "1.0.102"
 
 [dev-dependencies]
+okane-core = { version = "0.1.0", path = "../core", features = ["test-utils"] }
 async-stream = "0.3.6"
 okane-trade = { path = "../trade" }
 rust_decimal_macros = "1.40.0"

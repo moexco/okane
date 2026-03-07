@@ -108,7 +108,11 @@ impl Modify for SecurityAddon {
 ///
 /// # Panics
 /// 如果 TCP 绑定失败将 panic (生产环境应有优雅降级)。
-pub async fn start_server(state: AppState, bind_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+/// 构建完整的 axum 应用路由树。
+/// 
+/// 该函数封装了所有路由定义、中间件层级（Auth/Admin/Password）、CORS 配置以及 Swagger UI 挂载。
+/// 生产环境和集成测试环境应一致调用此函数以确保逻辑同步。
+pub fn build_app(state: AppState) -> Router {
     // 1. 无需鉴权的公开路由
     let public_router = OpenApiRouter::new()
         .routes(routes!(auth::login));
@@ -121,9 +125,11 @@ pub async fn start_server(state: AppState, bind_addr: &str) -> Result<(), Box<dy
             crate::middleware::auth::auth_middleware,
         ));
 
-    // 3. 只需要合法 JWT 鉴权且要求已经改过密码的路由 (普通用户)
+    // 3. 只需要合法 JWT 鉴权且要求已经改过密码的路由 (普通用户业务)
     let user_protected_router = OpenApiRouter::new()
         .routes(routes!(account::get_account_snapshot))
+        .routes(routes!(account::register_account))
+        .routes(routes!(account::list_accounts))
         .routes(routes!(market::search_stocks))
         .routes(routes!(market::get_candles))
         .routes(routes!(strategy::list_strategies))
@@ -149,7 +155,7 @@ pub async fn start_server(state: AppState, bind_addr: &str) -> Result<(), Box<dy
             crate::middleware::auth::auth_middleware,
         ));
 
-    // 4. 需要 Admin 角色鉴权的路由
+    // 4. 需要 Admin 角色鉴权的路由 (系统管理)
     let admin_protected_router = OpenApiRouter::new()
         .routes(routes!(admin::create_user))
         .routes(routes!(admin::update_settings))
@@ -170,21 +176,25 @@ pub async fn start_server(state: AppState, bind_addr: &str) -> Result<(), Box<dy
         .merge(auth_only_router)
         .merge(user_protected_router)
         .merge(admin_protected_router)
-        .with_state(state)
+        .with_state(state.clone())
         .split_for_parts();
 
-    // 5. 配置 CORS (开发阶段允许所有来源)
+    // 6. 配置 CORS
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
-    // 3. 合并 Swagger UI 路由并应用中间件
-    let app: Router = router
+    // 7. 合并 Swagger UI 路由并返回最终 Router
+    router
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api))
-        .layer(cors);
+        .layer(cors)
+}
 
-    // 4. 绑定端口并启动
+/// 绑定 TCP 端口并启动服务。
+pub async fn start_server(state: AppState, bind_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let app = build_app(state);
+
     tracing::info!("🚀 Okane API Server listening on {}", bind_addr);
     tracing::info!("📖 Swagger UI: http://{}/swagger-ui/", bind_addr);
 
