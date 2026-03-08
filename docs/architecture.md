@@ -1,9 +1,13 @@
-# Okane 系统架构说明书
+# Okane 技术架构说明书 (Architecture)
 
-## 1. 架构图 (Mermaid)
+## 1. 系统架构图 (Mermaid)
 
 ```mermaid
 graph TB
+    subgraph "接入层 (Gateway)"
+        API[crates/api - REST API / Swagger]
+    end
+
     subgraph "启动层 (DI Container)"
         App[crates/app]
     end
@@ -14,7 +18,7 @@ graph TB
 
     subgraph "领域实现层 (Domain Implementation)"
         MarketImpl[crates/market - 行情聚合]
-        TradeImpl[crates/trade - 交易与账户 OMS]
+        TradeImpl[crates/trade - 内部模拟 OMS]
         Engine[crates/engine - 策略沙盒运行时]
     end
 
@@ -24,18 +28,20 @@ graph TB
 
     subgraph "基础设施层 (Infrastructure)"
         Feed[crates/feed - 实时行情接入]
-        Broker[crates/broker - 券商交易通道]
         Store[crates/store]
         Notify[crates/notify]
         Cache[crates/cache]
+        %% Broker[crates/broker - 实盘通道 计划中]
     end
 
     %% 编译期依赖关系
-    %% App 是唯一知道所有具体实现的组装点
+    API --> Manager
+    API --> Core
+    
+    App --> API
     App --> Manager
     App --> Engine
     App --> Feed
-    App --> Broker
     App --> Store
     App --> Notify
     App --> MarketImpl
@@ -43,140 +49,48 @@ graph TB
     App --> Cache
     App --> Core
 
-    %% Manager 编译期仅依赖 Core
     Manager --> Core
 
-    %% 所有实现层编译期仅依赖 Core
+    %% 实现层依赖
     Engine --> Core
     MarketImpl --> Core
     TradeImpl --> Core
     Feed --> Core
-    Broker --> Core
     Store --> Core
     Notify --> Core
     Cache --> Core
-
-    %% 运行时注入关系 (App 在 main 中通过 Arc<dyn Trait> 注入)
-    App -. "注入 Arc<dyn Market>" .-> Manager
-    App -. "注入 Arc<dyn StrategyStore>" .-> Manager
-    App -. "注入 Arc<dyn EngineBuilder>" .-> Manager
 ```
 
 ## 2. 模块职责说明 (Crates)
-- **core**: 定义系统核心领域。包含 `Stock`、`StrategyInstance` 聚合根、`Candle` 时序数据、以及 `Market`、`MarketDataProvider`、`StrategyStore`、`EngineBuilder` 等 **Port (端口/接口)**。它是系统的防腐层核心，不依赖外部。
-- **manager**: 独立的应用调度服务 (Application Service / Facade)。编译期**仅依赖 `core`**，所有具体实现通过 `Arc<dyn Trait>` 由 `app` 在启动时注入。负责根据请求创建 `StrategyInstance` 聚合根，通过 `EngineBuilder` 接口动态分发给对应的引擎执行，并管控 `tokio::spawn` 协程的生命周期（启停、监控）。
-- **market**: 领域逻辑实现。负责 `Market` 和 `Stock` 契约的具体实现。包含单源订阅、多路广播、以及基于引用计数的资源自动回收逻辑。
-- **engine**: 策略引擎执行器 (Infrastructure Executor)。提供双运行时支持，本身**无状态**，通过实现 `EngineBuilder` 接口被 `manager` 间接调用：
-  - **JsEngine (主线)**：基于 `rquickjs` (QuickJS) 在沙盒中直接执行 JavaScript 策略，覆盖开发、调试、回测、生产全生命周期。
-  - **WasmEngine (储备)**：基于 `wasmtime` 执行其他编译型语言（Rust/C/Go）生成的 WASM 策略模块，暂不优先实现。
-- **feed**: 行情抓取适配器。实现 `MarketDataProvider`，目前对接 Yahoo Finance。
-- **store**: 数据持久化适配器。实现存储接口，负责 SQLite 的物理读写。策略存储采用"一户一库" (One Database per User) 策略以规避 SQLite 并发瓶颈。
-- **cache**: 业务无关的异步 KV 存储接口。它仅作为数据在内存中的载体，不感知具体业务逻辑。
-- **notify**: 通知适配器。实现信号推送逻辑 (Telegram/Email)。
-- **app**: 纯粹的 DI 容器 (Dependency Injection) 与启动引导程序。负责实例化所有具体实现组件并通过 `Arc<dyn Trait>` 注入到 `manager`，然后挂载前端接入层（Web API / CLI）。自身不包含业务逻辑。
 
-## 3. 核心领域对象
+- **core**: 系统核心领域定义。包含聚合根 (`Stock`, `StrategyInstance`)、实体 (`Candle`, `Order`) 和接口端口 (`Market`, `TradePort`, `StrategyStore`)。它是系统的防腐层核心，不依赖任何外部逻辑。
+- **api**: 外部接入网关。负责基于 `axum` 的 RESTful 接口分发、JWT 认证中间件、以及 Swagger 文档自动生成。
+- **manager**: 应用调度中心。负责 `StrategyInstance` 的全生命周期管控，协调行情与执行引擎，驱动 `tokio::spawn` 协程运行。
+- **market**: 领域逻辑实现。负责 `Stock` 行情聚合根的维护，支持多路订阅广播与基于引用计数的资源自动清理。
+- **engine**: 策略执行器。实现 `EngineBuilder` 接口。目前主要为 **JsEngine**：基于 `rquickjs` 的沙盒，提供隔离且受限的策略运行环境。
+- **trade**: 内盘 OMS (Order Management System)。在实盘通道未接入前，提供本地撮合引擎 (`Matcher`)，支持纸面交易、盈亏计算与回测成交模拟。
+- **feed**: 行情抓取适配器 (Adapter)。实现 `MarketDataProvider`。
+- **store**: 持久化适配器。基于 SQLite 负责策略配置、账户资产与历史行情的物理存取。
+- **app**: DI 容器与引导程序。负责组件实例化、对象依赖注入 (Arc 注入) 并启动 API 监听。
 
-### 3.1 Stock 聚合根
-`Stock` 是系统中最核心的行情聚合根，它具备以下特性：
-- **身份唯一性**: 同一个 Symbol 在内存中仅存在一个物理聚合根实例。
-- **能力内聚**: 封装了实时流订阅、瞬时价格查询、历史回溯等所有行情行为。
-- **生命周期自愈 (Weak-Hub 模式)**: 
-    - `Market` 注册表持有 `Weak<StockInner>` 引用，外部（Engine/API）持有 `Arc<dyn Stock>` 引用。
-    - 当所有外部 `Arc` 被释放时，聚合根自动触发 `Drop`，清理注册表并停止底层的抓取任务（Feed Connection）。
+## 3. 核心设计模式
 
-### 3.2 StrategyInstance 聚合根
-`StrategyInstance` 是负责定义和追踪策略运行状态的聚合根：
-- **身份标识**: 拥有全系统唯一的实例 ID。
-- **配置数据**: 绑定目标引擎类型（JS/WASM）、目标证券 (`symbol`)、时间周期 (`timeframe`) 以及策略源码/字节码。
-- **状态变迁**: 严格遵循状态机 `Pending` -> `Running` -> `Stopped` / `Failed`。
-- **运行统计**: 追踪产生交易信号的次数、生命周期内的运行日志以及错误信息。
+### 3.1 Weak-Hub 生命周期管理
+- `Market` 注册表持有 `Weak<StockInner>`，而外部引用持有 `Arc<dyn Stock>`。
+- 当最后一个 `Arc` 被释放（如策略停止不再订阅），聚合根自动触发 `Drop`，清理注册表并关闭底层的 `Feed` 网络连接。
 
-## 4. 核心流程
-1. **获取聚合根**: 
-   - **数据向**: `StrategyManager` 内部通过 `Market::get_stock("AAPL")` 获取 `Stock`。如已有实例，则返回现有 `Weak` 的 `Arc` 升级引用。
-   - **控制向**: 外部请求通过 `StrategyManager` 查询或更新 `StrategyInstance`。
-2. **数据链**: `feed` (抓取) -> `market` (广播并存入 `cache`) -> `store` (落库)。
-3. **控制链 (Facade 调度)**: `客户端/前端` -> `StrategyManager`.start() -> 生成 `StrategyInstance` -> `StrategyManager` 通过 `EngineBuilder` 创建引擎并分配 `tokio::spawn` 挂载执行。
-4. **业务链**: `Engine` (挂载 `Stock` 并持续拉取/订阅) -> 产生 `Signal` -> 触发 `SignalHandler` (如 `notify` 或本地风控)。
-5. **隔离性**: 策略逻辑运行在 QuickJS 沙盒中，默认无任何 I/O 能力，所有平台能力通过 `host` 对象显式注入。
+### 3.2 纸面交易与模拟撮合
+- `TradeService` 封装了账户资金冻结、订单状态管理和持仓更新逻辑。
+- `LocalMatchEngine` 接收行情 Tick 并触发订单的成交判定（限价单击穿判定）。
 
-## 5. 技术特性
-- **运行时**: `tokio`
-- **数据库**: `sqlx` (SQLite)
-- **策略引擎 (双运行时)**:
-  - **JsEngine (主线)**: 基于 `rquickjs`，在 QuickJS 沙盒中直接执行 JS 策略。沙盒默认无文件/网络等 I/O 能力，配置 32MB 内存、1MB 栈大小限制。平台能力通过 `host` 对象注入（`log`、`now`、`fetchHistory`）。
-  - **WasmEngine (储备)**: 基于 `wasmtime`，为未来其他编译型语言策略预留。代码保留但暂不优先实现。
-  - **驱动模型 (Push Loop)**: 采用 Host-Driven 模式。引擎持有 `market.subscribe()` 流，每当有新 K 线时，主动调用策略的 `onCandle` 回调。
-  - **注意**: QuickJS 为单线程运行时（`AsyncContext` 不是 `Send`），在 tokio 多线程环境中需使用 `LocalSet::spawn_local`。
-- **序列化**: `serde` + `serde_json`
-- **数据获取模式**:
-    *   **Pull (拉取)**: 用于回测或补全历史数据，通过 `fetch_candles` 同步获取。
-    *   **Push (订阅)**: 用于实时策略追踪，通过 `subscribe` 返回一个异步流 (`Stream`)。
-    *   **屏蔽差异**: Provider 必须保证订阅接口可用。对于不支持原生长连接的源，应在内部通过异步轮询 (Polling) 模拟实时流。
-- **注释文档规范**：
-    * 对外暴露的函数方法必须包含 `///` 注释，详细说明 `# Logic` (逻辑步骤), `# Arguments`, `# Returns`。
-    * 对外暴露的数据集合或抽象接口必须包含 `///` 注释，详细说明 `# Summary` (设计意图),  `# Invariants` (约束规则)。
-    * 对外暴露的成员字段必须包含 `//` 注释，解释其含义。
-- **编码规范**：
-    * 禁止在`lib.rs`中编写逻辑代码
-    * 禁止在`lib.rs`中使用`pub use`导出
+## 4. 控制链与数据流
 
-## 6. 代码组织规范 (Code Organization)
+1. **控制向**：`External Request` -> `API` -> `Manager` -> `Engine` (控制生命周期)。
+2. **数据向**：`Feed` -> `Market` -> `Broadcaster` -> `Engine (onCandle)`。
+3. **交易向**：`Engine` -> `TradePort` -> `TradeService` (内部 OMS) -> `AccountStore`。
 
-项目遵循 **单模块单目录 (Single Module per Directory)** 的拆分原则，杜绝"上帝文件"。
+## 5. 存储架构
 
-代码必须经过cargo clippy检查且不存在警告，禁止使用 `#[allow(clippy::too_many_arguments)]` 之类的东西绕过警告。
-
-### Core 领域层目录结构
-`crates/core` 必须按照**业务子域**进行垂直切分，每个子域拥有独立的目录和 `mod.rs` 入口。接口定义文件统一命名为 `port.rs`。
-
-*   **`common/`**: 通用基础类型。
-    *   包含: `Stock`, `TimeFrame`
-*   **`market/`**: 行情相关业务。
-    *   包含: `entity.rs` (Candle), `port.rs` (MarketDataProvider, Market & Stock Traits), `error.rs` (MarketError)
-*   **`strategy/`**: 策略生命周期管理。
-    *   包含: `entity.rs` (StrategyInstance, EngineType, StrategyStatus), `port.rs` (StrategyStore)
-*   **`engine/`**: 引擎相关抽象。
-    *   包含: `entity.rs` (Signal), `port.rs` (SignalHandler, EngineBuilder), `error.rs` (EngineError)
-*   **`store/`**: 持久化相关业务。
-    *   包含: `port.rs` (MarketStore), `error.rs` (StoreError)
-*   **`notify/`**: 通知相关业务。
-    *   包含: `port.rs` (Notifier), `error.rs` (NotifyError)
-*   **`trade/`**: 交易与账户体系 (OMS) 相关业务。
-    *   包含: `entity.rs` (Order, Position, Account, Trade), `port.rs` (TradePort), `error.rs` (TradeError)
-
-### 设计原则
-1.  **高内聚**：相关联的 Entity, Error, Port 必须在逻辑上归属于同一个业务子域。
-2.  **物理隔离**：通过目录层级强制隔离不同业务域的实现细节。
-3.  **显式 Port**：所有需要外部实现的抽象行为必须在各子域的 `port.rs` 中定义。
-
-## 7. 缓存规范 (Cache Standard)
-
-### 7.1 定义与职责
-Cache 被定义为一个**业务无关的异步 KV 存储接口**。它仅作为数据在内存中的载体，不感知具体业务逻辑。
-
-### 7.2 接口规约
-- **标准操作**：必须实现 `set`、`get`、`del` 三个核心方法。
-- **泛型支持**：接口应支持通过序列化/反序列化进行强类型数据的存取。
-- **管理策略**：Cache 内部不提供 TTL (过期时间) 或容量淘汰机制。数据的新鲜度维护与版本管理完全由上游业务逻辑自行实现。
-
-## 8. OMS 与券商多维账户映射体系 (规划中)
-
-为了支持“多平台账号跑同一策略”或“一账号跑多个股票/策略”的灵活量化需求，系统对“账户”进行了**逻辑与物理隔离**。
-
-### 8.1 DDD 职责边界 (Feed vs Trade)
-在现实中，某个“券商 (Broker)”往往既提供行情又提供交易。但在本系统的领域中，它们被拆分为两个高内聚的界限上下文：
-- **`crates/feed` (行情层)**: 负责高频、无状态、重 IO 的实时数据流（WebSocket）。
-- **`crates/trade` (交易与账户层)**: 负责强状态、重写互斥、重安全事务的订单清算与余额管理。这是系统内部的 OMS。
-- **`crates/broker` (基础实施适配层)**: 提供对物理券商 API 的对接实现，仅仅作为满足 `TradePort` 的具体 Adapter。
-
-### 8.2 核心多对多路由体系
-- **系统账户 (System Account)**:
-  系统内部的逻辑资金/结算单位。`Strategy` 实例运行时只绑定且**只知道系统账户**。策略下达的买卖意图属于逻辑 `Order`。
-- **物理通道 (Physical Broker Channel)**:
-  真实存在的券商账号，如 IB、Futu。
-- **路由分配器 (Binding Router)**:
-  位于 `Trade` 层内部，接收来自策略逻辑订单后，经过风控审查（Risk Control），根据用户设置的资金划拨比例或下发规则，将逻辑单实时拆分为一单或多单物理委托（Broker Order），下发到基础设施层的不同 Broker Adapter 执行。清算时，再将多通道的回报平账至所属的 System Account 中。
-
-**安全机制**：账户等强状态聚合根的内存修改，采用最直接的读写锁 (`RwLock`) 或 `Mutex` 保护，拒绝并发数据竞争。金额计算必须使用 `rust_decimal::Decimal`，禁止直接使用浮点数模糊运算。
+- **SQLite 冷热分离**：
+    - **热数据**：活跃策略日志实时流驻留在内存缓冲区 (`DashMap`)。
+    - **冷数据**：通过 JSONL 追加写入物理文件，并由 SQLite 建立索引以便随机访问。
