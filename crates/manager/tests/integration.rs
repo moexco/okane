@@ -44,16 +44,16 @@ async fn test_strategy_lifecycle() -> anyhow::Result<()> {
     let store = Arc::new(SqliteStrategyStore::new().map_err(|e| anyhow::anyhow!("Failed to create store: {}", e))?);
     let engine_builder = Arc::new(MockEngineBuilder);
     let trade_port = Arc::new(SpyTradePort::new());
-    let manager = StrategyManager::new(
-        store.clone(),
-        engine_builder as Arc<dyn okane_core::engine::port::EngineBuilder>,
+    let manager = StrategyManager::new(okane_manager::strategy::StrategyManagerParams {
+        store: store.clone(),
+        engine_builder: engine_builder as Arc<dyn okane_core::engine::port::EngineBuilder>,
         trade_port,
-        Arc::new(MockAlgoOrderPort),
-        Arc::new(MockIndicatorService),
-        Arc::new(okane_core::common::time::RealTimeProvider),
-        Arc::new(NoopNotifierFactory),
-        store,
-    );
+        algo_port: Arc::new(MockAlgoOrderPort),
+        indicator_service: Arc::new(MockIndicatorService),
+        time_provider: Arc::new(okane_core::common::time::RealTimeProvider),
+        notifier_factory: Arc::new(NoopNotifierFactory),
+        log_port: store,
+    });
 
     let user_id = "test_user";
     let req = StartRequest {
@@ -95,16 +95,16 @@ async fn test_strategy_lifecycle() -> anyhow::Result<()> {
     }
     
     let store_inf = Arc::new(SqliteStrategyStore::new().map_err(|e| anyhow::anyhow!("Failed to create inf store: {}", e))?);
-    let manager_inf = StrategyManager::new(
-        store_inf.clone(),
-        Arc::new(InfiniteEngineBuilder) as Arc<dyn okane_core::engine::port::EngineBuilder>,
-        Arc::new(SpyTradePort::new()),
-        Arc::new(MockAlgoOrderPort),
-        Arc::new(MockIndicatorService),
-        Arc::new(okane_core::common::time::RealTimeProvider),
-        Arc::new(NoopNotifierFactory),
-        store_inf,
-    );
+    let manager_inf = StrategyManager::new(okane_manager::strategy::StrategyManagerParams {
+        store: store_inf.clone(),
+        engine_builder: Arc::new(InfiniteEngineBuilder) as Arc<dyn okane_core::engine::port::EngineBuilder>,
+        trade_port: Arc::new(SpyTradePort::new()),
+        algo_port: Arc::new(MockAlgoOrderPort),
+        indicator_service: Arc::new(MockIndicatorService),
+        time_provider: Arc::new(okane_core::common::time::RealTimeProvider),
+        notifier_factory: Arc::new(NoopNotifierFactory),
+        log_port: store_inf,
+    });
     let req_inf = StartRequest {
         symbol: "AAPL".to_string(),
         account_id: "SystemDefault_01".to_string(),

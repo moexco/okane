@@ -120,16 +120,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(okane_notify::factory::DefaultNotifierFactory::new(system_store.clone()));
 
     // 8. 构造应用服务层（注入 Core Trait 抽象）
-    let manager = StrategyManager::new(
-        strategy_store.clone(),
+    let manager = StrategyManager::new(okane_manager::strategy::StrategyManagerParams {
+        store: strategy_store.clone(),
         engine_builder,
-        trade_service.clone(),
-        algo_port.clone(),
-        indicator_service.clone(),
-        Arc::new(RealTimeProvider),
+        trade_port: trade_service.clone(),
+        algo_port: algo_port.clone(),
+        indicator_service: indicator_service.clone(),
+        time_provider: Arc::new(RealTimeProvider),
         notifier_factory,
-        strategy_store,
-    );
+        log_port: strategy_store,
+    });
 
     info!("StrategyManager initialized.");
 

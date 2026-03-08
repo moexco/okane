@@ -102,29 +102,28 @@ pub struct StrategyManager {
     recent_logs: Arc<DashMap<String, VecDeque<StrategyLogEntry>>>,
 }
 
+/// # Summary
+/// StrategyManager 的初始化参数，用于解决构造函数参数过多的问题。
+pub struct StrategyManagerParams {
+    pub store: Arc<dyn StrategyStore>,
+    pub engine_builder: Arc<dyn EngineBuilder>,
+    pub trade_port: Arc<dyn okane_core::trade::port::TradePort>,
+    pub algo_port: Arc<dyn okane_core::trade::port::AlgoOrderPort>,
+    pub indicator_service: Arc<dyn okane_core::market::indicator::IndicatorService>,
+    pub time_provider: Arc<dyn TimeProvider>,
+    pub notifier_factory: Arc<dyn okane_core::notify::port::NotifierFactory>,
+    pub log_port: Arc<dyn StrategyLogPort>,
+}
+
 impl StrategyManager {
-    /// # Summary
-    /// 创建 StrategyManager 实例。
-    ///
     /// # Arguments
-    /// * `store` - 策略持久化接口的具体实现。
-    /// * `engine_builder` - 引擎构建接口的具体实现。
+    /// * `params` - 包含所有必需依赖项的初始化参数。
     ///
     /// # Returns
     /// * `Arc<Self>` - 可共享的管理器实例。
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        store: Arc<dyn StrategyStore>,
-        engine_builder: Arc<dyn EngineBuilder>,
-        trade_port: Arc<dyn okane_core::trade::port::TradePort>,
-        algo_port: Arc<dyn okane_core::trade::port::AlgoOrderPort>,
-        indicator_service: Arc<dyn okane_core::market::indicator::IndicatorService>,
-        time_provider: Arc<dyn TimeProvider>,
-        notifier_factory: Arc<dyn okane_core::notify::port::NotifierFactory>,
-        log_port: Arc<dyn StrategyLogPort>,
-    ) -> Arc<Self> {
+    pub fn new(params: StrategyManagerParams) -> Arc<Self> {
         let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<(String, StrategyLogEntry)>();
-        let log_port_inner = log_port.clone();
+        let log_port_inner = params.log_port.clone();
 
         let recent_logs = Arc::new(DashMap::<String, VecDeque<StrategyLogEntry>>::new());
         let recent_logs_clone = recent_logs.clone();
@@ -151,14 +150,14 @@ impl StrategyManager {
         });
 
         Arc::new(Self {
-            store,
-            engine_builder,
-            trade_port,
-            algo_port,
-            indicator_service,
-            time_provider,
-            notifier_factory,
-            log_port,
+            store: params.store,
+            engine_builder: params.engine_builder,
+            trade_port: params.trade_port,
+            algo_port: params.algo_port,
+            indicator_service: params.indicator_service,
+            time_provider: params.time_provider,
+            notifier_factory: params.notifier_factory,
+            log_port: params.log_port,
             log_tx,
             running_tasks: DashMap::new(),
             recent_logs,

@@ -140,16 +140,16 @@ pub async fn spawn_test_server() -> anyhow::Result<(String, Arc<dyn SystemStore>
         engine_builder_factory,
     ));
 
-    let strategy_manager = StrategyManager::new(
-        strategy_store.clone(),
-        engine_builder as Arc<dyn okane_core::engine::port::EngineBuilder>,
-        trade_service.clone(),
-        algo_service.clone(),
-        indicator_service.clone(),
-        Arc::new(okane_core::common::time::RealTimeProvider),
-        Arc::new(NoopNotifierFactory),
-        strategy_store,
-    );
+    let strategy_manager = StrategyManager::new(okane_manager::strategy::StrategyManagerParams {
+        store: strategy_store.clone(),
+        engine_builder: engine_builder as Arc<dyn okane_core::engine::port::EngineBuilder>,
+        trade_port: trade_service.clone(),
+        algo_port: algo_service.clone(),
+        indicator_service: indicator_service.clone(),
+        time_provider: Arc::new(okane_core::common::time::RealTimeProvider),
+        notifier_factory: Arc::new(NoopNotifierFactory),
+        log_port: strategy_store,
+    });
 
     let state = AppState {
         strategy_manager,
