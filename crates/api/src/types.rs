@@ -86,6 +86,32 @@ pub struct OrderResponse {
     pub created_at: i64,
 }
 
+/// 算法单 DTO
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AlgoOrderResponse {
+    /// 算法单 ID
+    #[schema(example = "algo-123456")]
+    pub id: String,
+    /// 归属账户 ID
+    #[schema(example = "SysAcct_Alpha_01")]
+    pub account_id: String,
+    /// 股票代码
+    #[schema(example = "NVDA")]
+    pub symbol: String,
+    /// 算法类型 (Grid, Twap, Snipe)
+    #[schema(example = "Grid")]
+    pub algo_type: String,
+    /// 算法参数 (JSON 对象)
+    pub params: serde_json::Value,
+    /// 状态 (Running, Completed, Canceled 等)
+    #[schema(example = "Running")]
+    pub status: String,
+    /// 已成交数量
+    pub filled_volume: String,
+    /// 创建时间
+    pub created_at: i64,
+}
+
 /// 历史成交明细 (Trade/Fill) DTO
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TradeResponse {
@@ -555,6 +581,30 @@ impl From<okane_core::trade::entity::Trade> for TradeResponse {
             volume: t.volume.to_string(),
             commission: t.commission.to_string(),
             timestamp: t.timestamp,
+        }
+    }
+}
+
+impl From<okane_core::trade::entity::AlgoOrder> for AlgoOrderResponse {
+    fn from(o: okane_core::trade::entity::AlgoOrder) -> Self {
+        let val = serde_json::to_value(&o.algo).unwrap_or(serde_json::Value::Null);
+        let algo_type = val.get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("Unknown")
+            .to_string();
+        let params = val.get("params")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+
+        Self {
+            id: o.id.0,
+            account_id: o.account_id.0,
+            symbol: o.symbol,
+            algo_type,
+            params,
+            status: format!("{:?}", o.status),
+            filled_volume: o.filled_volume.to_string(),
+            created_at: o.created_at,
         }
     }
 }

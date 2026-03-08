@@ -1,4 +1,4 @@
-use okane_core::test_utils::{MockMarket, MockStock, SpyTradePort};
+use okane_core::test_utils::{MockMarket, MockStock, SpyTradePort, MockAlgoOrderPort, MockIndicatorService};
 use okane_core::common::time::FakeClockProvider;
 use okane_core::common::{Stock as StockIdentity, TimeFrame};
 use okane_core::market::entity::Candle;
@@ -56,7 +56,14 @@ async fn test_wasm_strategy_dummy_execution() -> anyhow::Result<()> {
     });
     let market = Arc::new(MockMarket { stock: mock_stock });
     let trade = Arc::new(SpyTradePort::new());
-    let engine = WasmEngine::new(market, trade.clone(), Arc::new(FakeClockProvider::new(chrono::Utc::now())), None).map_err(|e| anyhow::anyhow!(e))?;
+    let engine = WasmEngine::new(
+        market,
+        trade.clone(),
+        Arc::new(MockAlgoOrderPort),
+        Arc::new(MockIndicatorService),
+        Arc::new(FakeClockProvider::new(chrono::Utc::now())),
+        None,
+    ).map_err(|e| anyhow::anyhow!(e))?;
 
     let handle = tokio::spawn(async move {
         engine
@@ -109,7 +116,14 @@ async fn test_wasm_strategy_dummy_below_threshold() -> anyhow::Result<()> {
     });
     let market = Arc::new(MockMarket { stock: mock_stock });
     let trade = Arc::new(SpyTradePort::new());
-    let engine = WasmEngine::new(market, trade.clone(), Arc::new(FakeClockProvider::new(chrono::Utc::now())), None).map_err(|e| anyhow::anyhow!(e))?;
+    let engine = WasmEngine::new(
+        market,
+        trade.clone(),
+        Arc::new(MockAlgoOrderPort),
+        Arc::new(MockIndicatorService),
+        Arc::new(FakeClockProvider::new(chrono::Utc::now())),
+        None,
+    ).map_err(|e| anyhow::anyhow!(e))?;
 
     let handle = tokio::spawn(async move {
         engine

@@ -158,3 +158,83 @@ pub struct AccountSnapshot {
     /// 持仓列表
     pub positions: Vec<Position>,
 }
+
+/// # Summary
+/// 算法单类型定义。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "params")]
+pub enum AlgoType {
+    /// 网格交易：在价格区间内进行低买高卖。
+    Grid {
+        upper_price: Decimal,
+        lower_price: Decimal,
+        grids: u32,
+    },
+    /// 时间加权平均价格：在指定时间内均匀下单。
+    Twap {
+        duration_secs: u64,
+        total_volume: Decimal,
+    },
+    /// 狙击单：极速交易，通常用于捕捉瞬时机会。
+    Snipe {
+        target_price: Decimal,
+        max_slippage: Decimal,
+    },
+}
+
+/// # Summary
+/// 算法单状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AlgoOrderStatus {
+    /// 正在运行
+    Running,
+    /// 已暂停
+    Paused,
+    /// 已完成
+    Completed,
+    /// 已取消
+    Canceled,
+    /// 失败
+    Failed,
+}
+
+/// # Summary
+/// 算法单模型。
+/// 算法单通常不直接对应物理订单，而是由算法逻辑驱动产生一笔或多笔子订单。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlgoOrder {
+    /// 算法单唯一标识
+    pub id: OrderId,
+    /// 归属账户
+    pub account_id: AccountId,
+    /// 交易标的
+    pub symbol: String,
+    /// 算法类型及参数
+    pub algo: AlgoType,
+    /// 当前状态
+    pub status: AlgoOrderStatus,
+    /// 已成交总量
+    pub filled_volume: Decimal,
+    /// 创建时间
+    pub created_at: i64,
+}
+
+impl AlgoOrder {
+    pub fn new(
+        id: OrderId,
+        account_id: AccountId,
+        symbol: String,
+        algo: AlgoType,
+        now_ms: i64,
+    ) -> Self {
+        Self {
+            id,
+            account_id,
+            symbol,
+            algo,
+            status: AlgoOrderStatus::Running,
+            filled_volume: Decimal::ZERO,
+            created_at: now_ms,
+        }
+    }
+}

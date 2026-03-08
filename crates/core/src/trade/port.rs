@@ -1,4 +1,4 @@
-use super::entity::{AccountId, AccountSnapshot, Order, OrderId, Trade};
+use super::entity::{AccountId, AccountSnapshot, Order, OrderId, Trade, AlgoOrder};
 use async_trait::async_trait;
 use crate::market::entity::Candle;
 use thiserror::Error;
@@ -22,6 +22,10 @@ pub enum TradeError {
     BrokerIntegrationError(String),
     #[error("内部系统错误: {0}")]
     InternalError(String),
+    #[error("算法单未找到: {0}")]
+    AlgoOrderNotFound(String),
+    #[error("算法单协议错误: {0}")]
+    AlgoOrderError(String),
 }
 
 /// # Summary
@@ -128,4 +132,24 @@ pub trait BrokerPort: Send + Sync {
     async fn query_order_status(&self, external_order_id: &str) -> Result<(), TradeError>;
     
     // TODO: 未来还会增加类似 subscribe_execution_report 的流式回报接口
+}
+
+/// # Summary
+/// 算法单管理接口。
+#[async_trait]
+pub trait AlgoOrderPort: Send + Sync {
+    /// 提交一个新的算法单
+    async fn submit_algo_order(&self, order: AlgoOrder) -> Result<OrderId, TradeError>;
+
+    /// 取消一个算法单
+    async fn cancel_algo_order(&self, order_id: &OrderId) -> Result<(), TradeError>;
+
+    /// 获取单个算法单详情
+    async fn get_algo_order(&self, order_id: &OrderId) -> Result<Option<AlgoOrder>, TradeError>;
+
+    /// 获取账户下的所有算法单
+    async fn get_algo_orders(&self, account_id: &AccountId) -> Result<Vec<AlgoOrder>, TradeError>;
+
+    /// 更新算法单状态
+    async fn update_algo_status(&self, order_id: &OrderId, status: super::entity::AlgoOrderStatus) -> Result<(), TradeError>;
 }

@@ -11,7 +11,9 @@ use okane_core::trade::port::AccountPort;
 use okane_market::history::BacktestMarket;
 use okane_trade::account::AccountManager;
 use okane_trade::service::TradeService;
+use okane_trade::algo::AlgoOrderService;
 use okane_trade::trade_log::TradeLog;
+use okane_market::indicator::MarketIndicatorService;
 use rust_decimal::Decimal;
 use std::sync::{Arc, Mutex};
 use tracing::info;
@@ -196,9 +198,9 @@ impl BacktestRunner {
         let trade_service = Arc::new(
             TradeService::new(
                 account_manager.clone(),
-                matcher,
+                matcher.clone(),
                 lazy_market.clone(), // 先传入空壳 Market
-                pending_port,
+                pending_port.clone(),
                 fake_clock.clone(),
             )
             .with_trade_log(trade_log.clone()),
@@ -213,6 +215,22 @@ impl BacktestRunner {
             fake_clock.clone(),
             trade_service.clone(),
         ));
+
+        let algo_service = Arc::new(AlgoOrderService::new(trade_service.clone(), fake_clock.clone()));
+        let indicator_service = Arc::new(MarketIndicatorService::new(backtest_market.clone()));
+
+        // 将算法单服务注入 TradeService 以便驱动其 tick
+        let trade_service = Arc::new(
+            TradeService::new(
+                account_manager.clone(),
+                matcher.clone(),
+                lazy_market.clone(),
+                pending_port.clone(),
+                fake_clock.clone(),
+            )
+            .with_trade_log(trade_log.clone())
+            .with_algo_service(algo_service.clone())
+        );
 
         // 延迟注入: LazyMarket 现在指向 BacktestMarket
         lazy_market.set(backtest_market.clone()).map_err(|e| {
@@ -231,6 +249,8 @@ impl BacktestRunner {
             timeframe: req.timeframe,
             source: req.source,
             trade_port: trade_service.clone(),
+            algo_port: algo_service,
+            indicator_service,
             time_provider: fake_clock,
             notifier: None, // 回测中不推送通知
         })?;

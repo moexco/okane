@@ -6,9 +6,9 @@ use chrono::Utc;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
-use okane_core::trade::entity::{AccountId, Order, OrderDirection, OrderId};
+use okane_core::trade::entity::{AccountId, Order, OrderDirection, OrderId, AlgoOrder, AlgoType};
 use crate::error::ApiError;
-use crate::types::{ApiResponse, OrderResponse};
+use crate::types::{ApiResponse, OrderResponse, AlgoOrderResponse};
 use crate::middleware::auth::CurrentUser;
 use crate::server::AppState;
 
@@ -182,6 +182,109 @@ pub async fn cancel_order(
 
     match state.trade_port.cancel_order(order_id).await {
         Ok(_) => Ok(Json(ApiResponse::ok("ok".to_string()))),
+        Err(e) => Err(ApiError::from(e)),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct SubmitAlgoRequest {
+    pub account_id: String,
+    pub symbol: String,
+    pub algo_type: String,
+    pub params: serde_json::Value,
+}
+
+/// 提交算法单
+#[utoipa::path(
+    post,
+    path = "/api/v1/user/algo",
+    tag = "算法单 (Algo)",
+    security(("bearer_jwt" = [])),
+    request_body = SubmitAlgoRequest,
+    responses(
+        (status = 200, description = "提交成功", body = ApiResponse<String>),
+        (status = 500, description = "内部错误")
+    )
+)]
+pub async fn submit_algo_order(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Json(req): Json<SubmitAlgoRequest>,
+) -> Result<Json<ApiResponse<String>>, ApiError> {
+    let is_owner = state.system_store.verify_account_ownership(&user.id, &req.account_id).await
+        .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?;
+    if !is_owner {
+        return Err(ApiError::Forbidden("Forbidden".to_string()));
+    }
+
+    let algo = match req.algo_type.as_str() {
+        "grid" => {
+            let upper = req.params["upper_price"].as_str().ok_or(ApiError::BadRequest("missing upper_price".into()))?;
+            let lower = req.params["lower_price"].as_str().ok_or(ApiError::BadRequest("missing lower_price".into()))?;
+            let grids = req.params["grids"].as_u64()
+                .ok_or(ApiError::BadRequest("missing grids".into()))?
+                .try_into()
+                .map_err(|_| ApiError::BadRequest("grids value too large".into()))?;
+            AlgoType::Grid {
+                upper_price: Decimal::from_str(upper).map_err(|_| ApiError::BadRequest("invalid price".into()))?,
+                lower_price: Decimal::from_str(lower).map_err(|_| ApiError::BadRequest("invalid price".into()))?,
+                grids,
+            }
+        },
+        "snipe" => {
+            let target = req.params["target_price"].as_str().ok_or(ApiError::BadRequest("missing target_price".into()))?;
+            AlgoType::Snipe {
+                target_price: Decimal::from_str(target).map_err(|_| ApiError::BadRequest("invalid price".into()))?,
+                max_slippage: Decimal::ZERO,
+            }
+        },
+        _ => return Err(ApiError::BadRequest("Unsupported algo type".into())),
+    };
+
+    let order = AlgoOrder::new(
+        OrderId(uuid::Uuid::new_v4().to_string()),
+        AccountId(req.account_id),
+        req.symbol,
+        algo,
+        Utc::now().timestamp_millis(),
+    );
+
+    match state.algo_port.submit_algo_order(order).await {
+        Ok(id) => Ok(Json(ApiResponse::ok(id.0))),
+        Err(e) => Err(ApiError::from(e)),
+    }
+}
+
+/// 获取当前账户的所有算法单
+#[utoipa::path(
+    get,
+    path = "/api/v1/user/algo",
+    tag = "算法单 (Algo)",
+    security(("bearer_jwt" = [])),
+    params(
+        ("account_id" = String, Query, description = "账户 ID")
+    ),
+    responses(
+        (status = 200, description = "获取成功", body = ApiResponse<Vec<AlgoOrderResponse>>)
+    )
+)]
+pub async fn get_algo_orders(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Query(query): Query<GetOrdersQuery>,
+) -> Result<Json<ApiResponse<Vec<AlgoOrderResponse>>>, ApiError> {
+    let account = AccountId(query.account_id);
+    let is_owner = state.system_store.verify_account_ownership(&user.id, &account.0).await
+        .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?;
+    if !is_owner {
+        return Err(ApiError::Forbidden("Forbidden".to_string()));
+    }
+
+    match state.algo_port.get_algo_orders(&account).await {
+        Ok(orders) => {
+            let dtos = orders.into_iter().map(Into::into).collect();
+            Ok(Json(ApiResponse::ok(dtos)))
+        }
         Err(e) => Err(ApiError::from(e)),
     }
 }

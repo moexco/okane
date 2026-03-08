@@ -7,8 +7,12 @@ use okane_core::engine::error::EngineError;
 use okane_core::market::port::Market;
 use okane_core::market::error::MarketError;
 use okane_core::market::entity::Candle;
+use okane_core::trade::port::{TradePort, AlgoOrderPort};
+use okane_core::market::indicator::IndicatorService;
+use okane_core::trade::entity::{OrderId, AlgoOrder, AlgoType, AccountId};
 use rquickjs::{AsyncContext, AsyncRuntime, Function, Object, Value, async_with};
 use std::sync::{Arc, Mutex};
+use rust_decimal::Decimal;
 use tracing::{debug, error, info, warn};
 
 
@@ -21,7 +25,9 @@ use tracing::{debug, error, info, warn};
 /// - 适用于策略开发、调试和回测场景。
 pub struct JsEngine {
     pub base: EngineBase,
-    trade_port: Arc<dyn okane_core::trade::port::TradePort>,
+    trade_port: Arc<dyn TradePort>,
+    algo_port: Arc<dyn AlgoOrderPort>,
+    indicator_service: Arc<dyn IndicatorService>,
     time_provider: Arc<dyn TimeProvider>,
     notifier: Option<Arc<dyn okane_core::notify::port::Notifier>>,
     bridge: Arc<AsyncBridge>,
@@ -41,13 +47,17 @@ impl JsEngine {
     /// * `Self` - 初始化后的引擎实例。
     pub fn new(
         market: Arc<dyn Market>,
-        trade_port: Arc<dyn okane_core::trade::port::TradePort>,
+        trade_port: Arc<dyn TradePort>,
+        algo_port: Arc<dyn AlgoOrderPort>,
+        indicator_service: Arc<dyn IndicatorService>,
         time_provider: Arc<dyn TimeProvider>,
         notifier: Option<Arc<dyn okane_core::notify::port::Notifier>>,
     ) -> Result<Self, EngineError> {
         Ok(Self {
             base: EngineBase::new(market),
             trade_port,
+            algo_port,
+            indicator_service,
             time_provider,
             notifier,
             bridge: Arc::new(AsyncBridge::new()?),
@@ -99,6 +109,8 @@ impl JsEngine {
         let plugin_ctx = Arc::new(Mutex::new(PluginContext {
             market: self.base.market.clone(),
             trade_port: self.trade_port.clone(),
+            algo_port: self.algo_port.clone(),
+            indicator_service: self.indicator_service.clone(),
             account_id: account_id.to_string(),
             time_provider: self.time_provider.clone(),
             notifier: self.notifier.clone(),
@@ -396,7 +408,7 @@ impl JsEngine {
                 info!("host.cancelOrder: orderId={}", order_id);
 
                 match bridge_for_cancel.call(async move {
-                    trade_port.cancel_order(okane_core::trade::entity::OrderId(order_id)).await.map_err(|e| e.to_string())
+                    trade_port.cancel_order(OrderId(order_id)).await.map_err(|e| e.to_string())
                 }) {
                     Ok(Ok(())) => Ok("ok".to_string()),
                     Ok(Err(e)) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
@@ -404,6 +416,84 @@ impl JsEngine {
                 }
             })
             .map_err(|_| EngineError::Plugin("log setup failed".to_string()))?,
+        )
+        .map_err(|_| EngineError::Plugin("log set failed".to_string()))?;
+
+        // host.submitAlgoOrder(type: string, params: object) -> string (OrderId | Error)
+        let ctx_for_algo = plugin_ctx.clone();
+        let bridge_for_algo = bridge.clone();
+        host.set(
+            "submitAlgoOrder",
+            Function::new(ctx.clone(), move |symbol: String, algo_type: String, params: Object| -> Result<String, rquickjs::Error> {
+                let ctx_mutex = ctx_for_algo.lock().map_err(|_| rquickjs::Error::Exception)?;
+                let algo_port = ctx_mutex.algo_port.clone();
+                let account_id = ctx_mutex.account_id.clone();
+                let now_ms = ctx_mutex.time_provider.now().map_err(|_| rquickjs::Error::Exception)?.timestamp_millis();
+                drop(ctx_mutex);
+
+                // 根据类型解析参数
+                let algo = match algo_type.as_str() {
+                    "grid" => {
+                        let upper: String = params.get("upper_price").map_err(|_| rquickjs::Error::Exception)?;
+                        let lower: String = params.get("lower_price").map_err(|_| rquickjs::Error::Exception)?;
+                        let grids: u32 = params.get("grids").map_err(|_| rquickjs::Error::Exception)?;
+                        AlgoType::Grid {
+                            upper_price: upper.parse().map_err(|_| rquickjs::Error::Exception)?,
+                            lower_price: lower.parse().map_err(|_| rquickjs::Error::Exception)?,
+                            grids,
+                        }
+                    },
+                    "snipe" => {
+                        let target: String = params.get("target_price").map_err(|_| rquickjs::Error::Exception)?;
+                        AlgoType::Snipe {
+                            target_price: target.parse().map_err(|_| rquickjs::Error::Exception)?,
+                            max_slippage: Decimal::ZERO,
+                        }
+                    },
+                    _ => return Ok(serde_json::json!({"error": "Unsupported algo type"}).to_string()),
+                };
+
+                let order = AlgoOrder::new(
+                    OrderId(uuid::Uuid::new_v4().to_string()),
+                    AccountId(account_id),
+                    symbol,
+                    algo,
+                    now_ms,
+                );
+
+                match bridge_for_algo.call(async move {
+                    algo_port.submit_algo_order(order).await.map_err(|e| e.to_string())
+                }) {
+                    Ok(Ok(oid)) => Ok(oid.0),
+                    Ok(Err(e)) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
+                    Err(e) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
+                }
+            })
+            .map_err(|_| EngineError::Plugin("log setup failed".to_string()))?,
+        )
+        .map_err(|_| EngineError::Plugin("log set failed".to_string()))?;
+
+        // host.rsi(symbol, timeframe, period) -> number
+        let ctx_for_rsi = plugin_ctx.clone();
+        let bridge_for_rsi = bridge.clone();
+        host.set(
+            "rsi",
+            Function::new(ctx.clone(), move |symbol: String, tf: String, period: u32| -> Result<String, rquickjs::Error> {
+                let ctx_mutex = ctx_for_rsi.lock().map_err(|_| rquickjs::Error::Exception)?;
+                let indicator = ctx_mutex.indicator_service.clone();
+                drop(ctx_mutex);
+
+                let timeframe = tf.parse::<TimeFrame>().map_err(|_| rquickjs::Error::Exception)?;
+
+                match bridge_for_rsi.call(async move {
+                    indicator.rsi(&symbol, timeframe, period).await.map_err(|e| e.to_string())
+                }) {
+                    Ok(Ok(val)) => Ok(val.to_string()),
+                    Ok(Err(e)) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
+                    Err(e) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
+                }
+            })
+            .map_err(|_| EngineError::Plugin("rsi setup failed".to_string()))?,
         )
         .map_err(|_| EngineError::Plugin("log set failed".to_string()))?;
 

@@ -77,7 +77,14 @@ impl EngineBuilder for EngineFactory {
 
                         let local = tokio::task::LocalSet::new();
                         local.block_on(&rt, async move {
-                            let engine = match JsEngine::new(market, params.trade_port, params.time_provider, params.notifier) {
+                            let engine = match JsEngine::new(
+                                market,
+                                params.trade_port,
+                                params.algo_port,
+                                params.indicator_service,
+                                params.time_provider,
+                                params.notifier,
+                            ) {
                                 Ok(e) => e,
                                 Err(err) => {
                                     if let Err(e) = tx.send(Err(err)) {
@@ -102,7 +109,14 @@ impl EngineBuilder for EngineFactory {
             }
             EngineType::Wasm => {
                 Ok(Box::pin(async move {
-                    let engine = WasmEngine::new(market, params.trade_port, params.time_provider, params.notifier)?;
+                    let engine = WasmEngine::new(
+                        market,
+                        params.trade_port,
+                        params.algo_port,
+                        params.indicator_service,
+                        params.time_provider,
+                        params.notifier,
+                    )?;
                     engine
                         .run_strategy(&params.symbol, &params.account_id, params.timeframe, &params.source)
                         .await

@@ -127,26 +127,34 @@ pub async fn spawn_test_server() -> anyhow::Result<(String, Arc<dyn SystemStore>
     let matcher = std::sync::Arc::new(LocalMatchEngine::new(rust_decimal::Decimal::ZERO));
     let trade_service = Arc::new(TradeService::new(account_manager, matcher, market.clone(), pending_port, Arc::new(okane_core::common::time::RealTimeProvider)));
 
-    let strategy_manager = StrategyManager::new(
-        strategy_store,
-        engine_builder,
-        trade_service.clone(),
-        Arc::new(okane_core::common::time::RealTimeProvider),
-        Arc::new(NoopNotifierFactory),
-    );
-
-    let app_config = Arc::new(okane_core::config::AppConfig::default());
     let engine_builder_factory = Arc::new(|m: Arc<dyn okane_core::market::port::Market>| {
         Arc::new(okane_engine::factory::EngineFactory::new(m)) as Arc<dyn okane_core::engine::port::EngineBuilder>
     });
+
+    let algo_service = Arc::new(okane_trade::algo::AlgoOrderService::new(trade_service.clone(), Arc::new(okane_core::common::time::RealTimeProvider)));
+    let indicator_service = Arc::new(okane_market::indicator::MarketIndicatorService::new(market.clone()));
+    let app_config = Arc::new(okane_core::config::AppConfig::default());
+
     let backtest_runner = Arc::new(okane_manager::backtest::BacktestRunner::new(
         market.clone(),
         engine_builder_factory,
     ));
 
+    let strategy_manager = StrategyManager::new(
+        strategy_store,
+        engine_builder as Arc<dyn okane_core::engine::port::EngineBuilder>,
+        trade_service.clone(),
+        algo_service.clone(),
+        indicator_service.clone(),
+        Arc::new(okane_core::common::time::RealTimeProvider),
+        Arc::new(NoopNotifierFactory),
+    );
+
     let state = AppState {
         strategy_manager,
         trade_port: trade_service,
+        algo_port: algo_service,
+        indicator_service,
         system_store: system_store.clone(),
         market_port: market,
         backtest_runner,

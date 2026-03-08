@@ -4,6 +4,8 @@ use okane_core::common::time::TimeProvider;
 use okane_core::common::TimeFrame;
 use okane_core::engine::error::EngineError;
 use okane_core::market::port::Market;
+use okane_core::market::indicator::IndicatorService;
+use okane_core::trade::port::{TradePort, AlgoOrderPort};
 use std::sync::Arc;
 
 /// # Summary
@@ -28,7 +30,12 @@ pub struct PluginContext {
     /// 市场数据访问端口
     pub market: Arc<dyn Market>,
     /// 交易指令下发端口
-    pub trade_port: Arc<dyn okane_core::trade::port::TradePort>,
+    /// 交易指令下发端口
+    pub trade_port: Arc<dyn TradePort>,
+    /// 算法单端口
+    pub algo_port: Arc<dyn AlgoOrderPort>,
+    /// 技术指标服务
+    pub indicator_service: Arc<dyn IndicatorService>,
     /// 绑定的交易账户 ID
     pub account_id: String,
     /// 当前挂载的时钟源，保证回测和实盘的时间分轨

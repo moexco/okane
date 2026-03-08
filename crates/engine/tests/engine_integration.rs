@@ -1,4 +1,4 @@
-use okane_core::test_utils::{MockMarket, MockStock, SpyTradePort};
+use okane_core::test_utils::{MockMarket, MockStock, SpyTradePort, MockAlgoOrderPort, MockIndicatorService};
 use okane_core::common::time::FakeClockProvider;
 use okane_core::common::{Stock as StockIdentity, TimeFrame};
 use okane_core::market::entity::Candle;
@@ -42,7 +42,14 @@ async fn test_js_strategy_integration() -> anyhow::Result<()> {
 
     let trade = SpyTradePort::new();
     let trade_arc = std::sync::Arc::new(trade);
-    let engine = JsEngine::new(market, trade_arc.clone(), Arc::new(FakeClockProvider::new(chrono::Utc::now())), None).map_err(|e| anyhow::anyhow!(e))?;
+    let engine = JsEngine::new(
+        market,
+        trade_arc.clone(),
+        Arc::new(MockAlgoOrderPort),
+        Arc::new(MockIndicatorService),
+        Arc::new(FakeClockProvider::new(chrono::Utc::now())),
+        None,
+    ).map_err(|e| anyhow::anyhow!(e))?;
 
     let local = tokio::task::LocalSet::new();
 
@@ -92,7 +99,14 @@ async fn test_js_trade_execution() -> anyhow::Result<()> {
 
     let trade = SpyTradePort::new();
     let trade_arc = std::sync::Arc::new(trade);
-    let engine = JsEngine::new(market, trade_arc.clone(), Arc::new(FakeClockProvider::new(chrono::Utc::now())), None).map_err(|e| anyhow::anyhow!(e))?;
+    let engine = JsEngine::new(
+        market,
+        trade_arc.clone(),
+        Arc::new(MockAlgoOrderPort),
+        Arc::new(MockIndicatorService),
+        Arc::new(FakeClockProvider::new(chrono::Utc::now())),
+        None,
+    ).map_err(|e| anyhow::anyhow!(e))?;
 
     let local = tokio::task::LocalSet::new();
 
@@ -151,7 +165,15 @@ async fn test_js_strategy_no_error_when_below_threshold() -> anyhow::Result<()> 
     });
 
     let trade = std::sync::Arc::new(SpyTradePort::new());
-    let engine = JsEngine::new(market, trade, Arc::new(FakeClockProvider::new(chrono::Utc::now())), None).map_err(|e| anyhow::anyhow!(e))?;
+    let engine = JsEngine::new(
+        market,
+        trade,
+        Arc::new(MockAlgoOrderPort),
+        Arc::new(MockIndicatorService),
+        Arc::new(FakeClockProvider::new(chrono::Utc::now())),
+        None,
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
 
     let local = tokio::task::LocalSet::new();
 

@@ -14,8 +14,9 @@ use utoipa_axum::routes;
 use utoipa_swagger_ui::SwaggerUi;
 
 use okane_core::store::port::SystemStore;
-use okane_core::trade::port::TradePort;
+use okane_core::trade::port::{TradePort, AlgoOrderPort};
 use okane_core::market::port::Market;
+use okane_core::market::indicator::IndicatorService;
 use okane_manager::strategy::StrategyManager;
 
 use crate::routes::{account, admin, auth, backtest, market, notify, strategy, trade, watchlist};
@@ -34,6 +35,10 @@ pub struct AppState {
     pub strategy_manager: Arc<StrategyManager>,
     /// 交易服务端口 (用于账户快照查询)
     pub trade_port: Arc<dyn TradePort>,
+    /// 算法单端口
+    pub algo_port: Arc<dyn AlgoOrderPort>,
+    /// 技术指标服务
+    pub indicator_service: Arc<dyn IndicatorService>,
     /// 系统数据访问接口 (用于鉴权验证和用户管理)
     pub system_store: Arc<dyn SystemStore>,
     /// 行情数据入口 (查询K线与状态)
@@ -147,6 +152,9 @@ pub fn build_app(state: AppState) -> Router {
         .routes(routes!(trade::get_orders))
         .routes(routes!(trade::place_order))
         .routes(routes!(trade::cancel_order))
+        .routes(routes!(trade::submit_algo_order))
+        .routes(routes!(trade::get_algo_orders))
+        .routes(routes!(market::get_rsi_indicator))
         .layer(axum::middleware::from_fn(
             crate::middleware::auth::require_password_changed,
         ))

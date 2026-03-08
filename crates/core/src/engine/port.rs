@@ -18,6 +18,8 @@ pub struct EngineBuildParams {
     pub timeframe: TimeFrame,
     pub source: Vec<u8>,
     pub trade_port: std::sync::Arc<dyn crate::trade::port::TradePort>,
+    pub algo_port: std::sync::Arc<dyn crate::trade::port::AlgoOrderPort>,
+    pub indicator_service: std::sync::Arc<dyn crate::market::indicator::IndicatorService>,
     pub time_provider: std::sync::Arc<dyn crate::common::time::TimeProvider>,
     /// 通知推送端口 (可选, 用于 host.notify 能力)
     pub notifier: Option<std::sync::Arc<dyn crate::notify::port::Notifier>>,

@@ -1,4 +1,4 @@
-use okane_core::test_utils::SpyTradePort;
+use okane_core::test_utils::{SpyTradePort, MockAlgoOrderPort, MockIndicatorService};
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use okane_core::common::time::FakeClockProvider;
@@ -105,7 +105,14 @@ async fn test_host_functions_from_js() -> anyhow::Result<()> {
     let trade = std::sync::Arc::new(SpyTradePort::new());
     let time_provider = Arc::new(FakeClockProvider::new(Utc::now()));
     let time_provider_clone = time_provider.clone();
-    let engine = JsEngine::new(market, trade, time_provider, None).map_err(|e| anyhow::anyhow!(e))?;
+    let engine = JsEngine::new(
+        market,
+        trade,
+        Arc::new(MockAlgoOrderPort),
+        Arc::new(MockIndicatorService),
+        time_provider,
+        None,
+    ).map_err(|e| anyhow::anyhow!(e))?;
 
     let local = tokio::task::LocalSet::new();
 

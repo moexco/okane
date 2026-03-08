@@ -21,6 +21,8 @@ use okane_core::trade::entity::OrderId;
 pub struct WasmEngine {
     pub base: EngineBase,
     trade_port: Arc<dyn okane_core::trade::port::TradePort>,
+    algo_port: Arc<dyn okane_core::trade::port::AlgoOrderPort>,
+    indicator_service: Arc<dyn okane_core::market::indicator::IndicatorService>,
     time_provider: Arc<dyn TimeProvider>,
     notifier: Option<Arc<dyn okane_core::notify::port::Notifier>>,
     bridge: Arc<crate::bridge::AsyncBridge>,
@@ -40,12 +42,16 @@ impl WasmEngine {
     pub fn new(
         market: Arc<dyn Market>,
         trade_port: Arc<dyn okane_core::trade::port::TradePort>,
+        algo_port: Arc<dyn okane_core::trade::port::AlgoOrderPort>,
+        indicator_service: Arc<dyn okane_core::market::indicator::IndicatorService>,
         time_provider: Arc<dyn TimeProvider>,
         notifier: Option<Arc<dyn okane_core::notify::port::Notifier>>,
     ) -> Result<Self, EngineError> {
         Ok(Self {
             base: EngineBase::new(market),
             trade_port,
+            algo_port,
+            indicator_service,
             time_provider,
             notifier,
             bridge: Arc::new(crate::bridge::AsyncBridge::new()?),
@@ -92,6 +98,8 @@ impl WasmEngine {
         let plugin_ctx = Arc::new(Mutex::new(PluginContext {
             market: self.base.market.clone(),
             trade_port: self.trade_port.clone(),
+            algo_port: self.algo_port.clone(),
+            indicator_service: self.indicator_service.clone(),
             account_id: account_id.to_string(),
             time_provider: self.time_provider.clone(),
             notifier: self.notifier.clone(),

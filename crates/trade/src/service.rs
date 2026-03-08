@@ -18,6 +18,8 @@ pub struct TradeService {
     market: Arc<dyn Market>,
     /// 活动订单持久化端口
     pending_port: Arc<dyn PendingOrderPort>,
+    /// 算法单服务
+    algo_service: Option<Arc<crate::algo::AlgoOrderService>>,
     /// 逻辑时钟源，回测时由 FakeClockProvider 提供，实盘为 RealTimeProvider
     time_provider: Arc<dyn TimeProvider>,
     /// 可选的交易事件收集器 — 记录所有成交，用于回测结果提取
@@ -37,9 +39,15 @@ impl TradeService {
             matcher,
             market,
             pending_port,
+            algo_service: None,
             time_provider,
             trade_log: None,
         }
+    }
+
+    pub fn with_algo_service(mut self, algo_service: Arc<crate::algo::AlgoOrderService>) -> Self {
+        self.algo_service = Some(algo_service);
+        self
     }
 
     /// 设置交易事件收集器。回测场景下使用。
@@ -137,6 +145,10 @@ impl TradePort for TradeService {
 #[async_trait]
 impl BacktestTradePort for TradeService {
     async fn tick(&self, symbol: &str, candle: &Candle) -> Result<(), TradeError> {
+        // 首先驱动算法单
+        if let Some(algo) = &self.algo_service {
+            algo.tick(symbol, candle).await?;
+        }
 
         let high = candle.high;
         let low = candle.low;

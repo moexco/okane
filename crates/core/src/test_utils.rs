@@ -263,6 +263,50 @@ impl TradePort for SpyTradePort {
 }
 
 // ============================================================
+//  算法单 Mock (Algo Order Mock)
+// ============================================================
+
+pub struct MockAlgoOrderPort;
+
+#[async_trait]
+impl crate::trade::port::AlgoOrderPort for MockAlgoOrderPort {
+    async fn submit_algo_order(&self, _order: crate::trade::entity::AlgoOrder) -> Result<OrderId, TradeError> {
+        Ok(OrderId(uuid::Uuid::new_v4().to_string()))
+    }
+    async fn cancel_algo_order(&self, _id: &OrderId) -> Result<(), TradeError> {
+        Ok(())
+    }
+    async fn get_algo_order(&self, _id: &OrderId) -> Result<Option<crate::trade::entity::AlgoOrder>, TradeError> {
+        Ok(None)
+    }
+    async fn get_algo_orders(&self, _account_id: &AccountId) -> Result<Vec<crate::trade::entity::AlgoOrder>, TradeError> {
+        Ok(vec![])
+    }
+    async fn update_algo_status(&self, _id: &OrderId, _status: crate::trade::entity::AlgoOrderStatus) -> Result<(), TradeError> {
+        Ok(())
+    }
+}
+
+// ============================================================
+//  指标服务 Mock (Indicator Service Mock)
+// ============================================================
+
+pub struct MockIndicatorService;
+
+#[async_trait]
+impl crate::market::indicator::IndicatorService for MockIndicatorService {
+    async fn sma(&self, _symbol: &str, _tf: TimeFrame, _period: u32) -> Result<rust_decimal::Decimal, MarketError> {
+        Ok(rust_decimal::Decimal::ZERO)
+    }
+    async fn ema(&self, _symbol: &str, _tf: TimeFrame, _period: u32) -> Result<rust_decimal::Decimal, MarketError> {
+        Ok(rust_decimal::Decimal::ZERO)
+    }
+    async fn rsi(&self, _symbol: &str, _tf: TimeFrame, _period: u32) -> Result<rust_decimal::Decimal, MarketError> {
+        Ok(rust_decimal::Decimal::ZERO)
+    }
+}
+
+// ============================================================
 //  测试辅助函数 (Test Helpers)
 // ============================================================
 

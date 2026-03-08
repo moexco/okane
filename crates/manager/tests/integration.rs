@@ -1,4 +1,4 @@
-use okane_core::test_utils::SpyTradePort;
+use okane_core::test_utils::{SpyTradePort, MockAlgoOrderPort, MockIndicatorService};
 use okane_core::common::TimeFrame;
 use okane_core::engine::error::EngineError;
 use okane_core::engine::port::{EngineBuilder, EngineFuture, EngineBuildParams};
@@ -44,7 +44,15 @@ async fn test_strategy_lifecycle() -> anyhow::Result<()> {
     let store = Arc::new(SqliteStrategyStore::new().map_err(|e| anyhow::anyhow!("Failed to create store: {}", e))?);
     let engine_builder = Arc::new(MockEngineBuilder);
     let trade_port = Arc::new(SpyTradePort::new());
-    let manager = StrategyManager::new(store, engine_builder, trade_port, Arc::new(okane_core::common::time::RealTimeProvider), Arc::new(NoopNotifierFactory));
+    let manager = StrategyManager::new(
+        store,
+        engine_builder as Arc<dyn okane_core::engine::port::EngineBuilder>,
+        trade_port,
+        Arc::new(MockAlgoOrderPort),
+        Arc::new(MockIndicatorService),
+        Arc::new(okane_core::common::time::RealTimeProvider),
+        Arc::new(NoopNotifierFactory),
+    );
 
     let user_id = "test_user";
     let req = StartRequest {
@@ -86,7 +94,15 @@ async fn test_strategy_lifecycle() -> anyhow::Result<()> {
     }
     
     let store_inf = Arc::new(SqliteStrategyStore::new().map_err(|e| anyhow::anyhow!("Failed to create inf store: {}", e))?);
-    let manager_inf = StrategyManager::new(store_inf, Arc::new(InfiniteEngineBuilder), Arc::new(SpyTradePort::new()), Arc::new(okane_core::common::time::RealTimeProvider), Arc::new(NoopNotifierFactory));
+    let manager_inf = StrategyManager::new(
+        store_inf,
+        Arc::new(InfiniteEngineBuilder) as Arc<dyn okane_core::engine::port::EngineBuilder>,
+        Arc::new(SpyTradePort::new()),
+        Arc::new(MockAlgoOrderPort),
+        Arc::new(MockIndicatorService),
+        Arc::new(okane_core::common::time::RealTimeProvider),
+        Arc::new(NoopNotifierFactory),
+    );
     let req_inf = StartRequest {
         symbol: "AAPL".to_string(),
         account_id: "SystemDefault_01".to_string(),

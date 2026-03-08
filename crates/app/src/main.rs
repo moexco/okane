@@ -8,8 +8,9 @@ use okane_store::market::SqliteMarketStore;
 use okane_store::strategy::SqliteStrategyStore;
 use okane_store::system::SqliteSystemStore;
 use okane_trade::service::TradeService;
-use okane_core::trade::port::TradePort;
-use okane_core::common::time::RealTimeProvider;
+use okane_trade::algo::AlgoOrderService;
+use okane_market::indicator::MarketIndicatorService;
+use okane_core::common::RealTimeProvider;
 use tracing::info;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
@@ -78,11 +79,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4. 实例化引擎工厂（App 层知道具体实现，Manager 不知道）
     let engine_builder = Arc::new(EngineFactory::new(market.clone()));
 
-    // 5. 实例化交易服务（从内存切换到持久化 SQLite 存储）
+    // 5. 实例化交易、算法单与指标服务
     let account_store = Arc::new(okane_store::account::SqliteAccountStore::new()?);
     let pending_port = Arc::new(okane_store::pending_order_sqlx::SqlitePendingOrderStore::new()?);
-    let matcher = std::sync::Arc::new(okane_trade::matcher::LocalMatchEngine::new(rust_decimal::Decimal::ZERO));
-    let trade_service: Arc<dyn TradePort> = Arc::new(TradeService::new(account_store, matcher, market.clone(), pending_port, Arc::new(okane_core::common::time::RealTimeProvider)));
+    let matcher = Arc::new(okane_trade::matcher::LocalMatchEngine::new(rust_decimal::Decimal::ZERO));
+    let real_time = Arc::new(RealTimeProvider);
+
+    // 核心解耦方案：利用 TradeService 的可选算法单注入
+    // 算法单服务需要 TradePort 以执行子单
+    let trade_service_base = Arc::new(TradeService::new(
+        account_store.clone(),
+        matcher.clone(),
+        market.clone(),
+        pending_port.clone(),
+        real_time.clone(),
+    ));
+
+    let algo_port = Arc::new(AlgoOrderService::new(
+        trade_service_base.clone(),
+        real_time.clone(),
+    ));
+
+    // 真正的交易服务入口，注入算法单服务以便驱动其运作
+    let trade_service = Arc::new(TradeService::new(
+        account_store,
+        matcher,
+        market.clone(),
+        pending_port,
+        real_time,
+    ).with_algo_service(algo_port.clone()));
+
+    let indicator_service = Arc::new(MarketIndicatorService::new(market.clone()));
 
     // 6. 实例化系统级存储（提供给鉴权系统 + 用户通知配置查询）
     let system_store: Arc<dyn okane_core::store::port::SystemStore> =
@@ -97,6 +124,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         strategy_store,
         engine_builder,
         trade_service.clone(),
+        algo_port.clone(),
+        indicator_service.clone(),
         Arc::new(RealTimeProvider),
         notifier_factory,
     );
@@ -117,6 +146,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_state = okane_api::server::AppState {
         strategy_manager: manager.clone(),
         trade_port: trade_service,
+        algo_port,
+        indicator_service,
         system_store,
         market_port: market.clone(),
         backtest_runner,

@@ -97,3 +97,38 @@ pub async fn get_candles(
     let dtos = history.into_iter().map(Into::into).collect();
     Ok(Json(ApiResponse::ok(dtos)))
 }
+
+#[derive(Deserialize, ToSchema)]
+pub struct IndicatorQuery {
+    pub tf: String,
+    pub period: u32,
+}
+
+/// 获取 RSI 指标
+#[utoipa::path(
+    get,
+    path = "/api/v1/market/indicator/rsi/{symbol}",
+    tag = "行情 (Market)",
+    security(("bearer_jwt" = [])),
+    params(
+        ("symbol" = String, Path, description = "股票代码"),
+        ("tf" = String, Query, description = "Timeframe"),
+        ("period" = u32, Query, description = "RSI 周期")
+    ),
+    responses(
+        (status = 200, description = "获取成功", body = ApiResponse<String>)
+    )
+)]
+pub async fn get_rsi_indicator(
+    State(state): State<AppState>,
+    Path(symbol): Path<String>,
+    Query(query): Query<IndicatorQuery>,
+) -> Result<Json<ApiResponse<String>>, ApiError> {
+    let tf = TimeFrame::from_str(&query.tf)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid timeframe: {}", e)))?;
+
+    match state.indicator_service.rsi(&symbol, tf, query.period).await {
+        Ok(val) => Ok(Json(ApiResponse::ok(val.to_string()))),
+        Err(e) => Err(ApiError::Internal(format!("Indicator error: {}", e))),
+    }
+}

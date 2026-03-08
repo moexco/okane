@@ -60,6 +60,10 @@ pub struct StrategyManager {
     engine_builder: Arc<dyn EngineBuilder>,
     // 交易服务通道
     trade_port: Arc<dyn okane_core::trade::port::TradePort>,
+    // 算法单端口
+    algo_port: Arc<dyn okane_core::trade::port::AlgoOrderPort>,
+    // 技术指标服务
+    indicator_service: Arc<dyn okane_core::market::indicator::IndicatorService>,
     // 时间提供者，允许在回测中被替换
     time_provider: Arc<dyn TimeProvider>,
     // 通知工厂，根据用户 ID 动态创建通知实例
@@ -82,6 +86,8 @@ impl StrategyManager {
         store: Arc<dyn StrategyStore>,
         engine_builder: Arc<dyn EngineBuilder>,
         trade_port: Arc<dyn okane_core::trade::port::TradePort>,
+        algo_port: Arc<dyn okane_core::trade::port::AlgoOrderPort>,
+        indicator_service: Arc<dyn okane_core::market::indicator::IndicatorService>,
         time_provider: Arc<dyn TimeProvider>,
         notifier_factory: Arc<dyn okane_core::notify::port::NotifierFactory>,
     ) -> Arc<Self> {
@@ -89,6 +95,8 @@ impl StrategyManager {
             store,
             engine_builder,
             trade_port,
+            algo_port,
+            indicator_service,
             time_provider,
             notifier_factory,
             running_tasks: DashMap::new(),
@@ -144,6 +152,8 @@ impl StrategyManager {
             source: req.source,
             // handlers field removed — Signal 机制已移除
             trade_port: self.trade_port.clone(),
+            algo_port: self.algo_port.clone(),
+            indicator_service: self.indicator_service.clone(),
             time_provider: self.time_provider.clone(),
             notifier: self.notifier_factory.create_for_user(user_id).await
                 .map_err(|e| ManagerError::Engine(EngineError::Handler(format!("Failed to create notifier for user {}: {}", user_id, e))))?,

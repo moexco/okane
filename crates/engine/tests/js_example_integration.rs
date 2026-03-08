@@ -1,4 +1,4 @@
-use okane_core::test_utils::SpyTradePort;
+use okane_core::test_utils::{SpyTradePort, MockAlgoOrderPort, MockIndicatorService};
 use async_trait::async_trait;
 use chrono::Utc;
 use okane_core::common::time::FakeClockProvider;
@@ -105,7 +105,14 @@ async fn test_js_example_strategy_execution() -> anyhow::Result<()> {
     });
     let market = Arc::new(MockMarket { stock: mock_stock });
     let trade = std::sync::Arc::new(SpyTradePort::new());
-    let engine = JsEngine::new(market, trade, Arc::new(FakeClockProvider::new(Utc::now())), None).map_err(|e| anyhow::anyhow!(e))?;
+    let engine = JsEngine::new(
+        market,
+        trade,
+        Arc::new(MockAlgoOrderPort),
+        Arc::new(MockIndicatorService),
+        Arc::new(FakeClockProvider::new(Utc::now())),
+        None,
+    ).map_err(|e| anyhow::anyhow!(e))?;
 
     let local = tokio::task::LocalSet::new();
     let handle = local.spawn_local(async move {
@@ -154,7 +161,14 @@ async fn test_js_example_strategy_skip_non_final() -> anyhow::Result<()> {
     });
     let market = Arc::new(MockMarket { stock: mock_stock });
     let trade = std::sync::Arc::new(SpyTradePort::new());
-    let engine = JsEngine::new(market, trade, Arc::new(FakeClockProvider::new(Utc::now())), None).map_err(|e| anyhow::anyhow!(e))?;
+    let engine = JsEngine::new(
+        market,
+        trade,
+        Arc::new(MockAlgoOrderPort),
+        Arc::new(MockIndicatorService),
+        Arc::new(FakeClockProvider::new(Utc::now())),
+        None,
+    ).map_err(|e| anyhow::anyhow!(e))?;
 
     let local = tokio::task::LocalSet::new();
     let handle = local.spawn_local(async move {
