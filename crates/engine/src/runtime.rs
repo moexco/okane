@@ -17,8 +17,6 @@ use std::sync::Arc;
 pub enum StrategySource {
     /// JS 源码直接执行（通过 QuickJS RuntimeEngine）
     JavaScript(String),
-    /// 编译后的 WASM 字节码（通过 wasmtime RuntimeEngine）
-    Wasm(Vec<u8>),
 }
 
 /// # Summary
@@ -42,6 +40,8 @@ pub struct PluginContext {
     pub time_provider: Arc<dyn TimeProvider>,
     /// 通知推送端口 (可选)
     pub notifier: Option<Arc<dyn okane_core::notify::port::Notifier>>,
+    /// 策略日志记录器 (可选)
+    pub logger: Option<Arc<dyn okane_core::strategy::port::StrategyLogger>>,
     /// Sync-async bridge for host function callbacks
     pub bridge: Arc<AsyncBridge>,
 }

@@ -85,3 +85,42 @@ pub trait StrategyStore: Send + Sync {
         id: &str,
     ) -> Result<(), StoreError>;
 }
+
+/// # Summary
+/// 策略日志的物理持久化与索引接口。
+/// 采用“顺序平铺文件存储原始数据 + SQLite 存储偏移量索引”的混合模式。
+#[async_trait]
+pub trait StrategyLogPort: Send + Sync {
+    /// # Summary
+    /// 追加一条日志。
+    ///
+    /// # Logic
+    /// 1. 将日志 entry 序列化为 JSONL 格式并追加到物理文件。
+    /// 2. 记录该条日志在文件中的起始偏移量。
+    /// 3. 将 (strategy_id, timestamp, level, offset) 写入 SQLite 索引表。
+    async fn append_log(
+        &self,
+        user_id: &str,
+        entry: &crate::strategy::entity::StrategyLogEntry,
+    ) -> Result<(), StoreError>;
+
+    /// # Summary
+    /// 分页查询日志。
+    ///
+    /// # Logic
+    /// 1. 从 SQLite 索引表中根据 offset/limit 查找对应的文件偏移量列表。
+    /// 2. 根据偏移量从物理文件中 Seek 并读取原始 JSON 数据。
+    async fn query_logs(
+        &self,
+        user_id: &str,
+        strategy_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<crate::strategy::entity::StrategyLogEntry>, StoreError>;
+}
+
+/// # Summary
+/// 供策略运行时调用的日志记录接口。
+pub trait StrategyLogger: Send + Sync {
+    fn log(&self, level: crate::strategy::entity::LogLevel, message: String);
+}

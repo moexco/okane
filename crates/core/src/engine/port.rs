@@ -23,6 +23,8 @@ pub struct EngineBuildParams {
     pub time_provider: std::sync::Arc<dyn crate::common::time::TimeProvider>,
     /// 通知推送端口 (可选, 用于 host.notify 能力)
     pub notifier: Option<std::sync::Arc<dyn crate::notify::port::Notifier>>,
+    /// 策略日志记录器 (可选)
+    pub logger: Option<std::sync::Arc<dyn crate::strategy::port::StrategyLogger>>,
 }
 
 /// # Summary

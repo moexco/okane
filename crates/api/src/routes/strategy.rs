@@ -245,3 +245,43 @@ pub async fn delete_strategy(
     state.strategy_manager.delete_strategy(&user.id, &id).await?;
     Ok(Json(ApiResponse::ok("策略已删除".to_string())))
 }
+
+#[derive(Deserialize, utoipa::ToSchema)]
+pub struct GetLogsQuery {
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+/// 查询策略运行时日志
+#[utoipa::path(
+    get,
+    path = "/api/v1/user/strategies/{id}/logs",
+    tag = "策略 (Strategy)",
+    security(("bearer_jwt" = [])),
+    params(
+        ("id" = String, Path, description = "策略实例 ID"),
+        ("limit" = Option<usize>, Query, description = "返回条数，默认 100"),
+        ("offset" = Option<usize>, Query, description = "跳过条数，默认 0")
+    ),
+    responses(
+        (status = 200, description = "日志获取成功", body = ApiResponse<Vec<okane_core::strategy::entity::StrategyLogEntry>>),
+        (status = 404, description = "策略不存在")
+    )
+)]
+pub async fn get_strategy_logs(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path(id): Path<String>,
+    Query(query): Query<GetLogsQuery>,
+) -> Result<Json<ApiResponse<Vec<okane_core::strategy::entity::StrategyLogEntry>>>, ApiError> {
+    // 权限与存在性检查
+    state.strategy_manager.get_strategy(&user.id, &id).await?;
+
+    let limit = query.limit.unwrap_or(100);
+    let offset = query.offset.unwrap_or(0);
+
+    let logs = state.strategy_manager.get_logs(&user.id, &id, limit, offset).await
+        .map_err(|e| ApiError::Internal(format!("Failed to query logs: {}", e)))?;
+
+    Ok(Json(ApiResponse::ok(logs)))
+}

@@ -2,12 +2,15 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use okane_core::store::error::StoreError;
-use okane_core::strategy::entity::{StrategyInstance, StrategyStatus};
-use okane_core::strategy::port::StrategyStore;
+use okane_core::strategy::entity::{StrategyInstance, StrategyLogEntry, StrategyStatus};
+use okane_core::strategy::port::{StrategyLogPort, StrategyStore};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-    SqlitePool,
+    Row, SqlitePool,
 };
+use std::io::SeekFrom;
+use tokio::fs::OpenOptions;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use std::path::PathBuf;
 
 /// # Summary
@@ -33,6 +36,16 @@ CREATE TABLE IF NOT EXISTS strategy_instances (
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS strategy_log_index (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    strategy_id TEXT NOT NULL,
+    timestamp DATETIME NOT NULL,
+    level TEXT NOT NULL,
+    offset INTEGER NOT NULL,
+    length INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_strategy_log_id_time ON strategy_log_index(strategy_id, timestamp);
 "#;
 
 const SQL_INSERT_STRATEGY: &str = r#"
@@ -198,5 +211,102 @@ impl StrategyStore for SqliteStrategyStore {
             return Err(StoreError::NotFound);
         }
         Ok(())
+    }
+}
+
+#[async_trait]
+impl StrategyLogPort for SqliteStrategyStore {
+    async fn append_log(
+        &self,
+        user_id: &str,
+        entry: &StrategyLogEntry,
+    ) -> Result<(), StoreError> {
+        let pool = self.get_or_init_pool(user_id).await?;
+        
+        // 1. 确定物理文件路径
+        let log_dir = self.base_path.join("logs").join(user_id);
+        if !log_dir.exists() {
+            std::fs::create_dir_all(&log_dir).map_err(|e| StoreError::Database(e.to_string()))?;
+        }
+        let log_path = log_dir.join(format!("{}.logl", entry.strategy_id));
+
+        // 2. 序列化并写入文件
+        let mut json = serde_json::to_vec(entry).map_err(|e| StoreError::Database(e.to_string()))?;
+        json.push(b'\n');
+        let length: i64 = json.len().try_into().map_err(|_| StoreError::Database("Log entry too large".to_string()))?;
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        
+        let offset_u = file.seek(SeekFrom::End(0)).await.map_err(|e| StoreError::Database(e.to_string()))?;
+        let offset: i64 = offset_u.try_into().map_err(|_| StoreError::Database("File offset too large".to_string()))?;
+        
+        file.write_all(&json).await.map_err(|e| StoreError::Database(e.to_string()))?;
+        file.flush().await.map_err(|e| StoreError::Database(e.to_string()))?;
+
+        // 3. 写入 SQLite 索引
+        sqlx::query("INSERT INTO strategy_log_index (strategy_id, timestamp, level, offset, length) VALUES (?, ?, ?, ?, ?)")
+            .bind(&entry.strategy_id)
+            .bind(entry.timestamp)
+            .bind(entry.level.to_string())
+            .bind(offset)
+            .bind(length)
+            .execute(&pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn query_logs(
+        &self,
+        user_id: &str,
+        strategy_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<StrategyLogEntry>, StoreError> {
+        let pool = self.get_or_init_pool(user_id).await?;
+
+        let i_limit: i64 = limit.try_into().map_err(|_| StoreError::Database("Limit too large".to_string()))?;
+        let i_offset: i64 = offset.try_into().map_err(|_| StoreError::Database("Offset too large".to_string()))?;
+
+        // 1. 从索引表中查找偏移量
+        let rows = sqlx::query("SELECT offset, length FROM strategy_log_index WHERE strategy_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?")
+            .bind(strategy_id)
+            .bind(i_limit)
+            .bind(i_offset)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        if rows.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // 2. 从物理文件中批量读取
+        let log_path = self.base_path.join("logs").join(user_id).join(format!("{}.logl", strategy_id));
+        let mut file = tokio::fs::File::open(&log_path).await.map_err(|e| StoreError::Database(e.to_string()))?;
+        
+        let mut entries = Vec::new();
+        for row in rows {
+            let off: i64 = row.get(0);
+            let len: i64 = row.get(1);
+            
+            let u_off: u64 = off.try_into().map_err(|_| StoreError::Database("Negative log offset".to_string()))?;
+            let u_len: usize = len.try_into().map_err(|_| StoreError::Database("Negative log length".to_string()))?;
+
+            let mut buf = vec![0u8; u_len];
+            file.seek(SeekFrom::Start(u_off)).await.map_err(|e| StoreError::Database(e.to_string()))?;
+            file.read_exact(&mut buf).await.map_err(|e| StoreError::Database(e.to_string()))?;
+            
+            let entry: StrategyLogEntry = serde_json::from_slice(&buf).map_err(|e| StoreError::Database(e.to_string()))?;
+            entries.push(entry);
+        }
+
+        Ok(entries)
     }
 }

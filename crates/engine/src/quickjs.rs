@@ -30,6 +30,7 @@ pub struct JsEngine {
     indicator_service: Arc<dyn IndicatorService>,
     time_provider: Arc<dyn TimeProvider>,
     notifier: Option<Arc<dyn okane_core::notify::port::Notifier>>,
+    logger: Option<Arc<dyn okane_core::strategy::port::StrategyLogger>>,
     bridge: Arc<AsyncBridge>,
 }
 
@@ -52,6 +53,7 @@ impl JsEngine {
         indicator_service: Arc<dyn IndicatorService>,
         time_provider: Arc<dyn TimeProvider>,
         notifier: Option<Arc<dyn okane_core::notify::port::Notifier>>,
+        logger: Option<Arc<dyn okane_core::strategy::port::StrategyLogger>>,
     ) -> Result<Self, EngineError> {
         Ok(Self {
             base: EngineBase::new(market),
@@ -60,6 +62,7 @@ impl JsEngine {
             indicator_service,
             time_provider,
             notifier,
+            logger,
             bridge: Arc::new(AsyncBridge::new()?),
         })
     }
@@ -114,6 +117,7 @@ impl JsEngine {
             account_id: account_id.to_string(),
             time_provider: self.time_provider.clone(),
             notifier: self.notifier.clone(),
+            logger: self.logger.clone(),
             bridge: self.bridge.clone(),
         }));
 
@@ -174,14 +178,27 @@ impl JsEngine {
         let host = Object::new(ctx.clone()).map_err(|e| EngineError::Plugin(e.to_string()))?;
 
         // host.log(level: number, msg: string)
+        let logger_clone = plugin_ctx.lock().map_err(|_| EngineError::Plugin("Lock failed".to_string()))?.logger.clone();
         host.set(
             "log",
-            Function::new(ctx.clone(), |level: i32, msg: String| {
-                match level {
-                    1 => error!("JS [ERROR]: {}", msg),
-                    2 => warn!("JS [WARN]: {}", msg),
-                    3 => info!("JS [INFO]: {}", msg),
-                    _ => debug!("JS [DEBUG]: {}", msg),
+            Function::new(ctx.clone(), move |level: i32, msg: String| {
+                let log_level = match level {
+                    1 => okane_core::strategy::entity::LogLevel::Error,
+                    2 => okane_core::strategy::entity::LogLevel::Warn,
+                    3 => okane_core::strategy::entity::LogLevel::Info,
+                    _ => okane_core::strategy::entity::LogLevel::Debug,
+                };
+
+                // 同时也输出到 tracing 以便在终端看到
+                match log_level {
+                    okane_core::strategy::entity::LogLevel::Error => error!("JS [ERROR]: {}", msg),
+                    okane_core::strategy::entity::LogLevel::Warn => warn!("JS [WARN]: {}", msg),
+                    okane_core::strategy::entity::LogLevel::Info => info!("JS [INFO]: {}", msg),
+                    okane_core::strategy::entity::LogLevel::Debug => debug!("JS [DEBUG]: {}", msg),
+                }
+
+                if let Some(logger) = &logger_clone {
+                    logger.log(log_level, msg);
                 }
             })
             .map_err(|_| EngineError::Plugin("log setup failed".to_string()))?,

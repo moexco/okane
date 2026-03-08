@@ -9,7 +9,7 @@ pub use time::*;
 ///
 /// # Invariants
 /// - `symbol` 必须是合法的交易代码。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Stock {
     // 股票代码 (例如: AAPL, 000001)
     pub symbol: String,
@@ -22,7 +22,7 @@ pub struct Stock {
 ///
 /// # Invariants
 /// - 无特定约束。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, utoipa::ToSchema)]
 pub enum TimeFrame {
     // 1分钟
     Minute1,

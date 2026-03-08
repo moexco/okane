@@ -253,6 +253,7 @@ impl BacktestRunner {
             indicator_service,
             time_provider: fake_clock,
             notifier: None, // 回测中不推送通知
+            logger: None,   // 回测日志暂不持久化到核心日志库
         })?;
 
         // 等待引擎执行完成（BacktestStock 的 stream 耗尽后自动结束）

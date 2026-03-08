@@ -45,13 +45,14 @@ async fn test_strategy_lifecycle() -> anyhow::Result<()> {
     let engine_builder = Arc::new(MockEngineBuilder);
     let trade_port = Arc::new(SpyTradePort::new());
     let manager = StrategyManager::new(
-        store,
+        store.clone(),
         engine_builder as Arc<dyn okane_core::engine::port::EngineBuilder>,
         trade_port,
         Arc::new(MockAlgoOrderPort),
         Arc::new(MockIndicatorService),
         Arc::new(okane_core::common::time::RealTimeProvider),
         Arc::new(NoopNotifierFactory),
+        store,
     );
 
     let user_id = "test_user";
@@ -95,13 +96,14 @@ async fn test_strategy_lifecycle() -> anyhow::Result<()> {
     
     let store_inf = Arc::new(SqliteStrategyStore::new().map_err(|e| anyhow::anyhow!("Failed to create inf store: {}", e))?);
     let manager_inf = StrategyManager::new(
-        store_inf,
+        store_inf.clone(),
         Arc::new(InfiniteEngineBuilder) as Arc<dyn okane_core::engine::port::EngineBuilder>,
         Arc::new(SpyTradePort::new()),
         Arc::new(MockAlgoOrderPort),
         Arc::new(MockIndicatorService),
         Arc::new(okane_core::common::time::RealTimeProvider),
         Arc::new(NoopNotifierFactory),
+        store_inf,
     );
     let req_inf = StartRequest {
         symbol: "AAPL".to_string(),

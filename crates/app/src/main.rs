@@ -121,13 +121,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 8. 构造应用服务层（注入 Core Trait 抽象）
     let manager = StrategyManager::new(
-        strategy_store,
+        strategy_store.clone(),
         engine_builder,
         trade_service.clone(),
         algo_port.clone(),
         indicator_service.clone(),
         Arc::new(RealTimeProvider),
         notifier_factory,
+        strategy_store,
     );
 
     info!("StrategyManager initialized.");

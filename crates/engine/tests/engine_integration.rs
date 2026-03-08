@@ -49,6 +49,7 @@ async fn test_js_strategy_integration() -> anyhow::Result<()> {
         Arc::new(MockIndicatorService),
         Arc::new(FakeClockProvider::new(chrono::Utc::now())),
         None,
+        None,
     ).map_err(|e| anyhow::anyhow!(e))?;
 
     let local = tokio::task::LocalSet::new();
@@ -105,6 +106,7 @@ async fn test_js_trade_execution() -> anyhow::Result<()> {
         Arc::new(MockAlgoOrderPort),
         Arc::new(MockIndicatorService),
         Arc::new(FakeClockProvider::new(chrono::Utc::now())),
+        None,
         None,
     ).map_err(|e| anyhow::anyhow!(e))?;
 
@@ -171,6 +173,7 @@ async fn test_js_strategy_no_error_when_below_threshold() -> anyhow::Result<()> 
         Arc::new(MockAlgoOrderPort),
         Arc::new(MockIndicatorService),
         Arc::new(FakeClockProvider::new(chrono::Utc::now())),
+        None,
         None,
     )
     .map_err(|e| anyhow::anyhow!(e))?;

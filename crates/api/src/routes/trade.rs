@@ -288,3 +288,76 @@ pub async fn get_algo_orders(
         Err(e) => Err(ApiError::from(e)),
     }
 }
+
+/// 撤销算法单
+#[utoipa::path(
+    delete,
+    path = "/api/v1/user/algo/{algo_id}",
+    tag = "算法单 (Algo)",
+    security(("bearer_jwt" = [])),
+    params(
+        ("algo_id" = String, Path, description = "算法单 ID")
+    ),
+    responses(
+        (status = 200, description = "撤销成功", body = ApiResponse<String>),
+        (status = 404, description = "未找到算法单"),
+        (status = 500, description = "内部错误")
+    )
+)]
+pub async fn cancel_algo_order(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path(algo_id): Path<String>,
+) -> Result<Json<ApiResponse<String>>, ApiError> {
+    let order_id = OrderId(algo_id);
+    
+    // 权限检查
+    let order = state.algo_port.get_algo_order(&order_id).await
+        .map_err(|e| ApiError::Internal(format!("Failed to fetch algo order: {}", e)))?
+        .ok_or_else(|| ApiError::NotFound("Algo order not found".to_string()))?;
+
+    let is_owner = state.system_store.verify_account_ownership(&user.id, &order.account_id.0).await
+        .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?;
+    if !is_owner {
+        return Err(ApiError::Forbidden("Forbidden".to_string()));
+    }
+
+    match state.algo_port.cancel_algo_order(&order_id).await {
+        Ok(_) => Ok(Json(ApiResponse::ok("ok".to_string()))),
+        Err(e) => Err(ApiError::from(e)),
+    }
+}
+
+/// 查询账户持仓
+#[utoipa::path(
+    get,
+    path = "/api/v1/user/account/{account_id}/positions",
+    tag = "账户 (Account)",
+    security(("bearer_jwt" = [])),
+    params(
+        ("account_id" = String, Path, description = "账户 ID")
+    ),
+    responses(
+        (status = 200, description = "查询成功", body = ApiResponse<serde_json::Value>)
+    )
+)]
+pub async fn get_positions(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path(account_id): Path<String>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let account = AccountId(account_id);
+    let is_owner = state.system_store.verify_account_ownership(&user.id, &account.0).await
+        .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?;
+    if !is_owner {
+        return Err(ApiError::Forbidden("Forbidden".to_string()));
+    }
+
+    match state.trade_port.get_account(account).await {
+        Ok(acc) => {
+            // 返回持仓快照的 JSON 形式
+            Ok(Json(ApiResponse::ok(serde_json::to_value(acc.positions).map_err(|e| ApiError::Internal(e.to_string()))?)))
+        }
+        Err(e) => Err(ApiError::from(e)),
+    }
+}

@@ -112,6 +112,7 @@ async fn test_host_functions_from_js() -> anyhow::Result<()> {
         Arc::new(MockIndicatorService),
         time_provider,
         None,
+        None,
     ).map_err(|e| anyhow::anyhow!(e))?;
 
     let local = tokio::task::LocalSet::new();

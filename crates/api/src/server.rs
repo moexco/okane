@@ -143,6 +143,7 @@ pub fn build_app(state: AppState) -> Router {
         .routes(routes!(strategy::stop_strategy))
         .routes(routes!(strategy::update_strategy))
         .routes(routes!(strategy::delete_strategy))
+        .routes(routes!(strategy::get_strategy_logs))
         .routes(routes!(backtest::run_backtest))
         .routes(routes!(notify::get_notify_config))
         .routes(routes!(notify::update_notify_config))
@@ -154,6 +155,8 @@ pub fn build_app(state: AppState) -> Router {
         .routes(routes!(trade::cancel_order))
         .routes(routes!(trade::submit_algo_order))
         .routes(routes!(trade::get_algo_orders))
+        .routes(routes!(trade::cancel_algo_order))
+        .routes(routes!(trade::get_positions))
         .routes(routes!(market::get_rsi_indicator))
         .layer(axum::middleware::from_fn(
             crate::middleware::auth::require_password_changed,

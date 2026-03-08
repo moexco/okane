@@ -1,17 +1,41 @@
 use chrono::Utc;
 use okane_core::common::time::TimeProvider;
 use dashmap::DashMap;
+use std::collections::VecDeque;
 use okane_core::common::TimeFrame;
 use okane_core::engine::error::EngineError;
 use okane_core::engine::port::{EngineBuilder, EngineBuildParams};
 use okane_core::store::error::StoreError;
-use okane_core::strategy::entity::{EngineType, StrategyInstance, StrategyStatus};
-use okane_core::strategy::port::StrategyStore;
+use okane_core::strategy::port::{StrategyLogPort, StrategyLogger, StrategyStore};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::task::{AbortHandle, JoinHandle};
 use tracing::{error, info};
 use uuid::Uuid;
+use okane_core::strategy::entity::{EngineType, LogLevel, StrategyInstance, StrategyLogEntry, StrategyStatus};
+
+struct LogWrapper {
+    user_id: String,
+    strategy_id: String,
+    log_tx: tokio::sync::mpsc::UnboundedSender<(String, StrategyLogEntry)>,
+    time_provider: Arc<dyn TimeProvider>,
+}
+
+impl StrategyLogger for LogWrapper {
+    fn log(&self, level: LogLevel, message: String) {
+        let entry = StrategyLogEntry {
+            strategy_id: self.strategy_id.clone(),
+            level,
+            message,
+            timestamp: self.time_provider.now().unwrap_or_else(|_| Utc::now()),
+        };
+        if let Err(e) = self.log_tx.send((self.user_id.clone(), entry)) {
+            // 忽略发送失败 (通常是因为 receiver 已关闭)
+            // 不使用 tracing::error 以免在日志系统崩溃时引起递归调用
+            eprintln!("Strategy logger send failed: {}", e);
+        }
+    }
+}
 
 /// # Summary
 /// Manager 层的统一错误类型。
@@ -68,8 +92,14 @@ pub struct StrategyManager {
     time_provider: Arc<dyn TimeProvider>,
     // 通知工厂，根据用户 ID 动态创建通知实例
     notifier_factory: Arc<dyn okane_core::notify::port::NotifierFactory>,
+    // 策略日志端口
+    log_port: Arc<dyn StrategyLogPort>,
+    // 日志发送端 (异步管道)
+    log_tx: tokio::sync::mpsc::UnboundedSender<(String, StrategyLogEntry)>,
     // 运行中的策略协程句柄，Key 为 "{user_id}_{instance_id}"
     running_tasks: DashMap<String, AbortHandle>,
+    // 热数据缓存：每个策略保留最新的 100 条日志
+    recent_logs: Arc<DashMap<String, VecDeque<StrategyLogEntry>>>,
 }
 
 impl StrategyManager {
@@ -82,6 +112,7 @@ impl StrategyManager {
     ///
     /// # Returns
     /// * `Arc<Self>` - 可共享的管理器实例。
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         store: Arc<dyn StrategyStore>,
         engine_builder: Arc<dyn EngineBuilder>,
@@ -90,7 +121,35 @@ impl StrategyManager {
         indicator_service: Arc<dyn okane_core::market::indicator::IndicatorService>,
         time_provider: Arc<dyn TimeProvider>,
         notifier_factory: Arc<dyn okane_core::notify::port::NotifierFactory>,
+        log_port: Arc<dyn StrategyLogPort>,
     ) -> Arc<Self> {
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<(String, StrategyLogEntry)>();
+        let log_port_inner = log_port.clone();
+
+        let recent_logs = Arc::new(DashMap::<String, VecDeque<StrategyLogEntry>>::new());
+        let recent_logs_clone = recent_logs.clone();
+
+        tokio::spawn(async move {
+            info!("Strategy logging worker started.");
+            while let Some((user_id, log_entry)) = log_rx.recv().await {
+                // 1. 更新内存热数据 (保留最近 100 条)
+                {
+                    let mut entry_ref = recent_logs_clone.entry(log_entry.strategy_id.clone()).or_default();
+                    let q = entry_ref.value_mut();
+                    q.push_back(log_entry.clone());
+                    if q.len() > 100 {
+                        q.pop_front();
+                    }
+                }
+
+                // 2. 持久化到存储层
+                if let Err(e) = log_port_inner.append_log(&user_id, &log_entry).await {
+                    error!("Failed to persist strategy log: {}", e);
+                }
+            }
+            info!("Strategy logging worker stopped.");
+        });
+
         Arc::new(Self {
             store,
             engine_builder,
@@ -99,8 +158,36 @@ impl StrategyManager {
             indicator_service,
             time_provider,
             notifier_factory,
+            log_port,
+            log_tx,
             running_tasks: DashMap::new(),
+            recent_logs,
         })
+    }
+
+    /// 获取策略日志发送端
+    pub fn log_sender(&self) -> tokio::sync::mpsc::UnboundedSender<(String, StrategyLogEntry)> {
+        self.log_tx.clone()
+    }
+
+    /// 分页获取策略日志
+    pub async fn get_logs(
+        &self,
+        user_id: &str,
+        strategy_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<StrategyLogEntry>, ManagerError> {
+        // 1. 尝试从内存热数据获取 (仅当 offset=0 且命中缓存时)
+        if offset == 0 && let Some(q) = self.recent_logs.get(strategy_id) {
+            let logs: Vec<StrategyLogEntry> = q.iter().rev().take(limit).cloned().collect();
+            if !logs.is_empty() && (logs.len() >= limit || logs.len() == q.len()) {
+                return Ok(logs);
+            }
+        }
+
+        // 2. 否则从持久化存储获取
+        Ok(self.log_port.query_logs(user_id, strategy_id, limit, offset).await?)
     }
 
     /// # Summary
@@ -157,6 +244,12 @@ impl StrategyManager {
             time_provider: self.time_provider.clone(),
             notifier: self.notifier_factory.create_for_user(user_id).await
                 .map_err(|e| ManagerError::Engine(EngineError::Handler(format!("Failed to create notifier for user {}: {}", user_id, e))))?,
+            logger: Some(Arc::new(LogWrapper {
+                user_id: user_id.to_string(),
+                strategy_id: instance_id.clone(),
+                log_tx: self.log_tx.clone(),
+                time_provider: self.time_provider.clone(),
+            })),
         })?;
 
         // 更新状态为 Running

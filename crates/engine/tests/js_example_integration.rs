@@ -112,6 +112,7 @@ async fn test_js_example_strategy_execution() -> anyhow::Result<()> {
         Arc::new(MockIndicatorService),
         Arc::new(FakeClockProvider::new(Utc::now())),
         None,
+        None,
     ).map_err(|e| anyhow::anyhow!(e))?;
 
     let local = tokio::task::LocalSet::new();
@@ -167,6 +168,7 @@ async fn test_js_example_strategy_skip_non_final() -> anyhow::Result<()> {
         Arc::new(MockAlgoOrderPort),
         Arc::new(MockIndicatorService),
         Arc::new(FakeClockProvider::new(Utc::now())),
+        None,
         None,
     ).map_err(|e| anyhow::anyhow!(e))?;
 

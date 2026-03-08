@@ -6,11 +6,10 @@ use okane_core::strategy::entity::EngineType;
 use std::sync::Arc;
 
 use crate::quickjs::JsEngine;
-use crate::wasm::WasmEngine;
 
 /// # Summary
 /// `EngineBuilder` 的具体实现。
-/// 根据 `EngineType` 选择 `JsEngine` 或 `WasmEngine`。
+/// 根据 `EngineType` 选择 `JsEngine`。
 ///
 /// # Invariants
 /// - 持有 `Arc<dyn Market>` 用于创建具体引擎实例。
@@ -39,10 +38,9 @@ impl EngineBuilder for EngineFactory {
     /// 根据引擎类型构建策略执行 Future。
     ///
     /// # Logic
-    /// 1. 根据 engine_type 选择 JsEngine 或 WasmEngine。
+    /// 1. 根据 engine_type 选择 JsEngine。
     /// 2. 对于 JsEngine：因 QuickJS AsyncRuntime 不是 Send，
     ///    使用独立线程 + tokio LocalSet 运行，通过 oneshot 通道桥接结果。
-    /// 3. 对于 WasmEngine：直接包装为 Send Future。
     fn build(
         &self,
         params: EngineBuildParams,
@@ -84,6 +82,7 @@ impl EngineBuilder for EngineFactory {
                                 params.indicator_service,
                                 params.time_provider,
                                 params.notifier,
+                                params.logger,
                             ) {
                                 Ok(e) => e,
                                 Err(err) => {
@@ -105,21 +104,6 @@ impl EngineBuilder for EngineFactory {
                     rx.await.map_err(|_| {
                         EngineError::Plugin("JS engine thread terminated unexpectedly".to_string())
                     })?
-                }))
-            }
-            EngineType::Wasm => {
-                Ok(Box::pin(async move {
-                    let engine = WasmEngine::new(
-                        market,
-                        params.trade_port,
-                        params.algo_port,
-                        params.indicator_service,
-                        params.time_provider,
-                        params.notifier,
-                    )?;
-                    engine
-                        .run_strategy(&params.symbol, &params.account_id, params.timeframe, &params.source)
-                        .await
                 }))
             }
         }
