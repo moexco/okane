@@ -152,7 +152,7 @@ pub async fn spawn_test_server() -> anyhow::Result<(String, Arc<dyn SystemStore>
     });
 
     let state = AppState {
-        strategy_manager,
+        strategy_manager: strategy_manager.clone(), // Fix potential missing clone if needed
         trade_port: trade_service,
         algo_port: algo_service,
         indicator_service,
@@ -160,6 +160,7 @@ pub async fn spawn_test_server() -> anyhow::Result<(String, Arc<dyn SystemStore>
         market_port: market,
         backtest_runner,
         app_config,
+        session_cache: Arc::new(dashmap::DashMap::new()),
     };
 
     let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|e| anyhow::anyhow!("Failed to bind TcpListener: {}", e))?;

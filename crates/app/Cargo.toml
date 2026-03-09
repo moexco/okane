@@ -8,6 +8,7 @@ workspace = true
 
 [dependencies]
 config = "0.15.19"
+dashmap = "6.1.0"
 okane-api = { version = "0.1.0", path = "../api" }
 okane-core = { version = "0.1.0", path = "../core" }
 okane-engine = { version = "0.1.0", path = "../engine" }

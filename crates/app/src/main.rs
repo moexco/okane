@@ -144,6 +144,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     // 9. 挂载 API 服务
+    let session_cache = Arc::new(dashmap::DashMap::new());
+    let active_sessions = system_store.list_active_sessions().await?;
+    for s in active_sessions {
+        session_cache.insert(s.id.clone(), s);
+    }
+    info!("🚀 Loaded {} active sessions into memory.", session_cache.len());
+
     let app_state = okane_api::server::AppState {
         strategy_manager: manager.clone(),
         trade_port: trade_service,
@@ -153,6 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         market_port: market.clone(),
         backtest_runner,
         app_config: Arc::new(app_config.clone()),
+        session_cache,
     };
 
     let bind_addr = format!("{}:{}", app_config.server.host, app_config.server.port);

@@ -54,6 +54,24 @@ pub struct User {
 }
 
 /// # Summary
+/// 用户会话实体，用于有状态的 Refresh Token 管理。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserSession {
+    // 会话唯一标识 (jti)
+    pub id: String,
+    // 所属用户 ID
+    pub user_id: String,
+    // 当前有效的令牌标识 (用于重放检测)
+    pub current_token_id: String,
+    // 过期时间
+    pub expires_at: DateTime<Utc>,
+    // 是否已撤销
+    pub is_revoked: bool,
+    // 创建时间
+    pub created_at: DateTime<Utc>,
+}
+
+/// # Summary
 /// 持仓实体，记录用户在特定标的上的持有情况。
 ///
 /// # Invariants
@@ -341,4 +359,21 @@ pub trait SystemStore: Send + Sync {
     /// # Returns
     /// * `Result<(), StoreError>`
     async fn save_user_notify_config(&self, user_id: &str, config: &crate::config::UserNotifyConfig) -> Result<(), StoreError>;
+
+    // --- 会话管理域 ---
+
+    /// 保存或更新会话
+    async fn save_session(&self, session: &UserSession) -> Result<(), StoreError>;
+
+    /// 获取特定会话
+    async fn get_session(&self, session_id: &str) -> Result<Option<UserSession>, StoreError>;
+
+    /// 撤销特定会话
+    async fn revoke_session(&self, session_id: &str) -> Result<(), StoreError>;
+
+    /// 撤销用户的所有活跃会话 (用于改密或风险熔断)
+    async fn revoke_all_user_sessions(&self, user_id: &str) -> Result<(), StoreError>;
+
+    /// 获取所有活跃（未过期且未撤销）的会话列表 (用于服务启动加载至内存)
+    async fn list_active_sessions(&self) -> Result<Vec<UserSession>, StoreError>;
 }

@@ -36,7 +36,7 @@ async fn test_auth_and_password_flow() -> anyhow::Result<()> {
         password: "test_admin_pwd".to_string(),
     }, StatusCode::OK);
     let login_data: ApiResponse<LoginResponse> = res.json().await.map_err(|e| anyhow::anyhow!("Failed to parse login response: {}", e))?;
-    let admin_token = login_data.data.ok_or_else(|| anyhow::anyhow!("Login response missing data"))?.token;
+    let admin_token = login_data.data.ok_or_else(|| anyhow::anyhow!("Login response missing data"))?.access_token;
 
     // 3. 强制修改密码锁定检查
     assert_get!(&client, format!("{}/api/v1/user/strategies", base_url), Some(&admin_token), StatusCode::FORBIDDEN);
@@ -65,7 +65,7 @@ async fn test_admin_user_management() -> anyhow::Result<()> {
         username: "admin".to_string(),
         password: "test_admin_pwd".to_string(),
     }, StatusCode::OK);
-    let admin_token = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?.data.ok_or_else(|| anyhow::anyhow!("Admin token null"))?.token;
+    let admin_token = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?.data.ok_or_else(|| anyhow::anyhow!("Admin token null"))?.access_token;
 
     // 创建新用户
     assert_post!(&client, format!("{}/api/v1/admin/users", base_url), Some(&admin_token), &CreateUserRequest {
@@ -87,7 +87,7 @@ async fn test_user_account_and_strategy_deployment() -> anyhow::Result<()> {
         username: "admin".to_string(),
         password: "test_admin_pwd".to_string(),
     }, StatusCode::OK);
-    let admin_token = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?.data.ok_or_else(|| anyhow::anyhow!("Admin data null"))?.token;
+    let admin_token = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?.data.ok_or_else(|| anyhow::anyhow!("Admin data null"))?.access_token;
 
     assert_post!(&client, format!("{}/api/v1/admin/users", base_url), Some(&admin_token), &CreateUserRequest {
         id: "trader_02".to_string(),
@@ -101,12 +101,19 @@ async fn test_user_account_and_strategy_deployment() -> anyhow::Result<()> {
         username: "trader_02".to_string(),
         password: "trader_password".to_string(),
     }, StatusCode::OK);
-    let trader_token = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?.data.ok_or_else(|| anyhow::anyhow!("Trader data null"))?.token;
+    let trader_token = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?.data.ok_or_else(|| anyhow::anyhow!("Trader data null"))?.access_token;
 
     assert_post!(&client, format!("{}/api/v1/auth/change_password", base_url), Some(&trader_token), &ChangePasswordRequest {
         old_password: "trader_password".to_string(),
         new_password: "trader_new_pwd".to_string(),
     }, StatusCode::OK);
+
+    // 改密后原 Token 撤销，需要重新登录获取新 Token
+    let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
+        username: "trader_02".to_string(),
+        password: "trader_new_pwd".to_string(),
+    }, StatusCode::OK);
+    let trader_token = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?.data.ok_or_else(|| anyhow::anyhow!("Trader data null"))?.access_token;
 
     // 3. 注册金融账号
     assert_post!(&client, format!("{}/api/v1/user/account", base_url), Some(&trader_token), &CreateAccountRequest {
@@ -152,7 +159,7 @@ async fn test_strategy_backtest() -> anyhow::Result<()> {
         password: "test_admin_pwd".to_string(),
     }, StatusCode::OK);
     let admin_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?;
-    let admin_token = admin_data.data.ok_or_else(|| anyhow::anyhow!("Admin data null"))?.token;
+    let admin_token = admin_data.data.ok_or_else(|| anyhow::anyhow!("Admin data null"))?.access_token;
 
     assert_post!(&client, format!("{}/api/v1/admin/users", base_url), Some(&admin_token), &CreateUserRequest {
         id: "bt_user".to_string(),
@@ -166,7 +173,7 @@ async fn test_strategy_backtest() -> anyhow::Result<()> {
         password: "password".to_string(),
     }, StatusCode::OK);
     let user_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?;
-    let token = user_data.data.ok_or_else(|| anyhow::anyhow!("User data null"))?.token;
+    let token = user_data.data.ok_or_else(|| anyhow::anyhow!("User data null"))?.access_token;
 
     // 必须改密码
     assert_post!(&client, format!("{}/api/v1/auth/change_password", base_url), Some(&token), &ChangePasswordRequest {
@@ -180,7 +187,7 @@ async fn test_strategy_backtest() -> anyhow::Result<()> {
         password: "new_password".to_string(),
     }, StatusCode::OK);
     let token_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?;
-    let token = token_data.data.ok_or_else(|| anyhow::anyhow!("Token data null"))?.token;
+    let token = token_data.data.ok_or_else(|| anyhow::anyhow!("Token data null"))?.access_token;
 
     // 回测逻辑
     let js_code = "function onInit() {} function onCandle(input) { host.buy('AAPL', '150.0', '10'); }";

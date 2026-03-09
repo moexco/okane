@@ -19,7 +19,7 @@ async fn test_admin_settings_api() -> anyhow::Result<()> {
         password: "test_admin_pwd".to_string(),
     }, StatusCode::OK);
     let login_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!("Parse login: {}", e))?;
-    let token = login_data.data.ok_or_else(|| anyhow::anyhow!("Token null"))?.token;
+    let token = login_data.data.ok_or_else(|| anyhow::anyhow!("Token null"))?.access_token;
 
     // 1. 更新设置
     assert_put!(&client, format!("{}/api/v1/admin/settings", base_url), Some(&token), &UpdateSettingsRequest {
@@ -39,7 +39,7 @@ async fn test_account_management_api() -> anyhow::Result<()> {
         password: "test_admin_pwd".to_string(),
     }, StatusCode::OK);
     let login_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!("Parse login: {}", e))?;
-    let token = login_data.data.ok_or_else(|| anyhow::anyhow!("Token null"))?.token;
+    let token = login_data.data.ok_or_else(|| anyhow::anyhow!("Token null"))?.access_token;
 
     // 1. 创建账号
     assert_post!(&client, format!("{}/api/v1/user/account", base_url), Some(&token), &CreateAccountRequest {
@@ -70,7 +70,7 @@ async fn test_market_and_watchlist_api() -> anyhow::Result<()> {
         password: "test_admin_pwd".to_string(),
     }, StatusCode::OK);
     let login_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!("Parse login: {}", e))?;
-    let token = login_data.data.ok_or_else(|| anyhow::anyhow!("Token null"))?.token;
+    let token = login_data.data.ok_or_else(|| anyhow::anyhow!("Token null"))?.access_token;
 
     // 1. 搜索股票 (YahooProvider 返回空或模拟数据，具体取决于实现，这里假设能搜到 AAPL)
     let res = assert_get!(&client, format!("{}/api/v1/market/search?q=AAPL", base_url), Some(&token), StatusCode::OK);
@@ -105,7 +105,7 @@ async fn test_notification_config_api() -> anyhow::Result<()> {
         password: "test_admin_pwd".to_string(),
     }, StatusCode::OK);
     let login_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!("Parse login: {}", e))?;
-    let token = login_data.data.ok_or_else(|| anyhow::anyhow!("Token null"))?.token;
+    let token = login_data.data.ok_or_else(|| anyhow::anyhow!("Token null"))?.access_token;
 
     // 1. 获取 (初始应为 404 NotFound，因为 DB 里还没存)
     assert_get!(&client, format!("{}/api/v1/user/notify-config", base_url), Some(&token), StatusCode::NOT_FOUND);
@@ -144,7 +144,7 @@ async fn test_manual_trade_api() -> anyhow::Result<()> {
         password: "test_admin_pwd".to_string(),
     }, StatusCode::OK);
     let login_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!("Parse login: {}", e))?;
-    let token = login_data.data.ok_or_else(|| anyhow::anyhow!("Token null"))?.token;
+    let token = login_data.data.ok_or_else(|| anyhow::anyhow!("Token null"))?.access_token;
 
     // 准备一个账号
     assert_post!(&client, format!("{}/api/v1/user/account", base_url), Some(&token), &CreateAccountRequest {

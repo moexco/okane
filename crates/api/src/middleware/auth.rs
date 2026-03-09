@@ -6,6 +6,7 @@ use axum::extract::{FromRequestParts, Request, State};
 use axum::http::request::Parts;
 use axum::middleware::Next;
 use axum::response::Response;
+use chrono::Utc;
 use jsonwebtoken::{decode, DecodingKey, Validation};
 
 use crate::types::Claims;
@@ -26,37 +27,48 @@ pub async fn auth_middleware(
             let s = header_val.to_str().map_err(|_| ApiError::Unauthorized("Invalid auth header".into()))?;
             match s.strip_prefix("Bearer ") {
                 Some(t) => t.to_string(),
-                None => {
-                    tracing::warn!("Invalid Bearer format: {}", s);
-                    return Err(ApiError::Unauthorized("Invalid Bearer format".into()));
-                }
+                None => return Err(ApiError::Unauthorized("Invalid Bearer format".into())),
             }
         }
-        None => {
-            tracing::warn!("Missing Authorization header");
-            return Err(ApiError::Unauthorized("Missing Authorization header".into()));
-        }
+        None => return Err(ApiError::Unauthorized("Missing Authorization header".into())),
     };
 
-    let claims = match verify_jwt(&token, &state.app_config.server.jwt_secret) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("JWT verification failed: {:?}", e);
-            return Err(e);
-        }
-    };
+    // 1. 验证 JWT 基础合法性
+    let claims = verify_jwt(&token, &state.app_config.server.jwt_secret)?;
     
-    // 检查用户是否存在，以及是否因为初次登录被锁在"强制改密码"状态
-    // 如果强制改密码，且当前访问的不是 /api/v1/auth/change_password 接口，则拒绝
-    let user = state
-        .system_store
-        .get_user(&claims.sub)
-        .await
-        .map_err(|e| ApiError::Internal(format!("DB Error: {}", e)))?
-        .ok_or_else(|| ApiError::Unauthorized("User not found".into()))?;
+    // 2. 检查 Session 状态 (即时撤销核心逻辑)
+    // 优先从内存缓存获取 Session，实现零 I/O 校验
+    let session = {
+        if let Some(s) = state.session_cache.get(&claims.sid) {
+            Some(s.clone())
+        } else {
+            // 内存未命中，从数据库加载并回填 (Backup)
+            match state.system_store.get_session(&claims.sid).await {
+                Ok(Some(s)) => {
+                    state.session_cache.insert(s.id.clone(), s.clone());
+                    Some(s)
+                }
+                _ => None,
+            }
+        }
+    };
 
-    // 将用户信息注入 request extensions
-    // 以便 downstream handlers 用 `Extension<User>` 提取
+    let session = session.ok_or_else(|| ApiError::Unauthorized("Session not found".into()))?;
+
+    if session.is_revoked || session.expires_at < Utc::now() {
+        return Err(ApiError::Unauthorized("Session has been revoked or expired".into()));
+    }
+
+    // 3. 构造 User 实体注入 Context (利用 Claims 中的冗余信息)
+    let user = okane_core::store::port::User {
+        id: claims.sub.clone(),
+        name: "".to_string(), 
+        password_hash: "".to_string(),
+        role: claims.role.parse().unwrap_or(UserRole::Standard),
+        force_password_change: claims.force_password_change,
+        created_at: Utc::now(), 
+    };
+
     req.extensions_mut().insert(user);
     req.extensions_mut().insert(claims);
 

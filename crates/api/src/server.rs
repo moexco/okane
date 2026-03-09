@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use axum::Router;
+use dashmap::DashMap;
 use tower_http::cors::{Any, CorsLayer};
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
@@ -47,6 +48,8 @@ pub struct AppState {
     pub backtest_runner: Arc<okane_manager::backtest::BacktestRunner>,
     /// 应用全局配置
     pub app_config: Arc<okane_core::config::AppConfig>,
+    /// 负载优先的 Session 缓存 (session_id -> UserSession)
+    pub session_cache: Arc<DashMap<String, okane_core::store::port::UserSession>>,
 }
 
 // ============================================================
@@ -120,7 +123,8 @@ impl Modify for SecurityAddon {
 pub fn build_app(state: AppState) -> Router {
     // 1. 无需鉴权的公开路由
     let public_router = OpenApiRouter::new()
-        .routes(routes!(auth::login));
+        .routes(routes!(auth::login))
+        .routes(routes!(auth::refresh));
 
     // 2. 需要 JWT 鉴权，但允许在强制改密码状态下访问的路由
     let auth_only_router = OpenApiRouter::new()

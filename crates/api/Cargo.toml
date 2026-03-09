@@ -49,6 +49,7 @@ bcrypt = "0.18.0"
 chrono = "0.4.44"
 uuid = { version = "1.21.0", features = ["v4"] }
 base64 = "0.22.1"
+dashmap = "6.1.0"
 
 [dev-dependencies]
 anyhow = "1.0.95"

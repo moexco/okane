@@ -2342,6 +2342,7 @@ dependencies = [
  "base64",
  "bcrypt",
  "chrono",
+ "dashmap",
  "jsonwebtoken",
  "okane-core",
  "okane-engine",
@@ -2371,6 +2372,7 @@ name = "okane-app"
 version = "0.1.0"
 dependencies = [
  "config",
+ "dashmap",
  "okane-api",
  "okane-core",
  "okane-engine",

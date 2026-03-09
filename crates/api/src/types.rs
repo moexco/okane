@@ -458,21 +458,30 @@ pub struct UserResponse {
 /// 登录成功返回的 Token
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct LoginResponse {
-    /// JWT Bearer Token
+    /// JWT Access Token (短效)
     #[schema(example = "eyJhbGciOiJIUzI1NiIs...")]
-    pub token: String,
-    /// Token 过期时间 (秒)
-    #[schema(example = 86400)]
+    pub access_token: String,
+    /// JWT Refresh Token (长效)
+    #[schema(example = "eyJhbGciOiJIUzI1NiIs...")]
+    pub refresh_token: String,
+    /// Access Token 过期时间 (秒)
+    #[schema(example = 900)]
     pub expires_in: u64,
 }
 
 /// JWT Claims 内容 (内部使用，不暴露到 Swagger)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    /// 用户唯一标识
+    /// 用户唯一标识 (user_id)
     pub sub: String,
-    /// 角色 ("user" 或 "admin")
+    /// 会话唯一标识 (session_id)
+    pub sid: String,
+    /// 令牌唯一标识 (jti)
+    pub jti: String,
+    /// 角色 ("Admin" 或 "Standard")
     pub role: String,
+    /// 是否需要强制改密
+    pub force_password_change: bool,
     /// Token 过期时间 (Unix 时间戳)
     pub exp: usize,
 }

@@ -35,6 +35,16 @@ CREATE TABLE IF NOT EXISTS users (
     created_at DATETIME NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    current_token_id TEXT NOT NULL,
+    expires_at DATETIME NOT NULL,
+    is_revoked BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at DATETIME NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
 CREATE TABLE IF NOT EXISTS accounts (
     id TEXT PRIMARY KEY,
     owner_id TEXT NOT NULL,
@@ -78,11 +88,20 @@ CREATE TABLE IF NOT EXISTS user_notify_config (
 );
 "#;
 
-const SQL_SELECT_USER: &str = "SELECT * FROM users WHERE id = ?";
+const SQL_SELECT_USER: &str = "SELECT id, name, password_hash, role, force_password_change, created_at FROM users WHERE id = ?";
 const SQL_INSERT_USER: &str = r#"
 INSERT OR REPLACE INTO users (id, name, password_hash, role, force_password_change, created_at)
 VALUES (?, ?, ?, ?, ?, ?)
 "#;
+
+const SQL_INSERT_SESSION: &str = r#"
+INSERT OR REPLACE INTO user_sessions (id, user_id, current_token_id, expires_at, is_revoked, created_at)
+VALUES (?, ?, ?, ?, ?, ?)
+"#;
+const SQL_SELECT_SESSION: &str = "SELECT id, user_id, current_token_id, expires_at, is_revoked, created_at FROM user_sessions WHERE id = ?";
+const SQL_REVOKE_SESSION: &str = "UPDATE user_sessions SET is_revoked = 1 WHERE id = ?";
+const SQL_REVOKE_ALL_USER_SESSIONS: &str = "UPDATE user_sessions SET is_revoked = 1 WHERE user_id = ?";
+const SQL_LIST_ACTIVE_SESSIONS: &str = "SELECT id, user_id, current_token_id, expires_at, is_revoked, created_at FROM user_sessions WHERE is_revoked = 0 AND expires_at > ?";
 
 const SQL_SELECT_WATCHLIST: &str = "SELECT symbol FROM watchlists WHERE user_id = ?";
 const SQL_INSERT_WATCHLIST: &str = "INSERT OR IGNORE INTO watchlists (user_id, symbol) VALUES (?, ?)";
@@ -509,5 +528,72 @@ impl SystemStore for SqliteSystemStore {
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
         Ok(())
+    }
+
+    async fn save_session(&self, session: &okane_core::store::port::UserSession) -> Result<(), StoreError> {
+        sqlx::query(SQL_INSERT_SESSION)
+            .bind(&session.id)
+            .bind(&session.user_id)
+            .bind(&session.current_token_id)
+            .bind(session.expires_at)
+            .bind(session.is_revoked)
+            .bind(session.created_at)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn get_session(&self, session_id: &str) -> Result<Option<okane_core::store::port::UserSession>, StoreError> {
+        let row = sqlx::query_as::<_, (String, String, String, DateTime<Utc>, bool, DateTime<Utc>)>(SQL_SELECT_SESSION)
+            .bind(session_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok(row.map(|r| okane_core::store::port::UserSession {
+            id: r.0,
+            user_id: r.1,
+            current_token_id: r.2,
+            expires_at: r.3,
+            is_revoked: r.4,
+            created_at: r.5,
+        }))
+    }
+
+    async fn revoke_session(&self, session_id: &str) -> Result<(), StoreError> {
+        sqlx::query(SQL_REVOKE_SESSION)
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn revoke_all_user_sessions(&self, user_id: &str) -> Result<(), StoreError> {
+        sqlx::query(SQL_REVOKE_ALL_USER_SESSIONS)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn list_active_sessions(&self) -> Result<Vec<okane_core::store::port::UserSession>, StoreError> {
+        let now = Utc::now();
+        let rows = sqlx::query_as::<_, (String, String, String, DateTime<Utc>, bool, DateTime<Utc>)>(SQL_LIST_ACTIVE_SESSIONS)
+            .bind(now)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok(rows.into_iter().map(|r| okane_core::store::port::UserSession {
+            id: r.0,
+            user_id: r.1,
+            current_token_id: r.2,
+            expires_at: r.3,
+            is_revoked: r.4,
+            created_at: r.5,
+        }).collect())
     }
 }
