@@ -204,6 +204,7 @@ pub fn build_app(state: AppState) -> Router {
     router
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api))
         .layer(cors)
+        .layer(axum::middleware::from_fn(crate::middleware::timer_middleware))
 }
 
 /// 绑定 TCP 端口并启动服务。

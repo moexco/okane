@@ -16,7 +16,6 @@ okane-cache = { version = "0.1.0", path = "../cache" }
 okane-core = { version = "0.1.0", path = "../core" }
 okane-store = { version = "0.1.0", path = "../store" }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
 tokio = { version = "1.49.0", features = ["sync", "rt", "time", "macros"] }
 tracing = "0.1.44"
 rust_decimal = "1.40.0"

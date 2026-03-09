@@ -37,21 +37,8 @@ pub async fn auth_middleware(
     let claims = verify_jwt(&token, &state.app_config.server.jwt_secret)?;
     
     // 2. 检查 Session 状态 (即时撤销核心逻辑)
-    // 优先从内存缓存获取 Session，实现零 I/O 校验
-    let session = {
-        if let Some(s) = state.session_cache.get(&claims.sid) {
-            Some(s.clone())
-        } else {
-            // 内存未命中，从数据库加载并回填 (Backup)
-            match state.system_store.get_session(&claims.sid).await {
-                Ok(Some(s)) => {
-                    state.session_cache.insert(s.id.clone(), s.clone());
-                    Some(s)
-                }
-                _ => None,
-            }
-        }
-    };
+    // 强制运行时零 DB 读取，内存未命中视为无效
+    let session = state.session_cache.get(&claims.sid).map(|s| s.clone());
 
     let session = session.ok_or_else(|| ApiError::Unauthorized("Session not found".into()))?;
 

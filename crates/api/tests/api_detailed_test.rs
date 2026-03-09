@@ -17,6 +17,7 @@ async fn test_admin_settings_api() -> anyhow::Result<()> {
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
         username: "admin".to_string(),
         password: "test_admin_pwd".to_string(),
+        client_id: "detailed_test_client".to_string(),
     }, StatusCode::OK);
     let login_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!("Parse login: {}", e))?;
     let token = login_data.data.ok_or_else(|| anyhow::anyhow!("Token null"))?.access_token;
@@ -37,6 +38,7 @@ async fn test_account_management_api() -> anyhow::Result<()> {
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
         username: "admin".to_string(),
         password: "test_admin_pwd".to_string(),
+        client_id: "detailed_test_client".to_string(),
     }, StatusCode::OK);
     let login_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!("Parse login: {}", e))?;
     let token = login_data.data.ok_or_else(|| anyhow::anyhow!("Token null"))?.access_token;
@@ -68,6 +70,7 @@ async fn test_market_and_watchlist_api() -> anyhow::Result<()> {
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
         username: "admin".to_string(),
         password: "test_admin_pwd".to_string(),
+        client_id: "detailed_test_client".to_string(),
     }, StatusCode::OK);
     let login_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!("Parse login: {}", e))?;
     let token = login_data.data.ok_or_else(|| anyhow::anyhow!("Token null"))?.access_token;
@@ -103,6 +106,7 @@ async fn test_notification_config_api() -> anyhow::Result<()> {
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
         username: "admin".to_string(),
         password: "test_admin_pwd".to_string(),
+        client_id: "detailed_test_client".to_string(),
     }, StatusCode::OK);
     let login_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!("Parse login: {}", e))?;
     let token = login_data.data.ok_or_else(|| anyhow::anyhow!("Token null"))?.access_token;
@@ -142,6 +146,7 @@ async fn test_manual_trade_api() -> anyhow::Result<()> {
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
         username: "admin".to_string(),
         password: "test_admin_pwd".to_string(),
+        client_id: "detailed_test_client".to_string(),
     }, StatusCode::OK);
     let login_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!("Parse login: {}", e))?;
     let token = login_data.data.ok_or_else(|| anyhow::anyhow!("Token null"))?.access_token;

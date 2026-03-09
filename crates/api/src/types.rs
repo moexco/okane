@@ -363,6 +363,8 @@ pub struct ApiResponse<T: Serialize + ToSchema> {
     pub data: Option<T>,
     /// 错误信息 (失败时)
     pub error: Option<String>,
+    /// 接口处理耗时 (毫秒)
+    pub latency_ms: Option<u64>,
 }
 
 impl<T: Serialize + ToSchema> ApiResponse<T> {
@@ -372,17 +374,20 @@ impl<T: Serialize + ToSchema> ApiResponse<T> {
             success: true,
             data: Some(data),
             error: None,
+            latency_ms: None,
         }
     }
 }
 
 /// 构建失败响应 (不含泛型载荷)
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ApiErrorResponse {
     /// 固定为 false
     pub success: bool,
     /// 错误描述信息
     pub error: String,
+    /// 接口处理耗时 (毫秒)
+    pub latency_ms: Option<u64>,
 }
 
 impl ApiErrorResponse {
@@ -391,6 +396,7 @@ impl ApiErrorResponse {
         Self {
             success: false,
             error: msg.into(),
+            latency_ms: None,
         }
     }
 }
@@ -408,6 +414,9 @@ pub struct LoginRequest {
     /// 密码
     #[schema(example = "password123")]
     pub password: String,
+    /// 客户端唯一标识 (用于实现单设备一个 Session 复用)
+    #[schema(example = "browser_chrome_1")]
+    pub client_id: String,
 }
 
 /// 修改密码请求体

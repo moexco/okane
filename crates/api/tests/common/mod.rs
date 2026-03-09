@@ -33,7 +33,7 @@ pub async fn spawn_test_server() -> anyhow::Result<(String, Arc<dyn SystemStore>
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         tracing_subscriber::fmt()
-            .with_env_filter("debug")
+            .with_env_filter("error")
             .try_init()
             .ok(); // 初始化失败仅影响日志输出，不应中断测试流程
     });

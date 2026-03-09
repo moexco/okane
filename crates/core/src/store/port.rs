@@ -61,6 +61,8 @@ pub struct UserSession {
     pub id: String,
     // 所属用户 ID
     pub user_id: String,
+    // 客户端标识 (用于实现单设备单一 Session)
+    pub client_id: String,
     // 当前有效的令牌标识 (用于重放检测)
     pub current_token_id: String,
     // 过期时间
@@ -368,11 +370,17 @@ pub trait SystemStore: Send + Sync {
     /// 获取特定会话
     async fn get_session(&self, session_id: &str) -> Result<Option<UserSession>, StoreError>;
 
+    /// 获取特定用户的特定客户端会话 (用于登录复用)
+    async fn get_session_by_client(&self, user_id: &str, client_id: &str) -> Result<Option<UserSession>, StoreError>;
+
     /// 撤销特定会话
     async fn revoke_session(&self, session_id: &str) -> Result<(), StoreError>;
 
     /// 撤销用户的所有活跃会话 (用于改密或风险熔断)
     async fn revoke_all_user_sessions(&self, user_id: &str) -> Result<(), StoreError>;
+
+    /// 清理全局过期会话 (自动扫描净化)
+    async fn delete_expired_sessions(&self) -> Result<(), StoreError>;
 
     /// 获取所有活跃（未过期且未撤销）的会话列表 (用于服务启动加载至内存)
     async fn list_active_sessions(&self) -> Result<Vec<UserSession>, StoreError>;

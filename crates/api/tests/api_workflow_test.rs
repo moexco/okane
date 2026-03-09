@@ -28,12 +28,14 @@ async fn test_auth_and_password_flow() -> anyhow::Result<()> {
     assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
         username: "admin".to_string(),
         password: "wrongpassword".to_string(),
+        client_id: "test_client_id".to_string(),
     }, StatusCode::UNAUTHORIZED);
 
     // 2. 登陆成功
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
         username: "admin".to_string(),
         password: "test_admin_pwd".to_string(),
+        client_id: "test_client_id".to_string(),
     }, StatusCode::OK);
     let login_data: ApiResponse<LoginResponse> = res.json().await.map_err(|e| anyhow::anyhow!("Failed to parse login response: {}", e))?;
     let admin_token = login_data.data.ok_or_else(|| anyhow::anyhow!("Login response missing data"))?.access_token;
@@ -51,6 +53,7 @@ async fn test_auth_and_password_flow() -> anyhow::Result<()> {
     assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
         username: "admin".to_string(),
         password: "new_secure_password".to_string(),
+        client_id: "test_client_id".to_string(),
     }, StatusCode::OK);
     Ok(())
 }
@@ -64,6 +67,7 @@ async fn test_admin_user_management() -> anyhow::Result<()> {
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
         username: "admin".to_string(),
         password: "test_admin_pwd".to_string(),
+        client_id: "test_client_id".to_string(),
     }, StatusCode::OK);
     let admin_token = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?.data.ok_or_else(|| anyhow::anyhow!("Admin token null"))?.access_token;
 
@@ -86,6 +90,7 @@ async fn test_user_account_and_strategy_deployment() -> anyhow::Result<()> {
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
         username: "admin".to_string(),
         password: "test_admin_pwd".to_string(),
+        client_id: "test_client_id".to_string(),
     }, StatusCode::OK);
     let admin_token = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?.data.ok_or_else(|| anyhow::anyhow!("Admin data null"))?.access_token;
 
@@ -100,6 +105,7 @@ async fn test_user_account_and_strategy_deployment() -> anyhow::Result<()> {
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
         username: "trader_02".to_string(),
         password: "trader_password".to_string(),
+        client_id: "test_client_id".to_string(),
     }, StatusCode::OK);
     let trader_token = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?.data.ok_or_else(|| anyhow::anyhow!("Trader data null"))?.access_token;
 
@@ -112,6 +118,7 @@ async fn test_user_account_and_strategy_deployment() -> anyhow::Result<()> {
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
         username: "trader_02".to_string(),
         password: "trader_new_pwd".to_string(),
+        client_id: "test_client_id".to_string(),
     }, StatusCode::OK);
     let trader_token = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?.data.ok_or_else(|| anyhow::anyhow!("Trader data null"))?.access_token;
 
@@ -157,6 +164,7 @@ async fn test_strategy_backtest() -> anyhow::Result<()> {
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
         username: "admin".to_string(),
         password: "test_admin_pwd".to_string(),
+        client_id: "test_client_id".to_string(),
     }, StatusCode::OK);
     let admin_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?;
     let admin_token = admin_data.data.ok_or_else(|| anyhow::anyhow!("Admin data null"))?.access_token;
@@ -171,6 +179,7 @@ async fn test_strategy_backtest() -> anyhow::Result<()> {
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
         username: "bt_user".to_string(),
         password: "password".to_string(),
+        client_id: "test_client_id".to_string(),
     }, StatusCode::OK);
     let user_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?;
     let token = user_data.data.ok_or_else(|| anyhow::anyhow!("User data null"))?.access_token;
@@ -185,6 +194,7 @@ async fn test_strategy_backtest() -> anyhow::Result<()> {
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
         username: "bt_user".to_string(),
         password: "new_password".to_string(),
+        client_id: "test_client_id".to_string(),
     }, StatusCode::OK);
     let token_data = res.json::<ApiResponse<LoginResponse>>().await.map_err(|e| anyhow::anyhow!(e))?;
     let token = token_data.data.ok_or_else(|| anyhow::anyhow!("Token data null"))?.access_token;

@@ -17,8 +17,9 @@ workspace = true
 [dependencies]
 # --- Web 框架 ---
 axum = { version = "0.8", features = ["json"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
 tower-http = { version = "0.6", features = ["cors"] }
+http-body-util = "0.1"
 
 # --- OpenAPI / Swagger ---
 utoipa = { version = "5", features = ["axum_extras"] }
@@ -50,13 +51,14 @@ chrono = "0.4.44"
 uuid = { version = "1.21.0", features = ["v4"] }
 base64 = "0.22.1"
 dashmap = "6.1.0"
+sha2 = "0.10.9"
+hex = "0.4.3"
 
 [dev-dependencies]
 anyhow = "1.0.95"
 okane-core = { version = "0.1.0", path = "../core", features = ["test-utils"] }
 async-trait = "0.1.89"
 okane-engine = { path = "../engine" }
-okane-feed = { path = "../feed" }
 okane-market = { path = "../market" }
 okane-store = { path = "../store" }
 okane-trade = { path = "../trade" }

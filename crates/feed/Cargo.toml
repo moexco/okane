@@ -13,8 +13,6 @@ futures = "0.3.31"
 okane-core = { version = "0.1.0", path = "../core" }
 reqwest = { version = "0.13.2", features = ["default", "json", "query"] }
 serde = { version = "1.0.228", features = ["derive"] }
-thiserror = "2.0.18"
 tokio = { version = "1.49.0", features = ["rt-multi-thread", "sync", "time", "macros"] }
 tokio-stream = "0.1.18"
-tracing = "0.1.44"
 rust_decimal = "1.40.0"

@@ -7,6 +7,7 @@ use axum::Json;
 use chrono::Utc;
 use jsonwebtoken::{encode, EncodingKey, Header};
 
+use sha2::{Sha256, Digest};
 use crate::types::{ApiResponse, ChangePasswordRequest, Claims, LoginRequest, LoginResponse};
 use crate::error::ApiError;
 use crate::middleware::auth::CurrentUser;
@@ -32,39 +33,68 @@ pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<ApiResponse<LoginResponse>>, ApiError> {
+    let start_time = std::time::Instant::now();
+
+    // 辅助函数：处理登录失败并确保 10 秒固定返回
+    let handle_auth_fail = |msg: String| async move {
+        let elapsed = start_time.elapsed();
+        let target = std::time::Duration::from_secs(10);
+        if elapsed < target {
+            tokio::time::sleep(target - elapsed).await;
+        }
+        ApiError::Unauthorized(msg)
+    };
+
     // 1. 获取用户
-    let user = state
+    let user_opt = state
         .system_store
         .get_user(&req.username)
         .await
-        .map_err(|e| ApiError::Internal(format!("DB error: {}", e)))?
-        .ok_or_else(|| ApiError::Unauthorized("Invalid username or password".into()))?;
+        .map_err(|e| ApiError::Internal(format!("DB error: {}", e)))?;
+        
+    let user = match user_opt {
+        Some(u) => u,
+        None => return Err(handle_auth_fail("Invalid username or password".into()).await),
+    };
 
     // 2. 验证密码
     let valid = bcrypt::verify(&req.password, &user.password_hash)
         .map_err(|e| ApiError::Internal(format!("Hash verification failed: {}", e)))?;
 
     if !valid {
-        return Err(ApiError::Unauthorized("Invalid username or password".into()));
+        return Err(handle_auth_fail("Invalid username or password".into()).await);
     }
 
-    // 3. 创建新 Session
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let current_jti = uuid::Uuid::new_v4().to_string();
+    // 3. 创建或复用 Session (确定性 SID)
+    let session_id = generate_deterministic_sid(&user.id, &req.client_id);
     let expires_at = Utc::now() + chrono::Duration::seconds(REFRESH_TOKEN_EXPIRES_IN);
-
-    let session = okane_core::store::port::UserSession {
-        id: session_id.clone(),
-        user_id: user.id.clone(),
-        current_token_id: current_jti.clone(),
-        expires_at,
-        is_revoked: false,
-        created_at: Utc::now(),
+    
+    let mut session = if let Some(s) = state.session_cache.get(&session_id) {
+        let mut s = s.clone();
+        s.expires_at = expires_at;
+        s
+    } else {
+        okane_core::store::port::UserSession {
+            id: session_id.clone(),
+            user_id: user.id.clone(),
+            client_id: req.client_id.clone(),
+            current_token_id: "".to_string(), 
+            expires_at,
+            is_revoked: false,
+            created_at: Utc::now(),
+        }
     };
 
-    // 4. 同步至 DB & RAM
+    let current_jti = uuid::Uuid::new_v4().to_string();
+    session.current_token_id = current_jti.clone();
+
+    // 4. 同步至 DB & RAM (仅在登录成功后进行全局清理)
     state.system_store.save_session(&session).await
         .map_err(|e| ApiError::Internal(format!("Failed to save session: {}", e)))?;
+    
+    // 全局自动净化：仅在登录成功后，顺便清理系统中所有过期数据
+    state.system_store.delete_expired_sessions().await.ok();
+    
     state.session_cache.insert(session_id.clone(), session.clone());
 
     // 5. 生成令牌对
@@ -85,6 +115,7 @@ pub async fn login(
     post,
     path = "/api/v1/auth/refresh",
     tag = "鉴权 (Auth)",
+    security(("bearer_jwt" = [])),
     responses(
         (status = 200, description = "刷新成功", body = ApiResponse<LoginResponse>),
         (status = 401, description = "无效或过期的刷新令牌")
@@ -105,24 +136,17 @@ pub async fn refresh(
 
     let claims = crate::middleware::auth::verify_jwt(token_str, &state.app_config.server.jwt_secret)?;
 
-    // 1. 获取 Session (内存优先)
-    let mut session = {
-        if let Some(s) = state.session_cache.get(&claims.sid) {
-            Some(s.clone())
-        } else {
-            match state.system_store.get_session(&claims.sid).await {
-                Ok(Some(s)) => Some(s),
-                _ => None,
-            }
-        }
-    }.ok_or_else(|| ApiError::Unauthorized("Invalid session".into()))?;
+    // 1. 获取 Session (严格零 DB 读取，仅查内存)
+    let mut session = state.session_cache.get(&claims.sid)
+        .map(|s| s.clone())
+        .ok_or_else(|| ApiError::Unauthorized("Invalid or expired session. Please log in again.".into()))?;
 
     // 2. 重放攻击探测 (Reuse Detection)
     // 提交的 jti 必须与当前 Session 记录的唯一合法 jti 一致
     if claims.jti != session.current_token_id {
         tracing::error!("🚨 REUSE DETECTION TRIGGERED! User: {}, Session: {}, Token: {}", claims.sub, claims.sid, claims.jti);
         
-        // 熔断：撤销该用户所有 Session
+        // 熔断：撤销该用户所有 Session (含存储层)
         state.system_store.revoke_all_user_sessions(&claims.sub).await.ok();
         state.session_cache.retain(|_, v| v.user_id != claims.sub);
         
@@ -133,13 +157,14 @@ pub async fn refresh(
         return Err(ApiError::Unauthorized("Session revoked or expired".into()));
     }
 
-    // 3. 令牌轮转 (Rotation)
+    // 3. 令牌轮转 (Rotation / JTI Rotation)
     let new_jti = uuid::Uuid::new_v4().to_string();
     session.current_token_id = new_jti.clone();
     
     // 同步更新 DB & RAM
     state.system_store.save_session(&session).await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+    
     state.session_cache.insert(session.id.clone(), session.clone());
 
     // 获取用户实体以生成 AT
@@ -255,4 +280,13 @@ fn generate_refresh_token(user: &okane_core::store::port::User, sid: &str, jti: 
         &EncodingKey::from_secret(secret.as_ref()),
     )
     .map_err(|e| ApiError::Internal(format!("JWT refresh sign failed: {}", e)))
+}
+
+/// 生成确定性的 Session ID
+/// 基于 (user_id + client_id) 的 SHA256 哈希，确保存储幂等性，无需读取 DB 即可实现覆写。
+fn generate_deterministic_sid(user_id: &str, client_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(user_id.as_bytes());
+    hasher.update(client_id.as_bytes());
+    hex::encode(hasher.finalize())
 }

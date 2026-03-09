@@ -14,6 +14,7 @@ async fn test_refresh_token_rotation_and_reuse_detection() -> anyhow::Result<()>
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
         username: "admin".to_string(),
         password: "test_admin_pwd".to_string(),
+        client_id: "sec_test_client".to_string(),
     }, StatusCode::OK);
     
     let login_data: ApiResponse<LoginResponse> = res.json().await?;
@@ -69,6 +70,7 @@ async fn test_password_change_revokes_all_sessions() -> anyhow::Result<()> {
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
         username: "admin".to_string(),
         password: "test_admin_pwd".to_string(),
+        client_id: "sec_test_client".to_string(),
     }, StatusCode::OK);
     let tokens = res.json::<ApiResponse<LoginResponse>>().await?.data.unwrap();
     let at1 = tokens.access_token;
@@ -91,7 +93,61 @@ async fn test_password_change_revokes_all_sessions() -> anyhow::Result<()> {
     assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
         username: "admin".to_string(),
         password: "new_secret_pwd".to_string(),
+        client_id: "sec_test_client".to_string(),
     }, StatusCode::OK);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_session_reuse_with_client_id() -> anyhow::Result<()> {
+    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let client = reqwest::Client::new();
+    let client_id = "test_client_1".to_string();
+
+    // 1. 第一次登录 (带 client_id)
+    let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
+        username: "admin".to_string(),
+        password: "test_admin_pwd".to_string(),
+        client_id: client_id.clone(),
+    }, StatusCode::OK);
+    
+    let login_data1: ApiResponse<LoginResponse> = res.json().await?;
+    let at1 = login_data1.data.as_ref().ok_or_else(|| anyhow::anyhow!("Missing data 1"))?.access_token.clone();
+    
+    // 从 AT 中提取 sid
+    let claims1 = okane_api::middleware::auth::verify_jwt(&at1, "YOUR_SUPER_SECRET_KEY")?;
+    let sid1 = claims1.sid;
+
+    // 2. 第二次登录 (带相同 client_id)
+    let login_req = LoginRequest {
+        username: "admin".to_string(),
+        password: "test_admin_pwd".to_string(),
+        client_id,
+    };
+    let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &login_req, StatusCode::OK);
+    
+    let login_data2: ApiResponse<LoginResponse> = res.json().await?;
+    let at2 = login_data2.data.as_ref().ok_or_else(|| anyhow::anyhow!("Missing data 2"))?.access_token.clone();
+    
+    let claims2 = okane_api::middleware::auth::verify_jwt(&at2, "YOUR_SUPER_SECRET_KEY")?;
+    let sid2 = claims2.sid;
+
+    assert_eq!(sid1, sid2, "Session ID must be reused for the same client_id");
+
+    // 3. 第三次登录 (带不同 client_id)
+    let client_id_2 = "test_client_2".to_string();
+    let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
+        username: "admin".to_string(),
+        password: "test_admin_pwd".to_string(),
+        client_id: client_id_2,
+    }, StatusCode::OK);
+    
+    let login_data3: ApiResponse<LoginResponse> = res.json().await?;
+    let at3 = &login_data3.data.as_ref().ok_or_else(|| anyhow::anyhow!("Missing data 3"))?.access_token;
+    let sid3 = okane_api::middleware::auth::verify_jwt(at3, "YOUR_SUPER_SECRET_KEY")?.sid;
+
+    assert!(sid1 != sid3, "New session must be created for a different client_id");
 
     Ok(())
 }
