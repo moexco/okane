@@ -29,11 +29,8 @@ async fn test_yahoo_real_fetch() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     assert!(!candles.is_empty(), "Candles list should not be empty");
-
-    println!("Successfully fetched {} candles for AAPL", candles.len());
-    for candle in candles.iter() {
-        println!("{:?}: Close = {}", candle.time, candle.close);
-    }
+    assert!(candles.iter().all(|c| c.close > rust_decimal::Decimal::ZERO), "All candles should have positive close price");
+    
     Ok(())
 }
 
@@ -53,18 +50,12 @@ async fn test_yahoo_stream_subscribe() -> Result<(), Box<dyn std::error::Error>>
         exchange: None,
     };
 
-    println!("正在订阅 {} 的流式数据...", stock.symbol);
     let mut stream = provider.subscribe_candles(&stock, TimeFrame::Day1).await?;
 
     // 初始订阅后，内部的第一个 tick 会立即执行一次获取
-    println!("等待第一条推送数据...");
     let first_item = timeout(Duration::from_secs(30), stream.next()).await?;
     let candle = first_item.ok_or("流已关闭且未收到数据")?;
 
-    println!(
-        "收到流式数据 -> 时间: {:?}, 收盘价: {}",
-        candle.time, candle.close
-    );
     assert!(candle.close > rust_decimal::Decimal::ZERO);
     Ok(())
 }
@@ -82,16 +73,10 @@ async fn test_yahoo_search_symbols() -> Result<(), Box<dyn std::error::Error>> {
     let provider = YahooProvider::new()?;
     let query = "Apple";
 
-    println!("正在搜索关键词: {}...", query);
     let symbols = provider.search_symbols(query).await?;
 
     assert!(!symbols.is_empty(), "搜索结果不应为空");
     
-    println!("找到 {} 个匹配项:", symbols.len());
-    for s in &symbols {
-        println!("- {} ({}): {} {}", s.symbol, s.exchange, s.name, s.currency);
-    }
-
     // 检查是否包含 AAPL
     let has_aapl = symbols.iter().any(|s| s.symbol == "AAPL");
     assert!(has_aapl, "搜索结果应包含 AAPL");

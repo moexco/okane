@@ -59,10 +59,7 @@ async fn test_stock_current_price() -> anyhow::Result<()> {
     let success = wait_for_condition(Duration::from_secs(1), Duration::from_millis(10), || async {
         stock.current_price()
             .map(|p| p == Some(dec!(155.5)))
-            .unwrap_or_else(|e| {
-                tracing::error!("Test error during current_price poll: {}", e);
-                false
-            })
+            .unwrap_or(false)
     }).await;
     assert!(success, "Should update price within 1s");
     Ok(())
@@ -87,10 +84,7 @@ async fn test_stock_latest_candle() -> anyhow::Result<()> {
     let success = wait_for_condition(Duration::from_secs(1), Duration::from_millis(10), || async {
         stock.latest_candle(TimeFrame::Minute1)
             .map(|c| c.is_some())
-            .unwrap_or_else(|e| {
-                tracing::error!("Test error during latest_candle poll: {}", e);
-                false
-            })
+            .unwrap_or(false)
     }).await;
     assert!(success, "Should receive latest candle within 1s");
     assert_eq!(stock.latest_candle(TimeFrame::Minute1).map_err(|e| anyhow::anyhow!(e))?.ok_or_else(|| anyhow::anyhow!("Candle null"))?.close, dec!(105.0));
@@ -131,10 +125,7 @@ async fn test_stock_last_closed_candle() -> anyhow::Result<()> {
     let success = wait_for_condition(Duration::from_secs(1), Duration::from_millis(10), || async {
         stock.last_closed_candle(TimeFrame::Minute1)
             .map(|c| c.is_some())
-            .unwrap_or_else(|e| {
-                tracing::error!("Test error during last_closed_candle poll: {}", e);
-                false
-            })
+            .unwrap_or(false)
     }).await;
     assert!(success, "Should receive closed candle within 1s");
     assert_eq!(stock.last_closed_candle(TimeFrame::Minute1).map_err(|e| anyhow::anyhow!(e))?.ok_or_else(|| anyhow::anyhow!("Closed candle null"))?.close, dec!(108.0));

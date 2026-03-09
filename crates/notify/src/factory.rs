@@ -67,3 +67,139 @@ impl NotifierFactory for DefaultNotifierFactory {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use okane_core::config::{TelegramConfig, EmailConfig, UserNotifyConfig};
+    use okane_core::store::error::StoreError;
+    use okane_core::store::port::{SystemStore, User, UserSession, Position, StockMetadata};
+
+    struct MockSystemStore {
+        config: Option<UserNotifyConfig>,
+    }
+
+    #[async_trait]
+    impl SystemStore for MockSystemStore {
+        async fn get_user_notify_config(&self, _user_id: &str) -> Result<Option<UserNotifyConfig>, StoreError> {
+            Ok(self.config.clone())
+        }
+        
+        // --- Unimplemented methods for mock ---
+        async fn get_user(&self, _: &str) -> Result<Option<User>, StoreError> { todo!() }
+        async fn get_account_owner(&self, _: &str) -> Result<Option<String>, StoreError> { todo!() }
+        async fn bind_account(&self, _: &str, _: &str) -> Result<(), StoreError> { todo!() }
+        async fn get_user_accounts(&self, _: &str) -> Result<Vec<String>, StoreError> { todo!() }
+        async fn save_user(&self, _: &User) -> Result<(), StoreError> { todo!() }
+        async fn get_watchlist(&self, _: &str) -> Result<Vec<String>, StoreError> { todo!() }
+        async fn add_to_watchlist(&self, _: &str, _: &str) -> Result<(), StoreError> { todo!() }
+        async fn remove_from_watchlist(&self, _: &str, _: &str) -> Result<(), StoreError> { todo!() }
+        async fn get_positions(&self, _: &str) -> Result<Vec<Position>, StoreError> { todo!() }
+        async fn update_position(&self, _: &str, _: &Position) -> Result<(), StoreError> { todo!() }
+        async fn search_stocks(&self, _: &str) -> Result<Vec<StockMetadata>, StoreError> { todo!() }
+        async fn save_stock_metadata(&self, _: &StockMetadata) -> Result<(), StoreError> { todo!() }
+        async fn get_setting(&self, _: &str) -> Result<Option<String>, StoreError> { todo!() }
+        async fn set_setting(&self, _: &str, _: &str) -> Result<(), StoreError> { todo!() }
+        async fn save_user_notify_config(&self, _: &str, _: &UserNotifyConfig) -> Result<(), StoreError> { todo!() }
+        async fn save_session(&self, _: &UserSession) -> Result<(), StoreError> { todo!() }
+        async fn get_session(&self, _: &str) -> Result<Option<UserSession>, StoreError> { todo!() }
+        async fn get_session_by_client(&self, _: &str, _: &str) -> Result<Option<UserSession>, StoreError> { todo!() }
+        async fn revoke_session(&self, _: &str) -> Result<(), StoreError> { todo!() }
+        async fn revoke_all_user_sessions(&self, _: &str) -> Result<(), StoreError> { todo!() }
+        async fn delete_expired_sessions(&self) -> Result<(), StoreError> { todo!() }
+        async fn list_active_sessions(&self) -> Result<Vec<UserSession>, StoreError> { todo!() }
+    }
+
+    #[tokio::test]
+    async fn test_create_telegram_notifier() -> anyhow::Result<()> {
+        let config = UserNotifyConfig {
+            channel: "telegram".to_string(),
+            telegram: TelegramConfig {
+                bot_token: "123:abc".to_string(),
+                chat_id: "987".to_string(),
+            },
+            email: EmailConfig::default(),
+        };
+        let store = Arc::new(MockSystemStore { config: Some(config) });
+        let factory = DefaultNotifierFactory::new(store);
+
+        let notifier = factory.create_for_user("user1").await?;
+        assert!(notifier.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_email_notifier() -> anyhow::Result<()> {
+        let config = UserNotifyConfig {
+            channel: "email".to_string(),
+            telegram: TelegramConfig::default(),
+            email: EmailConfig {
+                smtp_host: "smtp.example.com".to_string(),
+                smtp_user: "user@example.com".to_string(),
+                smtp_pass: "pass".to_string(),
+                from: "user@example.com".to_string(),
+                to: "recipient@example.com".to_string(),
+            },
+        };
+        let store = Arc::new(MockSystemStore { config: Some(config) });
+        let factory = DefaultNotifierFactory::new(store);
+
+        let notifier = factory.create_for_user("user1").await?;
+        assert!(notifier.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_none_notifier() -> anyhow::Result<()> {
+        let config = UserNotifyConfig::default();
+        let store = Arc::new(MockSystemStore { config: Some(config) });
+        let factory = DefaultNotifierFactory::new(store);
+
+        let notifier = factory.create_for_user("user1").await?;
+        assert!(notifier.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_unknown_channel() -> anyhow::Result<()> {
+        let config = UserNotifyConfig {
+            channel: "whatsapp".to_string(),
+            ..UserNotifyConfig::default()
+        };
+        let store = Arc::new(MockSystemStore { config: Some(config) });
+        let factory = DefaultNotifierFactory::new(store);
+
+        let result = factory.create_for_user("user1").await;
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_telegram_missing_config() -> anyhow::Result<()> {
+        let config = UserNotifyConfig {
+            channel: "telegram".to_string(),
+            telegram: TelegramConfig {
+                bot_token: "".to_string(), // Missing token
+                chat_id: "987".to_string(),
+            },
+            email: EmailConfig::default(),
+        };
+        let store = Arc::new(MockSystemStore { config: Some(config) });
+        let factory = DefaultNotifierFactory::new(store);
+
+        let result = factory.create_for_user("user1").await;
+        assert!(result.is_err());
+        assert!(format!("{:?}", result.err()).contains("Telegram bot_token and chat_id are required"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_for_user_not_found() -> anyhow::Result<()> {
+        let store = Arc::new(MockSystemStore { config: None });
+        let factory = DefaultNotifierFactory::new(store);
+
+        let notifier = factory.create_for_user("unknown_user").await?;
+        assert!(notifier.is_none());
+        Ok(())
+    }
+}

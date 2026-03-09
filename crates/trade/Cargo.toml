@@ -10,7 +10,7 @@ workspace = true
 async-trait = "0.1.89"
 chrono = "0.4.44"
 dashmap = "6.1.0"
-okane-core = { version = "0.1.0", path = "../core" }
+okane-core = { version = "0.1.0", path = "../core", features = ["test-utils"] }
 rust_decimal = "1.40.0"
 tokio = { version = "1.49.0", features = ["sync"] }
 tracing = "0.1.44"

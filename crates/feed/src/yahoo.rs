@@ -182,61 +182,7 @@ impl MarketDataProvider for YahooProvider {
             .await
             .map_err(|e| MarketError::Parse(e.to_string()))?;
 
-        if let Some(err) = json.chart.error {
-            return Err(MarketError::Unknown(err.description));
-        }
-
-        let result = json
-            .chart
-            .result
-            .ok_or(MarketError::NotFound)?
-            .pop()
-            .ok_or(MarketError::NotFound)?;
-
-        let mut candles = Vec::new();
-        let quote = result
-            .indicators
-            .quote
-            .first()
-            .ok_or(MarketError::Parse("No quote data".into()))?;
-
-        let adj_close_list = result
-            .indicators
-            .adjclose
-            .as_ref()
-            .and_then(|v| v.first())
-            .map(|v| &v.adjclose);
-
-        for (i, &ts) in result.timestamp.iter().enumerate() {
-            if let (Some(o), Some(h), Some(l), Some(c), Some(v)) = (
-                quote.open.get(i).and_then(|x| *x),
-                quote.high.get(i).and_then(|x| *x),
-                quote.low.get(i).and_then(|x| *x),
-                quote.close.get(i).and_then(|x| *x),
-                quote.volume.get(i).and_then(|x| *x),
-            ) {
-                let adj_c = adj_close_list.and_then(|list| list.get(i)).and_then(|x| *x);
-
-                let open = Decimal::from_f64_retain(o).ok_or_else(|| MarketError::Parse(format!("Invalid open price: {}", o)))?;
-                let high = Decimal::from_f64_retain(h).ok_or_else(|| MarketError::Parse(format!("Invalid high price: {}", h)))?;
-                let low = Decimal::from_f64_retain(l).ok_or_else(|| MarketError::Parse(format!("Invalid low price: {}", l)))?;
-                let close = Decimal::from_f64_retain(c).ok_or_else(|| MarketError::Parse(format!("Invalid close price: {}", c)))?;
-                let volume = Decimal::from_f64_retain(v).ok_or_else(|| MarketError::Parse(format!("Invalid volume: {}", v)))?;
-
-                candles.push(Candle {
-                    time: Utc.timestamp_opt(ts, 0).single().ok_or_else(|| MarketError::Parse("Invalid timestamp".into()))?,
-                    open,
-                    high,
-                    low,
-                    close,
-                    adj_close: adj_c.and_then(Decimal::from_f64_retain),
-                    volume,
-                    is_final: true, // 历史数据默认为最终态
-                });
-            }
-        }
-
-        Ok(candles)
+        Self::parse_yahoo_response(json)
     }
 
     /// # Summary
@@ -388,3 +334,113 @@ impl MarketDataProvider for YahooProvider {
         Ok(results)
     }
 }
+
+impl YahooProvider {
+    /// # Summary
+    /// 将 Yahoo API 原始响应解析为领域模型 Candle 列表。
+    fn parse_yahoo_response(json: YahooResponse) -> Result<Vec<Candle>, MarketError> {
+        if let Some(err) = json.chart.error {
+            return Err(MarketError::Unknown(err.description));
+        }
+
+        let result = json
+            .chart
+            .result
+            .ok_or(MarketError::NotFound)?
+            .pop()
+            .ok_or(MarketError::NotFound)?;
+
+        let mut candles = Vec::new();
+        let quote = result
+            .indicators
+            .quote
+            .first()
+            .ok_or(MarketError::Parse("No quote data".into()))?;
+
+        let adj_close_list = result
+            .indicators
+            .adjclose
+            .as_ref()
+            .and_then(|v| v.first())
+            .map(|v| &v.adjclose);
+
+        for (i, &ts) in result.timestamp.iter().enumerate() {
+            if let (Some(o), Some(h), Some(l), Some(c), Some(v)) = (
+                quote.open.get(i).and_then(|x| *x),
+                quote.high.get(i).and_then(|x| *x),
+                quote.low.get(i).and_then(|x| *x),
+                quote.close.get(i).and_then(|x| *x),
+                quote.volume.get(i).and_then(|x| *x),
+            ) {
+                let adj_c = adj_close_list.and_then(|list| list.get(i)).and_then(|x| *x);
+
+                let open = Decimal::from_f64_retain(o).ok_or_else(|| MarketError::Parse(format!("Invalid open price: {}", o)))?;
+                let high = Decimal::from_f64_retain(h).ok_or_else(|| MarketError::Parse(format!("Invalid high price: {}", h)))?;
+                let low = Decimal::from_f64_retain(l).ok_or_else(|| MarketError::Parse(format!("Invalid low price: {}", l)))?;
+                let close = Decimal::from_f64_retain(c).ok_or_else(|| MarketError::Parse(format!("Invalid close price: {}", c)))?;
+                let volume = Decimal::from_f64_retain(v).ok_or_else(|| MarketError::Parse(format!("Invalid volume: {}", v)))?;
+
+                candles.push(Candle {
+                    time: Utc.timestamp_opt(ts, 0).single().ok_or_else(|| MarketError::Parse("Invalid timestamp".into()))?,
+                    open,
+                    high,
+                    low,
+                    close,
+                    adj_close: adj_c.and_then(Decimal::from_f64_retain),
+                    volume,
+                    is_final: true, // 历史数据默认为最终态
+                });
+            }
+        }
+
+        Ok(candles)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal_macros::dec;
+    use chrono::{TimeZone, Utc};
+
+    #[tokio::test]
+    async fn test_parse_yahoo_response_success() -> anyhow::Result<()> {
+        let json_str = r#"{"chart":{"result":[{"timestamp":[1625097600],"indicators":{"quote":[{"open":[150.0],"high":[155.0],"low":[149.0],"close":[152.0],"volume":[1000000.0]}],"adjclose":[{"adjclose":[151.0]}]}}]}}"#;
+        let json: YahooResponse = serde_json::from_str(json_str)?;
+
+        let candles = YahooProvider::parse_yahoo_response(json)?;
+        assert_eq!(candles.len(), 1);
+        assert_eq!(candles[0].open, dec!(150.0));
+        assert_eq!(candles[0].high, dec!(155.0));
+        assert_eq!(candles[0].low, dec!(149.0));
+        assert_eq!(candles[0].close, dec!(152.0));
+        assert_eq!(candles[0].adj_close, Some(dec!(151.0)));
+        assert_eq!(candles[0].volume, dec!(1000000.0));
+        let expected_time = Utc.timestamp_opt(1625097600, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?;
+        assert_eq!(candles[0].time, expected_time);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parse_yahoo_response_error() -> anyhow::Result<()> {
+        let json_str = r#"{"chart":{"error":{"code":"Not Found","description":"Symbol not found"}}}"#;
+        let json: YahooResponse = serde_json::from_str(json_str)?;
+
+        let res = YahooProvider::parse_yahoo_response(json);
+        match res {
+            Err(MarketError::Unknown(msg)) => assert_eq!(msg, "Symbol not found"),
+            _ => return Err(anyhow::anyhow!("Expected Unknown error")),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parse_yahoo_response_missing_data() -> anyhow::Result<()> {
+        let json_str = r#"{"chart":{"result":[{"timestamp":[1625097600],"indicators":{"quote":[{"open":[null],"high":[155.0],"low":[149.0],"close":[152.0],"volume":[1000000.0]}]}}]}}"#;
+        let json: YahooResponse = serde_json::from_str(json_str)?;
+        let candles = YahooProvider::parse_yahoo_response(json)?;
+        assert_eq!(candles.len(), 0);
+        Ok(())
+    }
+}
+

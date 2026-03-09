@@ -130,3 +130,163 @@ impl IndicatorService for MarketIndicatorService {
         Ok(rsi)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use okane_core::common::Stock as StockIdentity;
+    use okane_core::market::entity::Candle;
+    use okane_core::market::port::Stock;
+    use okane_core::market::port::StockStatus;
+    use okane_core::market::port::CandleStream;
+    use rust_decimal_macros::dec;
+
+    struct MockStock {
+        identity: StockIdentity,
+        history: Vec<Candle>,
+    }
+
+    #[async_trait]
+    impl Stock for MockStock {
+        fn identity(&self) -> &StockIdentity { &self.identity }
+        fn current_price(&self) -> Result<Option<Decimal>, MarketError> { Ok(None) }
+        fn latest_candle(&self, _tf: TimeFrame) -> Result<Option<Candle>, MarketError> { Ok(None) }
+        fn last_closed_candle(&self, _tf: TimeFrame) -> Result<Option<Candle>, MarketError> { Ok(None) }
+        fn subscribe(&self, _tf: TimeFrame) -> Result<CandleStream, MarketError> { Err(MarketError::Parse("Not implemented".into())) }
+        async fn fetch_history(&self, _tf: TimeFrame, _start: chrono::DateTime<Utc>, _end: chrono::DateTime<Utc>) -> Result<Vec<Candle>, MarketError> {
+            Ok(self.history.clone())
+        }
+        fn status(&self) -> StockStatus { StockStatus::Online }
+    }
+
+    struct MockMarket {
+        stock: Arc<MockStock>,
+    }
+
+    #[async_trait]
+    impl Market for MockMarket {
+        async fn get_stock(&self, _symbol: &str) -> Result<Arc<dyn Stock>, MarketError> {
+            Ok(self.stock.clone())
+        }
+        async fn search_symbols(&self, _query: &str) -> Result<Vec<okane_core::store::port::StockMetadata>, MarketError> {
+            Ok(vec![])
+        }
+    }
+
+    fn create_candles(prices: Vec<Decimal>) -> Vec<Candle> {
+        prices.into_iter().map(|p| Candle {
+            time: Utc::now(),
+            open: p,
+            high: p,
+            low: p,
+            close: p,
+            adj_close: None,
+            volume: dec!(1000),
+            is_final: true,
+        }).collect()
+    }
+
+    #[tokio::test]
+    async fn test_sma() -> anyhow::Result<()> {
+        let prices = vec![dec!(10), dec!(20), dec!(30), dec!(40)];
+        let stock = Arc::new(MockStock {
+            identity: StockIdentity { symbol: "AAPL".into(), exchange: None },
+            history: create_candles(prices),
+        });
+        let market = Arc::new(MockMarket { stock });
+        let service = MarketIndicatorService::new(market);
+
+        // period=3, prices=[10, 20, 30, 40]
+        // get_closing_prices will return all 4 candles (since 3*3=9 > 4)
+        // SMA uses the last 3: [20, 30, 40] -> (20+30+40)/3 = 30
+        let val = service.sma("AAPL", TimeFrame::Minute1, 3).await?;
+        assert_eq!(val, dec!(30));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ema() -> anyhow::Result<()> {
+        // Multiplier = 2 / (period + 1)
+        // For period 3, multiplier = 2 / 4 = 0.5
+        // Prices: [10, 20, 30]
+        // EMA0 = 10
+        // EMA1 = (20 - 10) * 0.5 + 10 = 15
+        // EMA2 = (30 - 15) * 0.5 + 15 = 22.5
+        let prices = vec![dec!(10), dec!(20), dec!(30)];
+        let stock = Arc::new(MockStock {
+            identity: StockIdentity { symbol: "AAPL".into(), exchange: None },
+            history: create_candles(prices),
+        });
+        let market = Arc::new(MockMarket { stock });
+        let service = MarketIndicatorService::new(market);
+
+        let val = service.ema("AAPL", TimeFrame::Minute1, 3).await?;
+        assert_eq!(val, dec!(22.5));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_rsi() -> anyhow::Result<()> {
+        // Simple case: all up
+        let prices = vec![dec!(10), dec!(11), dec!(12), dec!(13), dec!(14)];
+        let stock = Arc::new(MockStock {
+            identity: StockIdentity { symbol: "AAPL".into(), exchange: None },
+            history: create_candles(prices),
+        });
+        let market = Arc::new(MockMarket { stock });
+        let service = MarketIndicatorService::new(market);
+
+        let val = service.rsi("AAPL", TimeFrame::Minute1, 2).await?;
+        // period=2. 
+        // changes: +1, +1, +1, +1
+        // gains: [1, 1, 1, 1], losses: [0, 0, 0, 0]
+        // avg_gain: (1+1)/2 = 1.0
+        // avg_loss: (0+0)/2 = 0.0
+        // If avg_loss is 0, RSI is 100
+        assert_eq!(val, dec!(100));
+
+        // Case with a drop
+        let prices = vec![dec!(10), dec!(12), dec!(10), dec!(12), dec!(10)];
+        let stock = Arc::new(MockStock {
+            identity: StockIdentity { symbol: "AAPL".into(), exchange: None },
+            history: create_candles(prices),
+        });
+        let market = Arc::new(MockMarket { stock });
+        let service = MarketIndicatorService::new(market);
+
+        let val = service.rsi("AAPL", TimeFrame::Minute1, 2).await?;
+        // changes: +2, -2, +2, -2
+        // gains: [2, 0, 2, 0], losses: [0, 2, 0, 2]
+        // Initial avg (period 2):
+        // avg_gain = (2+0)/2 = 1.0
+        // avg_loss = (0+2)/2 = 1.0
+        // Smoothing (index 3 and 4):
+        // i=2: avg_gain = (1.0*1 + 2)/2 = 1.5, avg_loss = (1.0*1 + 0)/2 = 0.5
+        // i=3: avg_gain = (1.5*1 + 0)/2 = 0.75, avg_loss = (0.5*1 + 2)/2 = 1.25
+        // RS = 0.75 / 1.25 = 0.6
+        // RSI = 100 - (100 / (1 + 0.6)) = 100 - (100 / 1.6) = 100 - 62.5 = 37.5
+        assert_eq!(val, dec!(37.5));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insufficient_data() -> anyhow::Result<()> {
+        let prices = vec![dec!(10), dec!(20)];
+        let stock = Arc::new(MockStock {
+            identity: StockIdentity { symbol: "AAPL".into(), exchange: None },
+            history: create_candles(prices),
+        });
+        let market = Arc::new(MockMarket { stock });
+        let service = MarketIndicatorService::new(market);
+
+        let res = service.sma("AAPL", TimeFrame::Minute1, 3).await;
+        assert!(res.is_err());
+        if let Err(MarketError::Parse(msg)) = res {
+            assert!(msg.contains("数据不足"));
+        } else {
+            return Err(anyhow::anyhow!("Expected Parse error"));
+        }
+        Ok(())
+    }
+}

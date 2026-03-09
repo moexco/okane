@@ -33,9 +33,9 @@ pub async fn spawn_test_server() -> anyhow::Result<(String, Arc<dyn SystemStore>
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         tracing_subscriber::fmt()
-            .with_env_filter("error")
+            .with_env_filter("off")
             .try_init()
-            .ok(); // 初始化失败仅影响日志输出，不应中断测试流程
+            .ok();
     });
     let tmp_dir = tempfile::tempdir().map_err(|e| anyhow::anyhow!("Failed to create temp dir: {}", e))?;
     let root_path = tmp_dir.path().to_path_buf();

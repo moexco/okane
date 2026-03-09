@@ -110,3 +110,50 @@ impl<T: Clone> RollingBuffer<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rolling_buffer_push_and_vec() {
+        let mut buffer = RollingBuffer::new(3);
+        buffer.push(1);
+        buffer.push(2);
+        assert_eq!(buffer.to_vec(), vec![1, 2]);
+        assert_eq!(buffer.last(), Some(2));
+
+        buffer.push(3);
+        assert_eq!(buffer.to_vec(), vec![1, 2, 3]);
+        assert_eq!(buffer.last(), Some(3));
+
+        buffer.push(4);
+        assert_eq!(buffer.to_vec(), vec![2, 3, 4]);
+        assert_eq!(buffer.last(), Some(4));
+
+        buffer.push(5);
+        assert_eq!(buffer.to_vec(), vec![3, 4, 5]);
+        assert_eq!(buffer.last(), Some(5));
+    }
+
+    #[test]
+    fn test_rolling_buffer_empty() {
+        let buffer: RollingBuffer<i32> = RollingBuffer::new(3);
+        assert!(buffer.to_vec().is_empty());
+        assert_eq!(buffer.last(), None);
+    }
+
+    #[test]
+    fn test_rolling_buffer_cursor_wrap() {
+        let mut buffer = RollingBuffer::new(2);
+        buffer.push(1);
+        buffer.push(2);
+        buffer.push(3); // Overwrites 1
+        assert_eq!(buffer.to_vec(), vec![2, 3]);
+        assert_eq!(buffer.last(), Some(3));
+        
+        buffer.push(4); // Overwrites 2
+        assert_eq!(buffer.to_vec(), vec![3, 4]);
+        assert_eq!(buffer.last(), Some(4));
+    }
+}

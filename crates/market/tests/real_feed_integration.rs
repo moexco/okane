@@ -41,7 +41,6 @@ async fn test_market_with_real_yahoo_feed() -> anyhow::Result<()> {
 
     match first_candle {
         Ok(Some(candle)) => {
-            tracing::info!("Received real candle from Yahoo: {:?}", candle);
             assert!(candle.close > rust_decimal::Decimal::ZERO);
 
             // 6. 验证聚合根的同步快照是否已更新
@@ -52,7 +51,6 @@ async fn test_market_with_real_yahoo_feed() -> anyhow::Result<()> {
         Err(_) => {
             // 如果是在离线环境或 CI 中，这可能会超时
             // 在集成测试中，我们至少期望它能走到这一步而不崩溃
-            tracing::warn!("Warning: Timeout waiting for Yahoo real data. Check internet connection.");
         }
     }
     Ok(())
@@ -90,15 +88,11 @@ async fn test_market_broadcast_with_real_feed() -> anyhow::Result<()> {
             ca.time, cb.time,
             "Both streams should receive the same candle"
         );
-        println!(
-            "Broadcast verified: both streams received candle at {}",
-            ca.time
-        );
         Ok::<(), anyhow::Error>(())
     };
 
-    if let Err(e) = tokio::time::timeout(tokio::time::Duration::from_secs(15), wait_for_data).await {
-        tracing::warn!("Broadcast integration test timed out: {}", e);
+    if tokio::time::timeout(tokio::time::Duration::from_secs(15), wait_for_data).await.is_err() {
+        // Broadcast integration test timed out
     } else {
         // wait_for_data completes and internal Results are handled by ? inside it or by the return value
         // Note: we might want to check the Result inside the timeout too

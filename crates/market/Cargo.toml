@@ -13,7 +13,7 @@ chrono = "0.4.43"
 dashmap = "6.1.0"
 futures = "0.3.31"
 okane-cache = { version = "0.1.0", path = "../cache" }
-okane-core = { version = "0.1.0", path = "../core" }
+okane-core = { version = "0.1.0", path = "../core", features = ["test-utils"] }
 okane-store = { version = "0.1.0", path = "../store" }
 serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.49.0", features = ["sync", "rt", "time", "macros"] }

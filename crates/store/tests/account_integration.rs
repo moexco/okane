@@ -57,8 +57,8 @@ async fn test_sqlite_account_high_concurrency() -> anyhow::Result<()> {
     // Final verification
     let snap = store.snapshot(&acct).await.map_err(|e| anyhow::anyhow!(e))?;
     
-    tracing::info!("Account Snapshot: {:?}", snap);
-    tracing::info!("Finished 50 concurrent transactions in {:?}", elapsed);
+    // Ensure it didn't take an unreasonable amount of time
+    assert!(elapsed.as_millis() < 5000, "50 concurrent txs should be fast");
     
     // Initially 1000. 50 trades of 14$ cost = 700$ spent. Remaining cash must be strictly 300.
     assert_eq!(snap.available_balance, dec!(300.0));

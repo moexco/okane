@@ -50,3 +50,38 @@ impl Default for TradeLog {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use okane_core::trade::entity::{Trade, OrderId, AccountId, OrderDirection};
+    use rust_decimal_macros::dec;
+
+    #[test]
+    fn test_trade_log_basic() -> anyhow::Result<()> {
+        let log = TradeLog::new();
+        assert!(log.is_empty()?);
+        assert_eq!(log.len()?, 0);
+
+        let trade = Trade {
+            order_id: OrderId("o1".into()),
+            account_id: AccountId("a1".into()),
+            symbol: "AAPL".into(),
+            direction: OrderDirection::Buy,
+            price: dec!(150.0),
+            volume: dec!(100),
+            commission: dec!(0.1),
+            timestamp: 123456789,
+        };
+
+        log.record(&trade)?;
+        assert!(!log.is_empty()?);
+        assert_eq!(log.len()?, 1);
+
+        let trades = log.drain()?;
+        assert_eq!(trades.len(), 1);
+        assert_eq!(trades[0].order_id, OrderId("o1".into()));
+        assert!(log.is_empty()?);
+        Ok(())
+    }
+}

@@ -139,7 +139,7 @@ impl Stock for BacktestStock {
 
         Ok(Box::pin(async_stream::stream! {
             let mut current = start;
-            while current < end {
+            while current <= end {
                 let candles = if let Some(ref s) = source {
                     // 批量拉取数据，提高效率
                     let limit = 100u32;
@@ -153,7 +153,7 @@ impl Stock for BacktestStock {
                     }
                 } else if let Some(ref sc) = static_candles {
                     sc.iter()
-                        .filter(|c| c.time >= current && c.time < end)
+                        .filter(|c| c.time >= current && c.time <= end)
                         .take(100)
                         .cloned()
                         .collect::<Vec<_>>()
@@ -277,5 +277,123 @@ impl Market for BacktestMarket {
         _query: &str,
     ) -> Result<Vec<okane_core::store::port::StockMetadata>, MarketError> {
         Ok(vec![])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use okane_core::common::time::FakeClockProvider;
+    use okane_core::trade::port::{BacktestTradePort, TradePort, TradeError};
+    use okane_core::trade::entity::{AccountId, AccountSnapshot, Order, OrderId};
+    use rust_decimal_macros::dec;
+    use chrono::{TimeZone, Utc};
+    use futures::StreamExt;
+
+    struct MockTradePort;
+
+    #[async_trait]
+    impl TradePort for MockTradePort {
+        async fn submit_order(&self, _order: Order) -> Result<OrderId, TradeError> {
+            Ok(OrderId("test".into()))
+        }
+        async fn cancel_order(&self, _order_id: OrderId) -> Result<(), TradeError> {
+            Ok(())
+        }
+        async fn get_account(&self, _account_id: AccountId) -> Result<AccountSnapshot, TradeError> {
+            Ok(AccountSnapshot::default())
+        }
+        async fn get_orders(&self, _account_id: &AccountId) -> Result<Vec<Order>, TradeError> {
+            Ok(vec![])
+        }
+        async fn get_order(&self, _order_id: &OrderId) -> Result<Option<Order>, TradeError> {
+            Ok(None)
+        }
+    }
+
+    #[async_trait]
+    impl BacktestTradePort for MockTradePort {
+        async fn tick(&self, _symbol: &str, _candle: &Candle) -> Result<(), TradeError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_backtest_stock_basic() -> anyhow::Result<()> {
+        let tp = Arc::new(FakeClockProvider::new(Utc.timestamp_opt(1000, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?));
+        let spy_trade = Arc::new(MockTradePort);
+        let candles = vec![
+            Candle { 
+                time: Utc.timestamp_opt(1000, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?, 
+                open: dec!(100), high: dec!(101), low: dec!(99), close: dec!(100), adj_close: None, volume: dec!(1000), is_final: true 
+            },
+            Candle { 
+                time: Utc.timestamp_opt(1060, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?, 
+                open: dec!(100), high: dec!(102), low: dec!(98), close: dec!(101), adj_close: None, volume: dec!(1100), is_final: true 
+            },
+        ];
+        
+        let stock = BacktestStock::new("AAPL".into(), candles, tp.clone(), spy_trade.clone());
+        
+        assert_eq!(stock.identity().symbol, "AAPL");
+        assert_eq!(stock.status(), StockStatus::Online);
+        
+        // Initial state
+        assert_eq!(stock.current_price()?, None);
+        
+        // Tick through subscription
+        let mut stream = stock.subscribe(TimeFrame::Minute1)?;
+        
+        let c1 = stream.next().await.ok_or_else(|| anyhow::anyhow!("Stream ended too early"))?;
+        assert_eq!(c1.time.timestamp(), 1000);
+        assert_eq!(tp.now()?, c1.time);
+        assert_eq!(stock.current_price()?, Some(dec!(100)));
+        
+        let c2 = stream.next().await.ok_or_else(|| anyhow::anyhow!("Stream ended too early"))?;
+        assert_eq!(c2.time.timestamp(), 1060);
+        assert_eq!(tp.now()?, c2.time);
+        assert_eq!(stock.current_price()?, Some(dec!(101)));
+        assert_eq!(stock.last_closed_candle(TimeFrame::Minute1)?.ok_or_else(|| anyhow::anyhow!("Last candle missing"))?.time.timestamp(), 1000);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_backtest_stock_prevent_future_leak() -> anyhow::Result<()> {
+        let tp = Arc::new(FakeClockProvider::new(Utc.timestamp_opt(1000, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?));
+        let spy_trade = Arc::new(MockTradePort);
+        let candles = vec![
+            Candle { 
+                time: Utc.timestamp_opt(1000, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?, 
+                open: dec!(100), high: dec!(101), low: dec!(99), close: dec!(100), adj_close: None, volume: dec!(1000), is_final: true 
+            },
+            Candle { 
+                time: Utc.timestamp_opt(1060, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?, 
+                open: dec!(101), high: dec!(102), low: dec!(100), close: dec!(101), adj_close: None, volume: dec!(1100), is_final: true 
+            },
+            Candle { 
+                time: Utc.timestamp_opt(1120, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?, 
+                open: dec!(101), high: dec!(103), low: dec!(101), close: dec!(102), adj_close: None, volume: dec!(1200), is_final: true 
+            },
+        ];
+        
+        let stock = BacktestStock::new("AAPL".into(), candles, tp.clone(), spy_trade.clone());
+        
+        // Load some data into the buffer by ticking once
+        let mut stream = stock.subscribe(TimeFrame::Minute1)?;
+        let _ = stream.next().await; // Now clock is at 1000
+        
+        // Strategy asks for history up to 1120
+        let history = stock.fetch_history(
+            TimeFrame::Minute1, 
+            Utc.timestamp_opt(1000, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?, 
+            Utc.timestamp_opt(1120, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?
+        ).await?;
+        
+        // Should only see up to 1000, because clock is at 1000
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].time.timestamp(), 1000);
+        
+        Ok(())
     }
 }

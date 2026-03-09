@@ -97,3 +97,117 @@ impl AlgoOrderPort for AlgoOrderService {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use okane_core::test_utils::SpyTradePort;
+    use okane_core::common::time::FakeClockProvider;
+    use rust_decimal_macros::dec;
+
+    #[tokio::test]
+    async fn test_submit_and_get_algo_order() -> anyhow::Result<()> {
+        let trade_port = Arc::new(SpyTradePort::new());
+        let time_provider = Arc::new(FakeClockProvider::new(chrono::Utc::now()));
+        let service = AlgoOrderService::new(trade_port, time_provider);
+
+        let account_id = AccountId("test_acct".into());
+        let order_id = OrderId("algo_01".into());
+        let order = AlgoOrder::new(
+            order_id.clone(),
+            account_id.clone(),
+            "AAPL".into(),
+            AlgoType::Snipe { target_price: dec!(150.0), max_slippage: dec!(0.1) },
+            1000,
+        );
+
+        service.submit_algo_order(order).await?;
+        
+        let retrieved = service.get_algo_order(&order_id).await?
+            .ok_or_else(|| anyhow::anyhow!("AlgoOrder not found"))?;
+        assert_eq!(retrieved.symbol, "AAPL");
+
+        let all = service.get_algo_orders(&account_id).await?;
+        assert_eq!(all.len(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cancel_algo_order() -> anyhow::Result<()> {
+        let trade_port = Arc::new(SpyTradePort::new());
+        let time_provider = Arc::new(FakeClockProvider::new(chrono::Utc::now()));
+        let service = AlgoOrderService::new(trade_port, time_provider);
+
+        let order_id = OrderId("algo_01".into());
+        let order = AlgoOrder::new(
+            order_id.clone(),
+            AccountId("test".into()),
+            "AAPL".into(),
+            AlgoType::Snipe { target_price: dec!(150.0), max_slippage: dec!(0.1) },
+            1000,
+        );
+
+        service.submit_algo_order(order).await?;
+        service.cancel_algo_order(&order_id).await?;
+
+        let retrieved = service.get_algo_order(&order_id).await?
+            .ok_or_else(|| anyhow::anyhow!("AlgoOrder not found"))?;
+        assert_eq!(retrieved.status, AlgoOrderStatus::Canceled);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_snipe_algo_trigger() -> anyhow::Result<()> {
+        let spy_trade = Arc::new(SpyTradePort::new());
+        let time_provider = Arc::new(FakeClockProvider::new(chrono::Utc::now()));
+        
+        let service = AlgoOrderService::new(spy_trade.clone(), time_provider);
+
+        let order_id = OrderId("snipe_01".into());
+        let order = AlgoOrder {
+            id: order_id.clone(),
+            account_id: AccountId("test".into()),
+            symbol: "AAPL".into(),
+            algo: AlgoType::Snipe { target_price: dec!(100.0), max_slippage: dec!(0.1) },
+            status: AlgoOrderStatus::Running,
+            filled_volume: dec!(10), // We'll use this for the child order volume
+            created_at: 1000,
+        };
+
+        service.submit_algo_order(order).await?;
+
+        // 1. Price above target - no trigger
+        let candle_high = Candle {
+            time: chrono::Utc::now(),
+            open: dec!(105), high: dec!(106), low: dec!(104), close: dec!(105),
+            adj_close: None, volume: dec!(100), is_final: true,
+        };
+        service.tick("AAPL", &candle_high).await?;
+        assert_eq!(spy_trade.get_submitted_orders()?.len(), 0);
+        let retrieved = service.get_algo_order(&order_id).await?
+            .ok_or_else(|| anyhow::anyhow!("AlgoOrder not found"))?;
+        assert_eq!(retrieved.status, AlgoOrderStatus::Running);
+
+        // 2. Price hits target - trigger!
+        let candle_hit = Candle {
+            time: chrono::Utc::now(),
+            open: dec!(101), high: dec!(102), low: dec!(99), close: dec!(100),
+            adj_close: None, volume: dec!(100), is_final: true,
+        };
+        service.tick("AAPL", &candle_hit).await?;
+        
+        let submitted = spy_trade.get_submitted_orders()?;
+        assert_eq!(submitted.len(), 1);
+        assert_eq!(submitted[0].symbol, "AAPL");
+        assert_eq!(submitted[0].direction, OrderDirection::Buy);
+        assert_eq!(submitted[0].volume, dec!(10));
+        
+        let retrieved = service.get_algo_order(&order_id).await?
+            .ok_or_else(|| anyhow::anyhow!("AlgoOrder not found"))?;
+        assert_eq!(retrieved.status, AlgoOrderStatus::Completed);
+
+        Ok(())
+    }
+}
