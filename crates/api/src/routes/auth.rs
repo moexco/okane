@@ -182,6 +182,36 @@ pub async fn refresh(
     })))
 }
 
+/// 用户登出
+///
+/// 撤销当前会话，使关联的 Access Token 和 Refresh Token 失效。
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/logout",
+    tag = "鉴权 (Auth)",
+    security(("bearer_jwt" = [])),
+    responses(
+        (status = 200, description = "登出成功", body = ApiResponse<String>),
+        (status = 401, description = "未登录或会话已过期")
+    )
+)]
+pub async fn logout(
+    State(state): State<AppState>,
+    crate::middleware::auth::CurrentUser(user_ctx): crate::middleware::auth::CurrentUser,
+    axum::Extension(claims): axum::Extension<Claims>,
+) -> Result<Json<ApiResponse<String>>, ApiError> {
+    // 1. 在持久化存储中撤销 Session
+    state.system_store.revoke_session(&claims.sid).await
+        .map_err(|e| ApiError::Internal(format!("failed to revoke session: {}", e)))?;
+
+    // 2. 从内存缓存中即时移除
+    state.session_cache.remove(&claims.sid);
+
+    tracing::info!("user logout success: {}, sid: {}", user_ctx.id, claims.sid);
+
+    Ok(Json(ApiResponse::ok("Logged out successfully".into())))
+}
+
 /// 修改密码
 ///
 /// 验证旧密码并设立新密码。此操作会撤销该用户所有活跃 Session 以确保安全。

@@ -129,6 +129,7 @@ pub fn build_app(state: AppState) -> Router {
     // 2. 需要 JWT 鉴权，但允许在强制改密码状态下访问的路由
     let auth_only_router = OpenApiRouter::new()
         .routes(routes!(auth::change_password))
+        .routes(routes!(auth::logout))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::middleware::auth::auth_middleware,
