@@ -127,13 +127,13 @@ async fn test_high_concurrency_order_execution() -> anyhow::Result<()> {
     // 全量核对状态
     let snapshot: AccountSnapshot = trade_service.get_account(acct_id).await.map_err(|e| anyhow::anyhow!(e))?;
     
-    assert_eq!(snapshot.frozen_balance, dec!(0.0), "并发后所有冻结资金应被清盘平出");
-    assert_eq!(snapshot.available_balance, dec!(924977.5), "资金划转必须满足读写一致无丢失");
+    assert_eq!(snapshot.frozen_balance, dec!(0.0), "all frozen balance must be released after heavy concurrency");
+    assert_eq!(snapshot.available_balance, dec!(924977.5), "balance transfer must be consistent without loss");
     
     assert_eq!(snapshot.positions.len(), 1);
     let pos = snapshot.positions.first().ok_or_else(|| anyhow::anyhow!("AAPL position should exist"))?;
     assert_eq!(pos.symbol, "AAPL");
-    assert_eq!(pos.volume, dec!(500.0), "苹果股票净多头持仓应为 500");
+    assert_eq!(pos.volume, dec!(500.0), "aapl net long position must be 500");
     Ok(())
 }
 
@@ -162,11 +162,11 @@ async fn test_insufficient_funds_rejection() -> anyhow::Result<()> {
     );
 
     let res = trade_service.submit_order(order).await;
-    assert!(res.is_err(), "金额不足订单未被拒绝");
+    assert!(res.is_err(), "insufficient funds order must be rejected");
 
     match res.err().ok_or_else(|| anyhow::anyhow!("Expected error"))? {
         okane_core::trade::port::TradeError::InsufficientFunds { .. } => {}
-        _ => return Err(anyhow::anyhow!("错误类型不符")),
+        _ => return Err(anyhow::anyhow!("unexpected error type")),
     }
     
     // 断言资金安全

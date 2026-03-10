@@ -37,8 +37,10 @@ pub struct UpdateSettingsRequest {
 )]
 pub async fn create_user(
     State(state): State<AppState>,
-    Json(req): Json<CreateUserRequest>,
+    Json(req_json): Json<serde_json::Value>,
 ) -> Result<Json<ApiResponse<UserResponse>>, ApiError> {
+    let req: CreateUserRequest = serde_json::from_value(req_json.clone())
+        .map_err(|e| ApiError::BadRequest(format!("invalid request: {}", e)))?;
     // 1. 判断 ID 是否存在
     tracing::info!("Received create_user request for ID: {}", req.id);
     let existing = state
@@ -62,12 +64,16 @@ pub async fn create_user(
         .map_err(|_| ApiError::Internal("Failed to hash new user password".into()))?;
 
     // 3. 构造并保存
+    let force_change = req_json.get("force_password_change")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
     let new_user = User {
         id: req.id,
         name: req.name,
         password_hash: hashed_pwd,
         role,
-        force_password_change: true, // 新用户默认被标记为强制改密码
+        force_password_change: force_change,
         created_at: Utc::now(),
     };
 

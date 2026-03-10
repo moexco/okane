@@ -144,7 +144,7 @@ pub async fn refresh(
     // 2. 重放攻击探测 (Reuse Detection)
     // 提交的 jti 必须与当前 Session 记录的唯一合法 jti 一致
     if claims.jti != session.current_token_id {
-        tracing::error!("🚨 REUSE DETECTION TRIGGERED! User: {}, Session: {}, Token: {}", claims.sub, claims.sid, claims.jti);
+        tracing::error!("reuse detection triggered! user: {}, session: {}, token: {}", claims.sub, claims.sid, claims.jti);
         
         // 熔断：撤销该用户所有 Session (含存储层)
         state.system_store.revoke_all_user_sessions(&claims.sub).await.ok();

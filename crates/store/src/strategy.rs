@@ -165,13 +165,17 @@ impl StrategyStore for SqliteStrategyStore {
 
     async fn update_status(&self, user_id: &str, id: &str, status: StrategyStatus) -> Result<(), StoreError> {
         let pool = self.get_or_init_pool(user_id).await?;
-        sqlx::query(SQL_UPDATE_STATUS)
+        let res = sqlx::query(SQL_UPDATE_STATUS)
             .bind(status.to_string())
             .bind(Utc::now())
             .bind(id)
             .execute(&pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
+        
+        if res.rows_affected() == 0 {
+            return Err(StoreError::NotFound);
+        }
         Ok(())
     }
 

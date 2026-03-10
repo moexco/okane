@@ -242,7 +242,7 @@ pub struct StartStrategyRequest {
 }
 
 /// 保存策略源码请求体 DTO
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SaveStrategySourceRequest {
     /// 策略源码 (base64 编码)
     #[schema(example = "Y29uc29sZS5sb2coJ2hlbGxvJyk7")]

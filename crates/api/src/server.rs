@@ -211,8 +211,8 @@ pub fn build_app(state: AppState) -> Router {
 pub async fn start_server(state: AppState, bind_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
     let app = build_app(state);
 
-    tracing::info!("🚀 Okane API Server listening on {}", bind_addr);
-    tracing::info!("📖 Swagger UI: http://{}/swagger-ui/", bind_addr);
+    tracing::info!("okane api server listening on {}", bind_addr);
+    tracing::info!("swagger ui: http://{}/swagger-ui/", bind_addr);
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     axum::serve(listener, app).await?;

@@ -1,5 +1,4 @@
 use okane_api::server::AppState;
-use tracing::error;
 use okane_core::store::port::{SystemStore, MarketStore, User, UserRole};
 use okane_market::manager::MarketImpl;
 use okane_store::market::SqliteMarketStore;
@@ -100,10 +99,7 @@ pub async fn spawn_test_server() -> anyhow::Result<(String, Arc<dyn SystemStore>
     // 轮询等待价格就绪，防止 submit_order 报错 No latest price available
     let mut price_ready = false;
     for _ in 0..20 {
-        if stock.current_price().map(|p| p.is_some()).unwrap_or_else(|e| {
-            tracing::error!("Test error: {}", e);
-            false
-        }) {
+        if stock.current_price().map(|p| p.is_some()).unwrap_or(false) {
             price_ready = true;
             break;
         }
@@ -171,7 +167,7 @@ pub async fn spawn_test_server() -> anyhow::Result<(String, Arc<dyn SystemStore>
 
     tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, router).await {
-            error!("Failed to serve app: {}", e);
+            tracing::error!("Server error: {}", e);
         }
     });
     
@@ -201,7 +197,7 @@ macro_rules! assert_post {
         let current_status = res.status();
         if current_status != $status {
             let text = res.text().await.map_err(|e| anyhow::anyhow!("Failed to get response text: {}", e))?;
-            panic!("POST {} failed. Expected {}, got {}. Body: {}", $url, $status, current_status, text);
+            panic!("post {} failed: expected {}, got {}. body: {}", $url, $status, current_status, text);
         }
         res
     }};
@@ -218,7 +214,7 @@ macro_rules! assert_get {
         let current_status = res.status();
         if current_status != $status {
             let text = res.text().await.map_err(|e| anyhow::anyhow!("Failed to get response text: {}", e))?;
-            panic!("GET {} failed. Expected {}, got {}. Body: {}", $url, $status, current_status, text);
+            panic!("get {} failed: expected {}, got {}. body: {}", $url, $status, current_status, text);
         }
         res
     }};
@@ -235,7 +231,7 @@ macro_rules! assert_put {
         let current_status = res.status();
         if current_status != $status {
             let text = res.text().await.map_err(|e| anyhow::anyhow!("Failed to get response text: {}", e))?;
-            panic!("PUT {} failed. Expected {}, got {}. Body: {}", $url, $status, current_status, text);
+            panic!("put {} failed: expected {}, got {}. body: {}", $url, $status, current_status, text);
         }
         res
     }};
@@ -252,7 +248,7 @@ macro_rules! assert_delete {
         let current_status = res.status();
         if current_status != $status {
             let text = res.text().await.map_err(|e| anyhow::anyhow!("Failed to get response text: {}", e))?;
-            panic!("DELETE {} failed. Expected {}, got {}. Body: {}", $url, $status, current_status, text);
+            panic!("delete {} failed: expected {}, got {}. body: {}", $url, $status, current_status, text);
         }
         res
     }};

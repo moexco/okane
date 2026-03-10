@@ -206,7 +206,7 @@ impl AccountPort for SqliteAccountStore {
         let mut frozen = parse_decimal(&row.1)?;
 
         let actual_unfreeze = if amount > frozen {
-            warn!("账户 {} 解冻异常: 试图解冻 {} 但仅剩 {}", account_id.0, amount, frozen);
+            warn!("account {} unfreeze anomaly: trying to unfreeze {} but only {} available", account_id.0, amount, frozen);
             frozen
         } else {
             amount
