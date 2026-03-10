@@ -216,6 +216,9 @@ pub struct StrategyResponse {
     /// 当前状态 (Pending / Running / Stopped / Failed)
     #[schema(example = "Running")]
     pub status: String,
+    /// 策略源码 (Base64 编码)
+    #[schema(example = "Y29uc29sZS5sb2coJ2hlbGxvJyk7")]
+    pub source_base64: String,
     /// 创建时间 (ISO 8601)
     #[schema(example = "2026-03-01T00:00:00Z")]
     pub created_at: String,
@@ -523,6 +526,7 @@ impl From<okane_core::trade::entity::AccountSnapshot> for AccountSnapshotRespons
 
 impl From<&okane_core::strategy::entity::StrategyInstance> for StrategyResponse {
     fn from(i: &okane_core::strategy::entity::StrategyInstance) -> Self {
+        use base64::Engine;
         Self {
             id: i.id.clone(),
             symbol: i.symbol.clone(),
@@ -530,6 +534,7 @@ impl From<&okane_core::strategy::entity::StrategyInstance> for StrategyResponse 
             timeframe: format!("{}", i.timeframe),
             engine_type: format!("{}", i.engine_type),
             status: format!("{:?}", i.status),
+            source_base64: base64::prelude::BASE64_STANDARD.encode(&i.source),
             created_at: i.created_at.to_rfc3339(),
         }
     }

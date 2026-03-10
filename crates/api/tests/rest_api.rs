@@ -1,5 +1,6 @@
 mod common;
 
+use std::str::FromStr;
 use reqwest::StatusCode;
 use okane_api::types::{
     ApiResponse, LoginRequest, LoginResponse, CreateAccountRequest, AccountSnapshotResponse,
@@ -8,10 +9,11 @@ use okane_api::types::{
 use okane_api::routes::admin::UpdateSettingsRequest;
 use okane_api::routes::watchlist::WatchlistRequest;
 use common::spawn_test_server;
+use anyhow::Context;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_admin_settings_api() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, store, _tmp, _keepalive) = spawn_test_server().await?;
     let client = reqwest::Client::new();
 
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
@@ -27,6 +29,10 @@ async fn test_admin_settings_api() -> anyhow::Result<()> {
         setting_key: "maintenance_mode".to_string(),
         setting_value: "true".to_string(),
     }, StatusCode::OK);
+
+    // 2. 验证更新（直接验证数据库“落盘”，因为目前尚无 GET /admin/settings 接口）
+    let val = store.get_setting("maintenance_mode").await?.context("Setting not in DB")?;
+    assert_eq!(val, "true");
     Ok(())
 }
 
@@ -55,10 +61,13 @@ async fn test_account_management_api() -> anyhow::Result<()> {
     assert!(accounts.iter().any(|a| a == "trader_01"));
     assert!(accounts.iter().any(|a| a == "test_detailed_acc"));
 
-    // 3. 查询单个 (使用 trader_01, 因为它在 AccountManager 中已激活)
-    let res = assert_get!(&client, format!("{}/api/v1/user/account/{}", base_url, "trader_01"), Some(&token), StatusCode::OK);
+    // 3. 查询单个 (修正：应查询新创建的 test_detailed_acc 以验证完整流程)
+    let res = assert_get!(&client, format!("{}/api/v1/user/account/{}", base_url, "test_detailed_acc"), Some(&token), StatusCode::OK);
     let acc = res.json::<ApiResponse<AccountSnapshotResponse>>().await.map_err(|e| anyhow::anyhow!("Parse: {}", e))?.data.ok_or_else(|| anyhow::anyhow!("Data null"))?;
-    assert_eq!(acc.account_id, "trader_01");
+    assert_eq!(acc.account_id, "test_detailed_acc");
+    let avail = rust_decimal::Decimal::from_str(&acc.available_balance).map_err(|e| anyhow::anyhow!("Parse actual: {}", e))?;
+    let expected = rust_decimal::Decimal::from_str("5000.00").map_err(|e| anyhow::anyhow!("Parse expected: {}", e))?;
+    assert_eq!(avail, expected);
     Ok(())
 }
 
@@ -80,10 +89,17 @@ async fn test_market_and_watchlist_api() -> anyhow::Result<()> {
     let _results = res.json::<ApiResponse<Vec<StockMetadataResponse>>>().await.map_err(|e| anyhow::anyhow!("Parse: {}", e))?.data.ok_or_else(|| anyhow::anyhow!("Data null"))?;
     // YahooProvider 默认可能返回模拟数据或空，此处我们验证接口连通性
 
-    // 2. 获取 K 线 (需要 tf, start, end 参数)
-    let start = "2026-03-01T00:00:00Z";
-    let end = "2026-03-05T00:00:00Z";
-    let _res = assert_get!(&client, format!("{}/api/v1/market/candles/AAPL?tf=1m&start={}&end={}", base_url, start, end), Some(&token), StatusCode::OK);
+    // 2. 获取 K 线 (使用当前时间附近的范围以匹配 Mock 数据)
+    let now = chrono::Utc::now();
+    let start = (now - chrono::Duration::hours(2)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let end = (now + chrono::Duration::hours(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let res = assert_get!(&client, format!("{}/api/v1/market/candles/AAPL?tf=1m&start={}&end={}", base_url, start, end), Some(&token), StatusCode::OK);
+    let candles: ApiResponse<Vec<okane_api::types::CandleResponse>> = res.json().await?;
+    let data = candles.data.context("data null")?;
+    // 校验 K 线内容：不应为空（Mock 数据或者 Yahoo 返回）
+    assert!(!data.is_empty(), "Candles should not be empty for AAPL");
+    // 校验第一个 K 线的时间范围
+    assert!(data[0].time.parse::<chrono::DateTime<chrono::Utc>>().is_ok());
 
     // 3. 自选股操作
     assert_post!(&client, format!("{}/api/v1/user/watchlist", base_url), Some(&token), &WatchlistRequest {
@@ -94,7 +110,13 @@ async fn test_market_and_watchlist_api() -> anyhow::Result<()> {
     let list = res.json::<ApiResponse<Vec<String>>>().await.map_err(|e| anyhow::anyhow!("Parse: {}", e))?.data.ok_or_else(|| anyhow::anyhow!("Data null"))?;
     assert!(list.contains(&"AAPL".to_string()));
 
+    // 4. 从自选股删除
     assert_delete!(&client, format!("{}/api/v1/user/watchlist/AAPL", base_url), Some(&token), StatusCode::OK);
+
+    // 验证副作用：确认 AAPL 确实从自选列表中消失 (后置断言)
+    let res = assert_get!(&client, format!("{}/api/v1/user/watchlist", base_url), Some(&token), StatusCode::OK);
+    let list = res.json::<ApiResponse<Vec<String>>>().await.map_err(|e| anyhow::anyhow!("Parse: {}", e))?.data.ok_or_else(|| anyhow::anyhow!("Data null"))?;
+    assert!(!list.contains(&"AAPL".to_string()), "AAPL should be removed from watchlist after DELETE");
     Ok(())
 }
 
@@ -157,9 +179,9 @@ async fn test_manual_trade_api() -> anyhow::Result<()> {
         initial_balance: Some("100000.00".to_string()),
     }, StatusCode::OK);
 
-    // 1. 下单 (使用已在 AccountManager 激活的 trader_01)
+    // 1. 下单 (修正：使用前面步骤中新准备的 trade_acc)
     let order_req = serde_json::json!({
-        "account_id": "trader_01",
+        "account_id": "trade_acc",
         "symbol": "AAPL",
         "direction": "Buy",
         "price": "150.00",
@@ -168,18 +190,18 @@ async fn test_manual_trade_api() -> anyhow::Result<()> {
     let res = assert_post!(&client, format!("{}/api/v1/user/orders", base_url), Some(&token), &order_req, StatusCode::OK);
     let order_id = res.json::<ApiResponse<String>>().await.map_err(|e| anyhow::anyhow!("Parse: {}", e))?.data.ok_or_else(|| anyhow::anyhow!("Data null"))?;
 
-    // 2. 获取挂单列表
-    let res = assert_get!(&client, format!("{}/api/v1/user/orders?account_id=trader_01", base_url), Some(&token), StatusCode::OK);
+    // 2. 获取挂单列表 (修正：查询 trade_acc)
+    let res = assert_get!(&client, format!("{}/api/v1/user/orders?account_id=trade_acc", base_url), Some(&token), StatusCode::OK);
     let orders = res.json::<ApiResponse<Vec<OrderResponse>>>().await.map_err(|e| anyhow::anyhow!("Parse: {}", e))?.data.ok_or_else(|| anyhow::anyhow!("Data null"))?;
     assert!(orders.iter().any(|o| o.id == order_id));
 
     // 3. 撤单
     assert_delete!(&client, format!("{}/api/v1/user/orders/{}", base_url, order_id), Some(&token), StatusCode::OK);
 
-    // 4. 确认列表为空 (或状态为 Canceled/Rejected)
-    let res = assert_get!(&client, format!("{}/api/v1/user/orders?account_id=trader_01", base_url), Some(&token), StatusCode::OK);
+    // 4. 确认列表中的订单已经消失
+    let res = assert_get!(&client, format!("{}/api/v1/user/orders?account_id=trade_acc", base_url), Some(&token), StatusCode::OK);
     let orders = res.json::<ApiResponse<Vec<OrderResponse>>>().await.map_err(|e| anyhow::anyhow!("Parse: {}", e))?.data.ok_or_else(|| anyhow::anyhow!("Data null"))?;
-    // 如果订单被立即处理，它可能变状态。本地 Mock 撮合可能会立即撮合。
-    assert!(orders.iter().filter(|o| o.id == order_id).all(|o| o.status == "Canceled" || o.status == "Rejected" || o.status == "Filled"));
+    
+    assert!(!orders.iter().any(|o| o.id == order_id), "Order should be removed from active list after cancellation");
     Ok(())
 }

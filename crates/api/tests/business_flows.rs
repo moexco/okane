@@ -8,6 +8,7 @@ use okane_api::types::{
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use common::spawn_test_server;
+use anyhow::Context;
 
 /// 辅助函数：将 JS 源码编码为 Base64
 fn encode_js_source(source: &str) -> String {
@@ -55,12 +56,23 @@ async fn test_auth_and_password_flow() -> anyhow::Result<()> {
         password: "new_secure_password".to_string(),
         client_id: "test_client_id".to_string(),
     }, StatusCode::OK);
+
+    // 6. 验证旧密码已失效 (后置副作用断言)
+    let res = client.post(format!("{}/api/v1/auth/login", base_url))
+        .json(&LoginRequest {
+            username: "admin".to_string(),
+            password: "test_admin_pwd".to_string(),
+            client_id: "test_client_id".to_string(),
+        })
+        .send().await?;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "Old password should be invalid after successful change");
+
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_admin_user_management() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, store, _tmp, _keepalive) = spawn_test_server().await?;
     let client = reqwest::Client::new();
 
     // 先登录 (跳过强制改密逻辑，测试环境直接用 admin)
@@ -78,6 +90,10 @@ async fn test_admin_user_management() -> anyhow::Result<()> {
         password: "trader_password".to_string(),
         role: "Standard".to_string(),
     }, StatusCode::OK);
+
+    // 验证用户已存在（通过 Store 验证“落盘”）
+    let saved_user = store.get_user("trader_01").await?.context("User not found in store")?;
+    assert_eq!(saved_user.name, "Trader One");
     Ok(())
 }
 

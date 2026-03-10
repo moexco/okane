@@ -42,13 +42,16 @@ pub async fn register_account(
     state.system_store.bind_account(&user.id, &req.account_id).await
         .map_err(|e| ApiError::Internal(format!("Failed to bind account: {}", e)))?;
     
-    // 3. 可选：初始化资金 (通过 AccountStore)
-    if let Some(bal_str) = req.initial_balance {
-        let _amount = Decimal::from_str(&bal_str).map_err(|_| ApiError::BadRequest("Invalid initial balance format".to_string()))?;
-        let _acc_id = okane_core::trade::entity::AccountId(req.account_id.clone());
-        // 注意：AccountPort 可能需要特殊的 deposit 接口或直接在 SqliteAccountStore 里做。
-        // 由于 TradePort 抽象可能没直接暴露 deposit，这里我们先保证绑定逻辑。
-    }
+    // 3. 初始化交易引擎账户 (通过 TradePort 同步初始化快照与资金)
+    let initial_balance = if let Some(bal_str) = req.initial_balance {
+        Decimal::from_str(&bal_str).map_err(|_| ApiError::BadRequest("Invalid initial balance format".to_string()))?
+    } else {
+        Decimal::ZERO
+    };
+    
+    let acc_id = okane_core::trade::entity::AccountId(req.account_id.clone());
+    state.trade_port.ensure_account(acc_id, initial_balance).await
+        .map_err(|e| ApiError::Internal(format!("Failed to initialize trade account: {}", e)))?;
 
     tracing::info!("User {} created and bound account {}", user.id, req.account_id);
     Ok(Json(ApiResponse::ok(req.account_id)))

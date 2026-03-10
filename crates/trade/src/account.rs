@@ -214,4 +214,9 @@ impl AccountPort for AccountManager {
         let state = acct_lock.read().await;
         Ok(state.to_snapshot())
     }
+
+    async fn ensure_account(&self, account_id: &AccountId, initial_balance: rust_decimal::Decimal) -> Result<(), TradeError> {
+        self.ensure_account_exists(account_id.clone(), initial_balance);
+        Ok(())
+    }
 }

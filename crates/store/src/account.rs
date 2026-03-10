@@ -386,4 +386,14 @@ impl AccountPort for SqliteAccountStore {
             positions,
         })
     }
+
+    async fn ensure_account(&self, account_id: &AccountId, initial_balance: Decimal) -> Result<(), TradeError> {
+        // get_or_init_pool 已经包含了初始化表的逻辑。
+        // 如果 initial_balance > 0，执行一次充值。
+        self.get_or_init_pool(&account_id.0).await?;
+        if initial_balance > Decimal::ZERO {
+            self.deposit(account_id, initial_balance).await?;
+        }
+        Ok(())
+    }
 }

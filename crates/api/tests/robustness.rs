@@ -4,7 +4,7 @@ use reqwest::StatusCode;
 use okane_api::types::{
     ApiResponse, LoginRequest, LoginResponse,
     CreateUserRequest, StrategyResponse, StartStrategyRequest, SaveStrategySourceRequest,
-    AlgoOrderResponse,
+    AlgoOrderResponse, OrderResponse,
 };
 use base64::Engine;
 use okane_api::routes::watchlist::WatchlistRequest;
@@ -31,6 +31,8 @@ async fn test_market_candles_invalid_tf() -> anyhow::Result<()> {
         .bearer_auth(&token)
         .send().await?;
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body: ApiResponse<()> = res.json().await?;
+    assert!(body.error.context("Error body missing")?.to_lowercase().contains("timeframe"), "Error should mention 'timeframe'");
     Ok(())
 }
 
@@ -44,6 +46,8 @@ async fn test_market_candles_invalid_start_time() -> anyhow::Result<()> {
         .bearer_auth(&token)
         .send().await?;
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body: ApiResponse<()> = res.json().await?;
+    assert!(body.error.context("Error body missing")?.to_lowercase().contains("invalid"), "Error should mention 'invalid' time format");
     Ok(())
 }
 
@@ -57,6 +61,8 @@ async fn test_market_candles_invalid_end_time() -> anyhow::Result<()> {
         .bearer_auth(&token)
         .send().await?;
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body: ApiResponse<()> = res.json().await?;
+    assert!(body.error.context("Error body missing")?.to_lowercase().contains("invalid"), "Error should mention 'invalid' time format");
     Ok(())
 }
 
@@ -66,9 +72,11 @@ async fn test_watchlist_add_stock_not_found() -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
-    assert_post!(&client, format!("{}/api/v1/user/watchlist", base_url), Some(&token), &WatchlistRequest {
+    let res = assert_post!(&client, format!("{}/api/v1/user/watchlist", base_url), Some(&token), &WatchlistRequest {
         symbol: "INVALID_TICKER_999".to_string(),
     }, StatusCode::BAD_REQUEST);
+    let body: ApiResponse<()> = res.json().await?;
+    assert!(body.error.context("Error body missing")?.to_lowercase().contains("not found"), "Error should mention 'not found'");
     Ok(())
 }
 
@@ -78,12 +86,14 @@ async fn test_admin_create_duplicate_user() -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
-    assert_post!(&client, format!("{}/api/v1/admin/users", base_url), Some(&token), &CreateUserRequest {
+    let res = assert_post!(&client, format!("{}/api/v1/admin/users", base_url), Some(&token), &CreateUserRequest {
         id: "admin".to_string(),
         name: "Cloned Admin".to_string(),
         password: "password".to_string(),
         role: "Admin".to_string(),
     }, StatusCode::BAD_REQUEST);
+    let body: ApiResponse<()> = res.json().await?;
+    assert!(body.error.context("Error body missing")?.to_lowercase().contains("exist"), "Error should mention 'exist'");
     Ok(())
 }
 
@@ -93,12 +103,14 @@ async fn test_admin_create_user_with_invalid_role() -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
-    assert_post!(&client, format!("{}/api/v1/admin/users", base_url), Some(&token), &CreateUserRequest {
+    let res = assert_post!(&client, format!("{}/api/v1/admin/users", base_url), Some(&token), &CreateUserRequest {
         id: "new_trader".to_string(),
         name: "New Trader".to_string(),
         password: "password".to_string(),
         role: "God".to_string(),
     }, StatusCode::BAD_REQUEST);
+    let body: ApiResponse<()> = res.json().await?;
+    assert!(body.error.context("Error body missing")?.to_lowercase().contains("role"), "Error should mention 'role'");
     Ok(())
 }
 
@@ -118,6 +130,8 @@ async fn test_trade_place_order_invalid_direction() -> anyhow::Result<()> {
         }))
         .send().await?;
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body: ApiResponse<()> = res.json().await?;
+    assert!(body.error.context("Error body missing")?.to_lowercase().contains("direction"), "Error should mention 'direction'");
     Ok(())
 }
 
@@ -137,6 +151,8 @@ async fn test_trade_place_order_invalid_volume() -> anyhow::Result<()> {
         }))
         .send().await?;
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body: ApiResponse<()> = res.json().await?;
+    assert!(body.error.context("Error body missing")?.to_lowercase().contains("volume"), "Error should mention 'volume'");
     Ok(())
 }
 
@@ -156,6 +172,8 @@ async fn test_trade_place_order_zero_volume() -> anyhow::Result<()> {
         }))
         .send().await?;
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body: ApiResponse<()> = res.json().await?;
+    assert!(body.error.context("Error body missing")?.to_lowercase().contains("volume"), "Error should mention 'volume'");
     Ok(())
 }
 
@@ -188,6 +206,8 @@ async fn test_algo_grid_missing_params() -> anyhow::Result<()> {
         }))
         .send().await?;
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body: ApiResponse<()> = res.json().await?;
+    assert!(body.error.context("Error body missing")?.to_lowercase().contains("missing"), "Error should mention 'missing' params");
     Ok(())
 }
 
@@ -207,6 +227,8 @@ async fn test_algo_unsupported_type() -> anyhow::Result<()> {
         }))
         .send().await?;
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body: ApiResponse<()> = res.json().await?;
+    assert!(body.error.context("Error body missing")?.to_lowercase().contains("type"), "Error should mention 'type' or 'unknown'");
     Ok(())
 }
 
@@ -251,7 +273,17 @@ async fn test_idor_view_others_orders() -> anyhow::Result<()> {
         "initial_balance": "1000"
     }), StatusCode::OK);
 
+    // 1. 受害者自己应该能看到（正向基准）
+    let res = assert_get!(&client, format!("{}/api/v1/user/orders?account_id=victim_acc", base_url), Some(&victim_token), StatusCode::OK);
+    let orders = res.json::<ApiResponse<Vec<OrderResponse>>>().await?.data.context("data null")?;
+    
+    // 2. 攻击者查看受害者订单（越权测试）
     assert_get!(&client, format!("{}/api/v1/user/orders?account_id=victim_acc", base_url), Some(&attacker_token), StatusCode::FORBIDDEN);
+    
+    // 3. 闭环验证：受害者数据未被泄露或篡改
+    let res = assert_get!(&client, format!("{}/api/v1/user/orders?account_id=victim_acc", base_url), Some(&victim_token), StatusCode::OK);
+    let orders_post = res.json::<ApiResponse<Vec<OrderResponse>>>().await?.data.context("data null")?;
+    assert_eq!(orders.len(), orders_post.len());
     Ok(())
 }
 
@@ -280,14 +312,24 @@ async fn test_strategy_lifecycle_gap_coverage() -> anyhow::Result<()> {
     // 3. Get individual strategy
     assert_get!(&client, format!("{}/api/v1/user/strategies/{}", base_url, strategy_id), Some(&token), StatusCode::OK);
 
-    // 4. Update strategy (must stop first, but here we just test the route logic)
+    // 4. Update strategy (must stop first)
     // First stop it
     assert_post!(&client, format!("{}/api/v1/user/strategies/{}/stop", base_url, strategy_id), Some(&token), &serde_json::json!({}), StatusCode::OK);
     
+    // Post-Verification: 验证状态确实变为 Stopped
+    let res = assert_get!(&client, format!("{}/api/v1/user/strategies/{}", base_url, strategy_id), Some(&token), StatusCode::OK);
+    let strategy = res.json::<ApiResponse<StrategyResponse>>().await?.data.context("data null")?;
+    assert_eq!(strategy.status, "Stopped", "Strategy should be Stopped after stop call");
+
     let new_source = base64::prelude::BASE64_STANDARD.encode("print('updated')");
     assert_put!(&client, format!("{}/api/v1/user/strategies/{}", base_url, strategy_id), Some(&token), &SaveStrategySourceRequest {
-        source_base64: new_source,
+        source_base64: new_source.clone(),
     }, StatusCode::OK);
+
+    // Side-Effect Verification: 验证源码确实已被更新
+    let res = assert_get!(&client, format!("{}/api/v1/user/strategies/{}", base_url, strategy_id), Some(&token), StatusCode::OK);
+    let strategy = res.json::<ApiResponse<StrategyResponse>>().await?.data.context("data null")?;
+    assert_eq!(strategy.source_base64, new_source, "Strategy source code should be updated in backend");
 
     // 5. Get logs
     assert_get!(&client, format!("{}/api/v1/user/strategies/{}/logs", base_url, strategy_id), Some(&token), StatusCode::OK);
@@ -324,7 +366,13 @@ async fn test_trade_algo_lifecycle_gap_coverage() -> anyhow::Result<()> {
     // 3. Cancel Algo Order
     assert_delete!(&client, format!("{}/api/v1/user/algo/{}", base_url, algo_id), Some(&token), StatusCode::OK);
 
-    // 4. Get positions
+    // 4. Verify status is Canceled (后置断言)
+    let res = assert_get!(&client, format!("{}/api/v1/user/algo?account_id=trader_01", base_url), Some(&token), StatusCode::OK);
+    let orders = res.json::<ApiResponse<Vec<AlgoOrderResponse>>>().await?.data.context("data null")?;
+    let target = orders.iter().find(|o| o.id == algo_id).context("Algo order should be in list")?;
+    assert_eq!(target.status, "Canceled");
+
+    // 5. Get positions
     assert_get!(&client, format!("{}/api/v1/user/account/trader_01/positions", base_url), Some(&token), StatusCode::OK);
 
     Ok(())
@@ -363,6 +411,12 @@ async fn test_idor_deploy_strategy_others_account() -> anyhow::Result<()> {
         }))
         .send().await?;
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+    // Side-Effect Verification: 验证受害者的策略列表依然为空，攻击者的脏逻辑未落盘
+    let res = assert_get!(&client, format!("{}/api/v1/user/strategies", base_url), Some(&admin_token), StatusCode::OK);
+    let list = res.json::<ApiResponse<Vec<StrategyResponse>>>().await?.data.context("data null")?;
+    assert!(list.is_empty(), "Victim's strategy list should remain empty after blocked IDOR attempt");
+
     Ok(())
 }
 
@@ -389,6 +443,12 @@ async fn test_trade_place_order_idor() -> anyhow::Result<()> {
         }))
         .send().await?;
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+    // Side-Effect Verification: 受害者的订单列表应保持为空（或未增加）
+    let res = assert_get!(&client, format!("{}/api/v1/user/orders?account_id=trader_01", base_url), Some(&token), StatusCode::OK);
+    let orders = res.json::<ApiResponse<Vec<OrderResponse>>>().await?.data.context("data null")?;
+    assert!(orders.is_empty(), "Victim orders should be empty after blocked IDOR attempt");
+    
     Ok(())
 }
 
@@ -436,6 +496,11 @@ async fn test_trade_algo_cancel_idor() -> anyhow::Result<()> {
         .bearer_auth(&attacker_token)
         .send().await?;
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+    // 闭环验证：使用拥有者 Token 验证订单依然存在且未被真正删除
+    let res = assert_get!(&client, format!("{}/api/v1/user/algo?account_id=trader_01", base_url), Some(&admin_token), StatusCode::OK);
+    let orders = res.json::<ApiResponse<Vec<AlgoOrderResponse>>>().await?.data.context("data null")?;
+    assert!(orders.iter().any(|o| o.id == algo_id), "Algo order should still exist after failed attacker IDOR");
     Ok(())
 }
 
@@ -453,6 +518,8 @@ async fn test_account_initial_balance_invalid() -> anyhow::Result<()> {
         }))
         .send().await?;
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body: ApiResponse<()> = res.json().await?;
+    assert!(body.error.context("Error body missing")?.to_lowercase().contains("format"));
     Ok(())
 }
 
@@ -462,15 +529,19 @@ async fn test_algo_grid_invalid_prices() -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
-    // Missing params
-    assert_post!(&client, format!("{}/api/v1/user/algo", base_url), Some(&token), &serde_json::json!({
+    // Missing params (期望 400 并检查消息)
+    let res = assert_post!(&client, format!("{}/api/v1/user/algo", base_url), Some(&token), &serde_json::json!({
         "account_id": "trader_01", "symbol": "AAPL", "algo_type": "grid", "params": { "upper_price": "200" }
     }), StatusCode::BAD_REQUEST);
+    let body: ApiResponse<()> = res.json().await?;
+    assert!(body.error.context("Error body missing")?.to_lowercase().contains("missing"), "Error msg should mention 'missing' params");
 
-    // Invalid decimal
-    assert_post!(&client, format!("{}/api/v1/user/algo", base_url), Some(&token), &serde_json::json!({
+    // Invalid decimal (期望 400 并检查消息)
+    let res = assert_post!(&client, format!("{}/api/v1/user/algo", base_url), Some(&token), &serde_json::json!({
         "account_id": "trader_01", "symbol": "AAPL", "algo_type": "grid", "params": { "upper_price": "200", "lower_price": "invalid", "grids": 10 }
     }), StatusCode::BAD_REQUEST);
+    let body: ApiResponse<()> = res.json().await?;
+    assert!(body.error.context("Error body missing")?.to_lowercase().contains("invalid"), "Error msg should mention 'invalid' value");
 
     Ok(())
 }
@@ -488,6 +559,8 @@ async fn test_trade_place_order_invalid_price_format() -> anyhow::Result<()> {
         }))
         .send().await?;
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body: ApiResponse<()> = res.json().await?;
+    assert!(body.error.context("Error body missing")?.to_lowercase().contains("price"), "Error should mention 'price'");
     Ok(())
 }
 
@@ -521,6 +594,12 @@ async fn test_strategy_idor_all_actions() -> anyhow::Result<()> {
     assert_delete!(&client, format!("{}/api/v1/user/strategies/{}", base_url, strategy_id), Some(&attacker_token), StatusCode::NOT_FOUND);
     assert_get!(&client, format!("{}/api/v1/user/strategies/{}/logs", base_url, strategy_id), Some(&attacker_token), StatusCode::NOT_FOUND);
 
+    // Side-Effect Verification: 验证管理员的策略依然存在且状态未变
+    let res = assert_get!(&client, format!("{}/api/v1/user/strategies/{}", base_url, strategy_id), Some(&admin_token), StatusCode::OK);
+    let strategy = res.json::<ApiResponse<StrategyResponse>>().await?.data.context("data null")?;
+    assert_eq!(strategy.id, strategy_id);
+    assert_eq!(strategy.status, "Running");
+
     Ok(())
 }
 
@@ -546,6 +625,11 @@ async fn test_trade_cancel_order_idor() -> anyhow::Result<()> {
     let token = res.json::<ApiResponse<LoginResponse>>().await?.data.context("data null")?.access_token;
 
     assert_delete!(&client, format!("{}/api/v1/user/orders/{}", base_url, order_id), Some(&token), StatusCode::FORBIDDEN);
+
+    // 闭环验证：验证订单依然是 Pending 状态，未被删除
+    let res = assert_get!(&client, format!("{}/api/v1/user/orders?account_id=trader_01", base_url), Some(&admin_token), StatusCode::OK);
+    let orders = res.json::<ApiResponse<Vec<OrderResponse>>>().await?.data.context("data null")?;
+    assert!(orders.iter().any(|o| o.id == order_id), "Order should still exist after failed attacker IDOR");
     Ok(())
 }
 
@@ -570,16 +654,33 @@ async fn test_market_watchlist_idor() -> anyhow::Result<()> {
     let admin_token = get_admin_token(&client, &base_url).await?;
 
     assert_post!(&client, format!("{}/api/v1/admin/users", base_url), Some(&admin_token), &serde_json::json!({
-        "id": "a", "name": "A", "password": "p", "role": "Standard", "force_password_change": false
+        "id": "victim", "name": "V", "password": "p", "role": "Standard", "force_password_change": false
     }), StatusCode::OK);
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
-        username: "a".to_string(), password: "p".to_string(), client_id: "c".to_string(),
+        username: "victim".to_string(), password: "p".to_string(), client_id: "c2".to_string(),
     }, StatusCode::OK);
-    let token = res.json::<ApiResponse<LoginResponse>>().await?.data.context("data null")?.access_token;
+    let victim_token = res.json::<ApiResponse<LoginResponse>>().await?.data.context("data null")?.access_token;
 
-    // Actually watchlist list is always for CURRENT USER, so IDOR is hard there. 
-    // But let's check watchlist delete with non-existent stock
-    assert_delete!(&client, format!("{}/api/v1/user/watchlist/NOSUCHSTOCK", base_url), Some(&token), StatusCode::OK);
+    assert_post!(&client, format!("{}/api/v1/admin/users", base_url), Some(&admin_token), &serde_json::json!({
+        "id": "attacker", "name": "A", "password": "p", "role": "Standard", "force_password_change": false
+    }), StatusCode::OK);
+    let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
+        username: "attacker".to_string(), password: "p".to_string(), client_id: "c1".to_string(),
+    }, StatusCode::OK);
+    let attacker_token = res.json::<ApiResponse<LoginResponse>>().await?.data.context("data null")?.access_token;
+
+    // 1. 受害者添加 AAPL
+    assert_post!(&client, format!("{}/api/v1/user/watchlist", base_url), Some(&victim_token), &WatchlistRequest { symbol: "AAPL".to_string() }, StatusCode::OK);
+
+    // 2. 攻击者尝试直接删除（通过 URL 语义，如果系统支持跨用户删除，这里会测试出来）
+    // 实际上 watchlist 是按 Token 里的 user_id 过滤的，所以攻击者删的是自己的 AAPL（哪怕他没加）。
+    // 我们验证攻击者的操作不会导致受害者的自选股消失。
+    assert_delete!(&client, format!("{}/api/v1/user/watchlist/AAPL", base_url), Some(&attacker_token), StatusCode::OK);
+
+    // 3. 闭环验证：受害者的自选股依然存在
+    let res = assert_get!(&client, format!("{}/api/v1/user/watchlist", base_url), Some(&victim_token), StatusCode::OK);
+    let list = res.json::<ApiResponse<Vec<String>>>().await?.data.context("data null")?;
+    assert!(list.contains(&"AAPL".to_string()));
     Ok(())
 }
 
@@ -590,9 +691,16 @@ async fn test_trade_insufficient_funds() -> anyhow::Result<()> {
     let token = get_admin_token(&client, &base_url).await?;
 
     // Try to buy 1 billion AAPL shares (market price ~150, so need $150B)
-    assert_post!(&client, format!("{}/api/v1/user/orders", base_url), Some(&token), &serde_json::json!({
-        "account_id": "trader_01", "symbol": "AAPL", "volume": "1000000000", "direction": "BUY"
-    }), StatusCode::BAD_REQUEST);
+    let res = client.post(format!("{}/api/v1/user/orders", base_url))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({
+            "account_id": "trader_01", "symbol": "AAPL", "volume": "1000000000", "direction": "BUY"
+        }))
+        .send().await?;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    
+    let body: ApiResponse<()> = res.json().await?;
+    assert!(body.error.context("Error body missing")?.to_lowercase().contains("insufficient"));
     Ok(())
 }
 
@@ -611,13 +719,16 @@ async fn test_strategy_already_running() -> anyhow::Result<()> {
     let res = assert_post!(&client, format!("{}/api/v1/user/strategies", base_url), Some(&token), &payload, StatusCode::OK);
     let id = res.json::<ApiResponse<String>>().await?.data.context("data null")?;
 
-    // Try to start the same instance ID again (Impossible because start always creates new ID)
-    // But we can try to "start" it by calling deploy again, it just creates a NEW instance.
-    // To trigger AlreadyRunning, we'd need Manager's logic for duplicate tasks if any.
-    // Actually, StrategyManager doesn't seem to block duplicate deployments of same symbol/account.
-    // But we can trigger it if we try to call a method that expects Stopped but it's Running.
-    // Wait, update_strategy returns 400 if running.
-    assert_put!(&client, format!("{}/api/v1/user/strategies/{}", base_url, id), Some(&token), &serde_json::json!({"source_base64": "xx"}), StatusCode::BAD_REQUEST);
+    // 尝试在运行中更新（期望 400）
+    let res = client.put(format!("{}/api/v1/user/strategies/{}", base_url, id))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({"source_base64": base64::prelude::BASE64_STANDARD.encode("print(2)")}))
+        .send().await?;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    
+    // 解析错误消息，确保是因为 "Running" 导致的
+    let body: ApiResponse<()> = res.json().await?;
+    assert!(body.error.context("Error body missing")?.to_lowercase().contains("running"));
 
     Ok(())
 }
@@ -665,6 +776,12 @@ async fn test_trade_place_order_none_price() -> anyhow::Result<()> {
     assert_post!(&client, format!("{}/api/v1/user/orders", base_url), Some(&token), &serde_json::json!({
         "account_id": "trader_01", "symbol": "AAPL", "volume": "1", "direction": "BUY"
     }), StatusCode::OK);
+
+    // Side-Effect Verification: 验证订单已落盘且状态为 Filled (由于是 Mock 环境通常会立即成交) 或存在于列表
+    let res = assert_get!(&client, format!("{}/api/v1/user/orders?account_id=trader_01", base_url), Some(&token), StatusCode::OK);
+    let orders = res.json::<ApiResponse<Vec<OrderResponse>>>().await?.data.context("data null")?;
+    assert!(orders.iter().any(|o| o.symbol == "AAPL" && o.volume == "1"), "Market order should be visible in order list");
+    
     Ok(())
 }
 
@@ -682,6 +799,8 @@ fn test_from_position_to_response() {
     };
     let pr: PositionResponse = p.into();
     assert_eq!(pr.symbol, "AAPL");
+    assert_eq!(pr.volume, "100");
+    assert_eq!(pr.average_price, "150");
 }
 
 #[test]
@@ -699,6 +818,9 @@ fn test_from_account_snapshot_to_response() {
     };
     let sr: AccountSnapshotResponse = s.into();
     assert_eq!(sr.account_id, "test");
+    assert_eq!(sr.available_balance, "1000");
+    assert_eq!(sr.frozen_balance, "500");
+    assert_eq!(sr.total_equity, "1500");
 }
 
 #[test]
@@ -734,5 +856,10 @@ fn test_from_candle_to_response() {
         is_final: true,
     };
     let cr: okane_api::types::CandleResponse = c.into();
+    assert_eq!(cr.open, "100");
+    assert_eq!(cr.high, "110");
+    assert_eq!(cr.low, "90");
+    assert_eq!(cr.close, "105");
+    assert_eq!(cr.volume, "1000");
     assert!(cr.is_final);
 }

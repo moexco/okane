@@ -309,6 +309,10 @@ mod tests {
         async fn get_order(&self, _order_id: &OrderId) -> Result<Option<Order>, TradeError> {
             Ok(None)
         }
+
+        async fn ensure_account(&self, _account_id: AccountId, _initial_balance: rust_decimal::Decimal) -> Result<(), TradeError> {
+            Ok(())
+        }
     }
 
     #[async_trait]

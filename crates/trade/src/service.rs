@@ -102,10 +102,10 @@ impl TradePort for TradeService {
                 self.account_port.process_trade(&order.account_id, &trade, est_req_funds).await?;
             }
 
-            // 核心修复：如果市价单未完全成交，需放入队列（闭环处理）
-            if order.status != OrderStatus::Filled && order.status != OrderStatus::Canceled {
-                self.pending_port.save(order).await?;
-            }
+            // 核心修复：市价单无论是否完全成交，均需记录到后端（用于历史查询和状态观测）
+            // 注意：如果已完全成交，pending_port 的具体实现可以决定是否保留在“活动单”中
+            // 但为了 API 一致性，这里必须确保它被 submit 过。
+            self.pending_port.save(order).await?;
         } else {
             // 限价单，等待未来穿越
             order.status = OrderStatus::Pending;
@@ -139,6 +139,10 @@ impl TradePort for TradeService {
 
     async fn get_order(&self, order_id: &OrderId) -> Result<Option<Order>, TradeError> {
         self.pending_port.get(order_id).await
+    }
+
+    async fn ensure_account(&self, account_id: AccountId, initial_balance: rust_decimal::Decimal) -> Result<(), TradeError> {
+        self.account_port.ensure_account(&account_id, initial_balance).await
     }
 }
 

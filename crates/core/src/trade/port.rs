@@ -7,24 +7,24 @@ use thiserror::Error;
 /// 交易执行环节中可能发生的错误。
 #[derive(Error, Debug)]
 pub enum TradeError {
-    #[error("账户不存在: {0}")]
+    #[error("Account not found: {0}")]
     AccountNotFound(String),
-    #[error("可用资金不足. 需要: {required}, 实际: {actual}")]
+    #[error("Insufficient funds. Required: {required}, Actual: {actual}")]
     InsufficientFunds {
         required: rust_decimal::Decimal,
         actual: rust_decimal::Decimal,
     },
-    #[error("订单未找到或不存在: {0}")]
+    #[error("Order not found or does not exist: {0}")]
     OrderNotFound(String),
-    #[error("订单状态不允许该操作")]
+    #[error("Order status does not allow this operation")]
     InvalidOrderStatus,
-    #[error("底层券商通道错误: {0}")]
+    #[error("Broker integration failure: {0}")]
     BrokerIntegrationError(String),
-    #[error("内部系统错误: {0}")]
+    #[error("Internal system error: {0}")]
     InternalError(String),
-    #[error("算法单未找到: {0}")]
+    #[error("Algo order not found: {0}")]
     AlgoOrderNotFound(String),
-    #[error("算法单协议错误: {0}")]
+    #[error("Algo order protocol error: {0}")]
     AlgoOrderError(String),
 }
 
@@ -70,6 +70,9 @@ pub trait TradePort: Send + Sync {
     /// # Arguments
     /// * `order_id` - 系统级 Order ID
     async fn get_order(&self, order_id: &OrderId) -> Result<Option<Order>, TradeError>;
+
+    /// 确保某个账户在交易引擎中已初始化，并可按需设置初始资金（例如纸面交易）。
+    async fn ensure_account(&self, account_id: AccountId, initial_balance: rust_decimal::Decimal) -> Result<(), TradeError>;
 }
 
 /// # Summary
@@ -107,6 +110,9 @@ pub trait AccountPort: Send + Sync {
 
     /// 快照截取
     async fn snapshot(&self, account_id: &AccountId) -> Result<AccountSnapshot, TradeError>;
+
+    /// 确保账户已加载或存在
+    async fn ensure_account(&self, account_id: &AccountId, initial_balance: rust_decimal::Decimal) -> Result<(), TradeError>;
 }
 
 /// # Summary
