@@ -10,7 +10,7 @@ use reqwest::StatusCode;
 #[tokio::test]
 async fn test_deterministic_sid_and_global_cleanup() -> anyhow::Result<()> {
     // 1. Setup
-    let (addr, system_store, _temp_dir, _stocks) = spawn_test_server().await?;
+    let (addr, system_store, _temp_dir, _stocks, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
 
     // 2. Create User A (needed for FK constraint)

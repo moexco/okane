@@ -23,7 +23,7 @@ async fn get_admin_token(client: &reqwest::Client, base_url: &str) -> anyhow::Re
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_market_candles_invalid_tf() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -38,7 +38,7 @@ async fn test_market_candles_invalid_tf() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_market_candles_invalid_start_time() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -53,7 +53,7 @@ async fn test_market_candles_invalid_start_time() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_market_candles_invalid_end_time() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -68,7 +68,7 @@ async fn test_market_candles_invalid_end_time() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_watchlist_add_stock_not_found() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -82,7 +82,7 @@ async fn test_watchlist_add_stock_not_found() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_admin_create_duplicate_user() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -99,7 +99,7 @@ async fn test_admin_create_duplicate_user() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_admin_create_user_with_invalid_role() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -116,7 +116,7 @@ async fn test_admin_create_user_with_invalid_role() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_trade_place_order_invalid_direction() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -137,7 +137,7 @@ async fn test_trade_place_order_invalid_direction() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_trade_place_order_invalid_volume() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -158,7 +158,7 @@ async fn test_trade_place_order_invalid_volume() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_trade_place_order_zero_volume() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -179,7 +179,7 @@ async fn test_trade_place_order_zero_volume() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_trade_cancel_order_not_found() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -192,7 +192,7 @@ async fn test_trade_cancel_order_not_found() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_algo_grid_missing_params() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -213,7 +213,7 @@ async fn test_algo_grid_missing_params() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_algo_unsupported_type() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -234,7 +234,7 @@ async fn test_algo_unsupported_type() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_idor_view_others_orders() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let admin_token = get_admin_token(&client, &base_url).await?;
 
@@ -289,7 +289,7 @@ async fn test_idor_view_others_orders() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_strategy_lifecycle_gap_coverage() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -345,7 +345,7 @@ async fn test_strategy_lifecycle_gap_coverage() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_trade_algo_lifecycle_gap_coverage() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -380,7 +380,7 @@ async fn test_trade_algo_lifecycle_gap_coverage() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_idor_deploy_strategy_others_account() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let admin_token = get_admin_token(&client, &base_url).await?;
 
@@ -422,7 +422,7 @@ async fn test_idor_deploy_strategy_others_account() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_trade_place_order_idor() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?; // Token for admin, but let's assume it belongs to admin
     
@@ -454,7 +454,7 @@ async fn test_trade_place_order_idor() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_trade_get_positions_idor() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let admin_token = get_admin_token(&client, &base_url).await?;
 
@@ -472,7 +472,7 @@ async fn test_trade_get_positions_idor() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_trade_algo_cancel_idor() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let admin_token = get_admin_token(&client, &base_url).await?;
 
@@ -506,7 +506,7 @@ async fn test_trade_algo_cancel_idor() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_account_initial_balance_invalid() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -525,7 +525,7 @@ async fn test_account_initial_balance_invalid() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_algo_grid_invalid_prices() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -548,7 +548,7 @@ async fn test_algo_grid_invalid_prices() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_trade_place_order_invalid_price_format() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -566,7 +566,7 @@ async fn test_trade_place_order_invalid_price_format() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_strategy_idor_all_actions() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let admin_token = get_admin_token(&client, &base_url).await?;
 
@@ -605,7 +605,7 @@ async fn test_strategy_idor_all_actions() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_trade_cancel_order_idor() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let admin_token = get_admin_token(&client, &base_url).await?;
 
@@ -635,7 +635,7 @@ async fn test_trade_cancel_order_idor() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_trade_account_not_found_error_path() -> anyhow::Result<()> {
-    let (base_url, system_store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, system_store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -649,7 +649,7 @@ async fn test_trade_account_not_found_error_path() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_market_watchlist_idor() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let admin_token = get_admin_token(&client, &base_url).await?;
 
@@ -686,7 +686,7 @@ async fn test_market_watchlist_idor() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_trade_insufficient_funds() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -706,7 +706,7 @@ async fn test_trade_insufficient_funds() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_strategy_already_running() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -735,7 +735,7 @@ async fn test_strategy_already_running() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_trade_algo_list_idor() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let admin_token = get_admin_token(&client, &base_url).await?;
 
@@ -754,7 +754,7 @@ async fn test_trade_algo_list_idor() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_trade_get_orders_not_found() -> anyhow::Result<()> {
-    let (base_url, system_store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, system_store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
@@ -768,7 +768,7 @@ async fn test_trade_get_orders_not_found() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_trade_place_order_none_price() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 

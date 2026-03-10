@@ -13,7 +13,7 @@ use anyhow::Context;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_admin_settings_api() -> anyhow::Result<()> {
-    let (base_url, store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
 
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
@@ -38,7 +38,7 @@ async fn test_admin_settings_api() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_account_management_api() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
 
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
@@ -73,7 +73,7 @@ async fn test_account_management_api() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_market_and_watchlist_api() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
 
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
@@ -122,7 +122,7 @@ async fn test_market_and_watchlist_api() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_notification_config_api() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
 
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {
@@ -162,7 +162,7 @@ async fn test_notification_config_api() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_manual_trade_api() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
 
     let res = assert_post!(&client, format!("{}/api/v1/auth/login", base_url), None::<&str>, &LoginRequest {

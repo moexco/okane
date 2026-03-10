@@ -141,6 +141,7 @@ pub fn build_app(state: AppState) -> Router {
         .routes(routes!(account::list_accounts))
         .routes(routes!(market::search_stocks))
         .routes(routes!(market::get_candles))
+        .routes(routes!(market::ws_handler))
         .routes(routes!(strategy::list_strategies))
         .routes(routes!(strategy::get_strategy))
         .routes(routes!(strategy::deploy_strategy))

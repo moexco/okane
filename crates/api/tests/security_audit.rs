@@ -6,7 +6,7 @@ use common::spawn_test_server;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_refresh_token_rotation_and_reuse_detection() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
 
     // 1. 登录
@@ -62,7 +62,7 @@ async fn test_refresh_token_rotation_and_reuse_detection() -> anyhow::Result<()>
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_password_change_revokes_all_sessions() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
 
     // 1. 登录
@@ -100,7 +100,7 @@ async fn test_password_change_revokes_all_sessions() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_session_reuse_with_client_id() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
     let client_id = "test_client_1".to_string();
 

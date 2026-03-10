@@ -28,7 +28,7 @@ impl NotifierFactory for NoopNotifierFactory {
 }
 
 // 帮助函数：在随端口启动测试服务器
-pub async fn spawn_test_server() -> anyhow::Result<(String, Arc<dyn SystemStore>, tempfile::TempDir, Vec<Arc<dyn Stock>>)> {
+pub async fn spawn_test_server() -> anyhow::Result<(String, Arc<dyn SystemStore>, tempfile::TempDir, Vec<Arc<dyn Stock>>, Arc<MockMarketDataProvider>)> {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         tracing_subscriber::fmt()
@@ -183,7 +183,7 @@ pub async fn spawn_test_server() -> anyhow::Result<(String, Arc<dyn SystemStore>
         return Err(anyhow::anyhow!("Test server failed to start on port {}", port));
     }
 
-    Ok((addr, system_store, tmp_dir, vec![stock]))
+    Ok((addr, system_store, tmp_dir, vec![stock], feed))
 }
 
 #[macro_export]

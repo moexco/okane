@@ -17,7 +17,7 @@ fn encode_js_source(source: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_auth_and_password_flow() -> anyhow::Result<()> {
-    let (base_url, store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
 
     // 显式开启强制改密以验证该流程
@@ -72,7 +72,7 @@ async fn test_auth_and_password_flow() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_admin_user_management() -> anyhow::Result<()> {
-    let (base_url, store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
 
     // 先登录 (跳过强制改密逻辑，测试环境直接用 admin)
@@ -99,7 +99,7 @@ async fn test_admin_user_management() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_user_account_and_strategy_deployment() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
 
     // 1. 创建 Trader (Admin 权限)
@@ -173,7 +173,7 @@ async fn test_user_account_and_strategy_deployment() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_strategy_backtest() -> anyhow::Result<()> {
-    let (base_url, _store, _tmp, _keepalive) = spawn_test_server().await?;
+    let (base_url, _store, _tmp, _keepalive, _feed) = spawn_test_server().await?;
     let client = reqwest::Client::new();
 
     // 获取 Admin Token 并创建用户 (为了保持测试独立，重复 setup 是必要的)

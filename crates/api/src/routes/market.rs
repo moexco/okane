@@ -1,8 +1,9 @@
+use axum::extract::{Path, Query, State, ws::{WebSocketUpgrade, WebSocket, Message}};
 use axum::Json;
-use axum::extract::{Path, Query, State};
 use serde::Deserialize;
 use std::str::FromStr;
 use chrono::{DateTime, Utc};
+use futures::StreamExt;
 
 use okane_core::common::TimeFrame;
 use crate::server::AppState;
@@ -131,4 +132,85 @@ pub async fn get_rsi_indicator(
         Ok(val) => Ok(Json(ApiResponse::ok(val.to_string()))),
         Err(e) => Err(ApiError::Internal(format!("Indicator error: {}", e))),
     }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct MarketWsParams {
+    pub tf: String,
+}
+
+/// 行情实时推送 (WebSocket)
+/// 
+/// 建立 WebSocket 连接以接收特定股票的实时 K 线推送。
+/// 参数: tf (TimeFrame, 例如 1m)
+#[utoipa::path(
+    get,
+    path = "/api/v1/market/ws/{symbol}",
+    tag = "行情 (Market)",
+    params(
+        ("symbol" = String, Path, description = "股票代码"),
+        ("tf" = String, Query, description = "Timeframe (e.g., 1m, 1h, 1d)")
+    ),
+    responses(
+        (status = 101, description = "切换协议成功，开始推送实时 K 线")
+    )
+)]
+pub async fn ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    Path(symbol): Path<String>,
+    Query(query): Query<MarketWsParams>,
+) -> impl axum::response::IntoResponse {
+    tracing::info!("WebSocket upgrade request for symbol: {}, tf: {}", symbol, query.tf);
+    ws.on_upgrade(move |socket| handle_socket(socket, state, symbol, query))
+}
+
+async fn handle_socket(mut socket: WebSocket, state: AppState, symbol: String, query: MarketWsParams) {
+    let tf = match TimeFrame::from_str(&query.tf) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+
+    let stock_agg = match state.market_port.get_stock(&symbol).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("WS: Failed to get stock {}: {}", symbol, e);
+            return;
+        }
+    };
+
+    let mut stream = match stock_agg.subscribe(tf) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("WS: Failed to subscribe to {}: {}", symbol, e);
+            return;
+        }
+    };
+
+    tracing::info!("WS client connected for {} [{:?}]", symbol, tf);
+
+    loop {
+        tokio::select! {
+            Some(candle) = stream.next() => {
+                let msg = match serde_json::to_string(&candle) {
+                    Ok(json) => Message::Text(json.into()),
+                    Err(e) => {
+                        tracing::error!("WS: Serialization error: {}", e);
+                        continue;
+                    }
+                };
+                if let Err(e) = socket.send(msg).await {
+                    tracing::debug!("WS: Client disconnected from {}: {}", symbol, e);
+                    break;
+                }
+            }
+            msg = socket.recv() => {
+                match msg {
+                    Some(Ok(Message::Close(_))) | None => break,
+                    _ => {} // 忽略其他消息（如 ping/pong 由 axum 自动处理）
+                }
+            }
+        }
+    }
+    tracing::info!("WS client disconnected for {} [{:?}]", symbol, tf);
 }
