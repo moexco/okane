@@ -147,6 +147,7 @@ pub struct MarketWsParams {
     get,
     path = "/api/v1/market/ws/{symbol}",
     tag = "行情 (Market)",
+    security(("bearer_jwt" = [])),
     params(
         ("symbol" = String, Path, description = "股票代码"),
         ("tf" = String, Query, description = "Timeframe (e.g., 1m, 1h, 1d)")

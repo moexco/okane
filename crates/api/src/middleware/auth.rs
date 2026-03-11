@@ -30,7 +30,21 @@ pub async fn auth_middleware(
                 None => return Err(ApiError::Unauthorized("Invalid Bearer format".into())),
             }
         }
-        None => return Err(ApiError::Unauthorized("Missing Authorization header".into())),
+        None => {
+            // 如果 Header 缺失，尝试从 Query 参数解析 (适配浏览器原生 WebSocket)
+            let query_string = req.uri().query().unwrap_or_default();
+            let mut token = None;
+            for pair in query_string.split('&') {
+                let mut parts = pair.split('=');
+                if let (Some(key), Some(val)) = (parts.next(), parts.next()) {
+                    if key == "token" || key == "access_token" {
+                        token = Some(val.to_string());
+                        break;
+                    }
+                }
+            }
+            token.ok_or_else(|| ApiError::Unauthorized("Missing Authorization header or token in query".into()))?
+        }
     };
 
     // 1. 验证 JWT 基础合法性
