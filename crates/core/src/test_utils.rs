@@ -142,7 +142,6 @@ impl MarketDataProvider for MockMarketDataProvider {
     async fn subscribe_candles(
         &self,
         _: &StockIdentity,
-        _: TimeFrame,
     ) -> Result<CandleStream, MarketError> {
         let rx = self.price_rx.clone();
         let s = async_stream::stream! {

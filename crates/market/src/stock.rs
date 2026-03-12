@@ -429,7 +429,7 @@ impl StockFetcher {
         info!("Fetcher for {} started", self.identity.symbol);
         if let Ok(mut stream) = self
             .provider
-            .subscribe_candles(&self.identity, TimeFrame::Minute1)
+            .subscribe_candles(&self.identity)
             .await
         {
             while let Some(candle) = futures::StreamExt::next(&mut stream).await {
@@ -470,7 +470,6 @@ mod tests {
         async fn subscribe_candles(
             &self,
             _: &StockIdentity,
-            _: TimeFrame,
         ) -> Result<CandleStream, MarketError> {
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
             use rust_decimal_macros::dec;

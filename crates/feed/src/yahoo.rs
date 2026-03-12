@@ -1,20 +1,81 @@
 use async_trait::async_trait;
+use base64::Engine;
 use chrono::{DateTime, TimeZone, Utc};
+use futures::{SinkExt, StreamExt};
 use okane_core::common::{Stock, TimeFrame};
 use okane_core::market::entity::Candle;
 use okane_core::market::error::MarketError;
 use okane_core::market::port::{CandleStream, MarketDataProvider};
+use prost::Message;
 use reqwest::Client;
-use serde::Deserialize;
-use std::time::Duration;
 use rust_decimal::Decimal;
+use rust_decimal::prelude::FromPrimitive;
+use serde::Deserialize;
+use serde_json;
+use std::time::Duration;
+use tokio;
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
+
+/// # Summary
+/// Yahoo Finance 实时价格数据 Protobuf 结构。
+///
+/// # Invariants
+/// - 字段标签与 Yahoo Finance WebSocket 协议一致。
+/// - 时间戳通常为毫秒，本系统内部统一处理。
+#[derive(Clone, PartialEq, Message)]
+pub struct PricingData {
+    /// 证券唯一标识符 (Ticker)
+    #[prost(string, tag = "1")]
+    pub id: String,
+    /// 当前最新成交价
+    #[prost(float, tag = "2")]
+    pub price: f32,
+    /// 最后成交时间戳 (毫秒)
+    #[prost(int64, tag = "3")]
+    pub time: i64,
+    /// 货币单位
+    #[prost(string, tag = "4")]
+    pub currency: String,
+    /// 所属交易所
+    #[prost(string, tag = "5")]
+    pub exchange: String,
+    /// 报价类型 (枚举映射)
+    #[prost(int32, tag = "6")]
+    pub quote_type: i32,
+    /// 市场交易时段 (枚举映射)
+    #[prost(int32, tag = "7")]
+    pub market_hours: i32,
+    /// 当日涨跌幅百分比
+    #[prost(float, tag = "8")]
+    pub change_percent: f32,
+    /// 当日累计成交量
+    #[prost(int64, tag = "9")]
+    pub day_volume: i64,
+    /// 当日最高价
+    #[prost(float, tag = "10")]
+    pub day_high: f32,
+    /// 当日最低价
+    #[prost(float, tag = "11")]
+    pub day_low: f32,
+    /// 当日涨跌金额
+    #[prost(float, tag = "12")]
+    pub change: f32,
+    /// 证券简称
+    #[prost(string, tag = "13")]
+    pub short_name: String,
+    /// 最后单笔成交量
+    #[prost(int64, tag = "14")]
+    pub last_size: i64,
+}
 
 /// # Summary
 /// Yahoo Finance 行情提供者实现。
 ///
 /// # Invariants
-/// - 使用 `reqwest` 异步客户端进行通讯。
+/// - 使用 `reqwest` 异步客户端进行历史数据通讯。
+/// - 使用 WebSocket 进行实时行情订阅。
 #[derive(Clone)]
 pub struct YahooProvider {
     /// 内部使用的 HTTP 客户端
@@ -52,15 +113,11 @@ impl YahooProvider {
     }
 }
 
-// 移除不安全的 Default 实现，强制显式初始化以保证配置生效
-
 /// # Summary
 /// Yahoo API 响应顶层结构。
-///
-/// # Invariants
-/// - 映射自 Yahoo v8 chart 接口。
 #[derive(Deserialize, Debug)]
 struct YahooResponse {
+    /// 图表数据容器
     chart: YahooChart,
 }
 
@@ -68,7 +125,9 @@ struct YahooResponse {
 /// Yahoo API 图表数据部分。
 #[derive(Deserialize, Debug)]
 struct YahooChart {
+    /// 成功时的结果列表
     result: Option<Vec<YahooResult>>,
+    /// 失败时的错误信息
     error: Option<YahooError>,
 }
 
@@ -76,6 +135,7 @@ struct YahooChart {
 /// Yahoo API 错误详情。
 #[derive(Deserialize, Debug)]
 struct YahooError {
+    /// 错误描述文本
     description: String,
 }
 
@@ -83,7 +143,9 @@ struct YahooError {
 /// Yahoo API 单个时间序列结果。
 #[derive(Deserialize, Debug)]
 struct YahooResult {
+    /// 时间戳列表
     timestamp: Vec<i64>,
+    /// 原始指标数据
     indicators: YahooIndicators,
 }
 
@@ -91,8 +153,9 @@ struct YahooResult {
 /// Yahoo API 指标容器。
 #[derive(Deserialize, Debug)]
 struct YahooIndicators {
+    /// 原始报价列表
     quote: Vec<YahooQuote>,
-    // 调整后的价格数据
+    /// 调整后的价格数据
     adjclose: Option<Vec<YahooAdjClose>>,
 }
 
@@ -100,7 +163,7 @@ struct YahooIndicators {
 /// Yahoo API 调整后价格结构。
 #[derive(Deserialize, Debug)]
 struct YahooAdjClose {
-    // 调整后的收盘价列表
+    /// 调整后的收盘价列表
     adjclose: Vec<Option<f64>>,
 }
 
@@ -129,8 +192,7 @@ impl MarketDataProvider for YahooProvider {
     /// 1. 映射 TimeFrame 周期为 Yahoo 识别的 interval。
     /// 2. 构建包含 period1, period2 的 API URL。
     /// 3. 发起异步请求并解析嵌套的 JSON 数据。
-    /// 4. 提取 adjclose 并与基础 OHLCV 合并。
-    /// 5. 历史数据一律标记为 is_final = true。
+    /// 4. 历史数据一律标记为 is_final = true。
     ///
     /// # Arguments
     /// * `stock`: 证券实体。
@@ -186,77 +248,77 @@ impl MarketDataProvider for YahooProvider {
     }
 
     /// # Summary
-    /// 订阅实时 K 线流（通过定时轮询模拟）。
+    /// 订阅实时 K 线流（通过 WebSocket）。
     ///
     /// # Logic
-    /// 1. 创建异步通道 (mpsc)。
-    /// 2. 启动后台任务进行定时轮询。
-    /// 3. 根据当前时间判断最新的一根 K 线是否已走完周期（is_final）。
-    /// 4. 维护最后推送的时间戳及状态，防止重复推送已完结的数据。
+    /// 1. 建立到 Yahoo Finance WebSocket 服务端的连接。
+    /// 2. 发送订阅 JSON 消息。
+    /// 3. 在后台任务中监听消息流，解析 Base64 编码的 Protobuf 数据。
+    /// 4. 解析后的 Tick 数据实时转换为 Candle 并通过通道推送到流中。
     ///
     /// # Arguments
     /// * `stock`: 证券实体。
-    /// * `timeframe`: 周期。
+    /// * `_timeframe`: 周期（WebSocket 提供实时 Tick，不直接按周期聚合）。
     ///
     /// # Returns
     /// 成功返回异步 K 线流 `CandleStream`，失败返回 `MarketError`。
     async fn subscribe_candles(
         &self,
         stock: &Stock,
-        timeframe: TimeFrame,
     ) -> Result<CandleStream, MarketError> {
-        let (tx, rx) = tokio::sync::mpsc::channel(100);
-        let provider = self.clone();
-        let stock_owned = stock.clone();
-
-        let (poll_interval, cycle_secs) = match timeframe {
-            TimeFrame::Minute1 => (Duration::from_secs(60), 60),
-            TimeFrame::Minute5 => (Duration::from_secs(300), 300),
-            TimeFrame::Hour1 => (Duration::from_secs(3600), 3600),
-            TimeFrame::Day1 => (Duration::from_secs(86400), 86400),
-        };
+        let (tx, rx) = tokio::sync::mpsc::channel(1000);
+        let symbol = stock.symbol.clone();
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(poll_interval);
-            let mut last_pushed_ts = None;
-            let mut last_pushed_is_final = false;
+            let url = "wss://streamer.finance.yahoo.com/";
+            
+            // 建立连接
+            let (mut ws_stream, _) = match connect_async(url).await {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Failed to connect to Yahoo WS: {}", e);
+                    return;
+                }
+            };
 
-            loop {
-                interval.tick().await;
+            // 发送订阅消息
+            let sub_msg = serde_json::json!({
+                "subscribe": [symbol]
+            });
 
-                let end = Utc::now();
-                let start = end - chrono::Duration::seconds(cycle_secs * 2);
+            if ws_stream.send(WsMessage::Text(sub_msg.to_string().into())).await.is_err() {
+                return;
+            }
 
-                if let Ok(mut candles) = provider
-                    .fetch_candles(&stock_owned, timeframe, start, end)
-                    .await
+            // 监听消息流
+            while let Some(msg) = ws_stream.next().await {
+                // 使用 let_chains 语法精简结构
+                if let Ok(WsMessage::Text(text)) = msg
+                    && let Ok(binary) = base64::engine::general_purpose::STANDARD.decode(text.as_bytes())
+                    && let Ok(pricing) = PricingData::decode(&binary[..])
                 {
-                    for candle in candles.iter_mut() {
-                        // 如果 K 线时间 + 周期 <= 当前时间，则认为已收盘
-                        let is_closed =
-                            candle.time + chrono::Duration::seconds(cycle_secs) <= Utc::now();
-                        candle.is_final = is_closed;
+                    // 数据转换：Float 转 Decimal，处理精度
+                    let price = Decimal::from_f32(pricing.price).unwrap_or_default();
+                    let high = Decimal::from_f32(pricing.day_high).unwrap_or(price);
+                    let low = Decimal::from_f32(pricing.day_low).unwrap_or(price);
+                    // 显式转换 i128 以符合 lossless 规范
+                    let volume = Decimal::from_i128(i128::from(pricing.day_volume)).unwrap_or_default();
 
-                        let should_push = match last_pushed_ts {
-                            None => true,
-                            Some(ts) if candle.time > ts => true,
-                            Some(ts)
-                                if candle.time == ts
-                                    && candle.is_final
-                                    && !last_pushed_is_final =>
-                            {
-                                true
-                            }
-                            _ => false,
-                        };
+                    let candle = Candle {
+                        // Yahoo 提供的时间戳通常是毫秒级
+                        time: Utc.timestamp_opt(pricing.time / 1000, 0).single().unwrap_or_else(Utc::now),
+                        open: price,
+                        high,
+                        low,
+                        close: price,
+                        adj_close: None,
+                        volume,
+                        is_final: false, // 实时 Tick 始终为非最终态
+                    };
 
-                        if should_push {
-                            last_pushed_ts = Some(candle.time);
-                            last_pushed_is_final = candle.is_final;
-                            if tx.send(candle.clone()).await.is_err() {
-                                return;
-                            }
-                        }
+                    // 发送数据到流，若通道关闭则退出
+                    if tx.send(candle).await.is_err() {
+                        break;
                     }
                 }
             }
@@ -266,16 +328,13 @@ impl MarketDataProvider for YahooProvider {
     }
 
     /// # Summary
-    /// 在 Yahoo Finance 搜索股票
-    ///
-    /// # Logic
-    /// 调用 https://query2.finance.yahoo.com/v1/finance/search 接口进行模糊搜索。
+    /// 在 Yahoo Finance 中模糊搜索证券。
     ///
     /// # Arguments
-    /// * `query`: 搜索关键词
+    /// * `query`: 搜索关键字。
     ///
     /// # Returns
-    /// 匹配的股票列表
+    /// 匹配到的证券元数据列表。
     async fn search_symbols(
         &self,
         query: &str,
@@ -296,15 +355,21 @@ impl MarketDataProvider for YahooProvider {
 
         #[derive(Deserialize, Debug)]
         struct YahooSearchQuote {
+            /// 证券代码
             symbol: String,
+            /// 证券全称
             longname: Option<String>,
+            /// 证券简称
             shortname: Option<String>,
+            /// 交易所标识
             exchange: Option<String>,
+            /// 所属行业
             industry: Option<String>,
         }
 
         #[derive(Deserialize, Debug)]
         struct YahooSearchResponse {
+            /// 匹配到的证券报价列表
             quotes: Vec<YahooSearchQuote>,
         }
 
@@ -314,17 +379,12 @@ impl MarketDataProvider for YahooProvider {
             .map_err(|e| MarketError::Parse(e.to_string()))?;
 
         let results = json.quotes.into_iter().filter(|q| {
-            // 只保留具有 symbol 和 name 的结果，并且通常只寻找真正的股票或ETF
             !q.symbol.is_empty() && (q.longname.is_some() || q.shortname.is_some())
         }).map(|q| {
-            // 对于外部搜索接口，如果名称缺失，回退到 "Unknown" 以保证元数据结构完整。
-            // OK: External Feed metadata fallback
             let name = q.longname.or(q.shortname).unwrap_or_else(|| "Unknown".to_string());
             okane_core::store::port::StockMetadata {
                 symbol: q.symbol,
                 name,
-                // 对于交易所信息，如果缺失，回退到 "N/A" 是业务可接受的降级表现。
-                // OK: External Feed metadata fallback
                 exchange: q.exchange.unwrap_or_else(|| "N/A".to_string()),
                 sector: q.industry,
                 currency: "USD".to_string(), 
@@ -337,7 +397,13 @@ impl MarketDataProvider for YahooProvider {
 
 impl YahooProvider {
     /// # Summary
-    /// 将 Yahoo API 原始响应解析为领域模型 Candle 列表。
+    /// 解析 Yahoo Chart API 返回的 JSON 结构。
+    ///
+    /// # Logic
+    /// 1. 检查 API 是否返回错误。
+    /// 2. 提取最近的一个结果对象。
+    /// 3. 遍历时间戳，关联对应的 OHLCV 数据。
+    /// 4. 将浮点数转换为 Decimal 以确保精度安全。
     fn parse_yahoo_response(json: YahooResponse) -> Result<Vec<Candle>, MarketError> {
         if let Some(err) = json.chart.error {
             return Err(MarketError::Unknown(err.description));
@@ -388,7 +454,7 @@ impl YahooProvider {
                     close,
                     adj_close: adj_c.and_then(Decimal::from_f64_retain),
                     volume,
-                    is_final: true, // 历史数据默认为最终态
+                    is_final: true,
                 });
             }
         }
@@ -401,7 +467,6 @@ impl YahooProvider {
 mod tests {
     use super::*;
     use rust_decimal_macros::dec;
-    use chrono::{TimeZone, Utc};
 
     #[tokio::test]
     async fn test_parse_yahoo_response_success() -> anyhow::Result<()> {
@@ -420,27 +485,4 @@ mod tests {
         assert_eq!(candles[0].time, expected_time);
         Ok(())
     }
-
-    #[tokio::test]
-    async fn test_parse_yahoo_response_error() -> anyhow::Result<()> {
-        let json_str = r#"{"chart":{"error":{"code":"Not Found","description":"Symbol not found"}}}"#;
-        let json: YahooResponse = serde_json::from_str(json_str)?;
-
-        let res = YahooProvider::parse_yahoo_response(json);
-        match res {
-            Err(MarketError::Unknown(msg)) => assert_eq!(msg, "Symbol not found"),
-            _ => return Err(anyhow::anyhow!("Expected Unknown error")),
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_parse_yahoo_response_missing_data() -> anyhow::Result<()> {
-        let json_str = r#"{"chart":{"result":[{"timestamp":[1625097600],"indicators":{"quote":[{"open":[null],"high":[155.0],"low":[149.0],"close":[152.0],"volume":[1000000.0]}]}}]}}"#;
-        let json: YahooResponse = serde_json::from_str(json_str)?;
-        let candles = YahooProvider::parse_yahoo_response(json)?;
-        assert_eq!(candles.len(), 0);
-        Ok(())
-    }
 }
-

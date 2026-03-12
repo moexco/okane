@@ -169,7 +169,6 @@ pub trait MarketDataProvider: Send + Sync {
     async fn subscribe_candles(
         &self,
         stock: &StockIdentity,
-        timeframe: TimeFrame,
     ) -> Result<CandleStream, MarketError>;
 
     /// # Summary

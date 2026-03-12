@@ -46,14 +46,14 @@ async fn test_yahoo_real_fetch() -> Result<(), Box<dyn std::error::Error>> {
 async fn test_yahoo_stream_subscribe() -> Result<(), Box<dyn std::error::Error>> {
     let provider = YahooProvider::new()?;
     let stock = Stock {
-        symbol: "AAPL".to_string(),
+        symbol: "BTC-USD".to_string(),
         exchange: None,
     };
 
-    let mut stream = provider.subscribe_candles(&stock, TimeFrame::Day1).await?;
+    let mut stream = provider.subscribe_candles(&stock).await?;
 
-    // 初始订阅后，内部的第一个 tick 会立即执行一次获取
-    let first_item = timeout(Duration::from_secs(30), stream.next()).await?;
+    // 初始订阅后，WS 连接并等待数据
+    let first_item = timeout(Duration::from_secs(60), stream.next()).await?;
     let candle = first_item.ok_or("流已关闭且未收到数据")?;
 
     assert!(candle.close > rust_decimal::Decimal::ZERO);
