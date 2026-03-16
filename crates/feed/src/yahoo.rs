@@ -17,6 +17,7 @@ use tokio;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
+use tracing;
 
 /// # Summary
 /// Yahoo Finance 实时价格数据 Protobuf 结构。
@@ -32,7 +33,7 @@ pub struct PricingData {
     /// 当前最新成交价
     #[prost(float, tag = "2")]
     pub price: f32,
-    /// 最后成交时间戳 (毫秒)
+    /// 最后成交时间戳 (通常为毫秒)
     #[prost(int64, tag = "3")]
     pub time: i64,
     /// 货币单位
@@ -65,9 +66,15 @@ pub struct PricingData {
     /// 证券简称
     #[prost(string, tag = "13")]
     pub short_name: String,
-    /// 最后单笔成交量
+    /// 到期日 (用于期权/期货)
     #[prost(int64, tag = "14")]
-    pub last_size: i64,
+    pub expire_date: i64,
+    /// 开盘价
+    #[prost(float, tag = "15")]
+    pub open_price: f32,
+    /// 昨收价
+    #[prost(float, tag = "16")]
+    pub previous_close: f32,
 }
 
 /// # Summary
@@ -108,7 +115,7 @@ impl YahooProvider {
                 .timeout(Duration::from_secs(10))
                 .default_headers(headers)
                 .build()
-                .map_err(|e| MarketError::Network(format!("Failed to build Yahoo client: {}", e)))?,
+                .map_err(|e| MarketError::Network(format!("failed to build yahoo client: {}", e)))?,
         })
     }
 }
@@ -233,7 +240,7 @@ impl MarketDataProvider for YahooProvider {
             ])
             .send()
             .await
-            .map_err(|e| MarketError::Network(e.to_string()))?;
+            .map_err(|e| MarketError::Network(format!("failed to fetch yahoo history: {}", e)))?;
 
         if !resp.status().is_success() {
             return Err(MarketError::Network(format!("HTTP {}", resp.status())));
@@ -258,7 +265,6 @@ impl MarketDataProvider for YahooProvider {
     ///
     /// # Arguments
     /// * `stock`: 证券实体。
-    /// * `_timeframe`: 周期（WebSocket 提供实时 Tick，不直接按周期聚合）。
     ///
     /// # Returns
     /// 成功返回异步 K 线流 `CandleStream`，失败返回 `MarketError`。
@@ -271,56 +277,132 @@ impl MarketDataProvider for YahooProvider {
 
         tokio::spawn(async move {
             let url = "wss://streamer.finance.yahoo.com/";
-            
-            // 建立连接
-            let (mut ws_stream, _) = match connect_async(url).await {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("Failed to connect to Yahoo WS: {}", e);
-                    return;
-                }
-            };
+            let mut backoff = Duration::from_secs(1);
+            let max_backoff = Duration::from_secs(60);
 
-            // 发送订阅消息
-            let sub_msg = serde_json::json!({
-                "subscribe": [symbol]
-            });
+            loop {
+                tracing::info!("connecting to yahoo ws for {}...", symbol);
+                
+                let conn_res = connect_async(url).await;
+                let (mut ws_stream, _) = match conn_res {
+                    Ok(s) => {
+                        backoff = Duration::from_secs(1); // 连接成功，重置退避
+                        s
+                    },
+                    Err(e) => {
+                        let err_msg = format!("failed to connect to yahoo ws: {}", e);
+                        tracing::error!("{}", err_msg);
+                        if tx.send(Err(MarketError::Network(err_msg))).await.is_err() {
+                            break;
+                        }
+                        tokio::time::sleep(backoff).await;
+                        backoff = std::cmp::min(backoff * 2, max_backoff);
+                        continue;
+                    }
+                };
 
-            if ws_stream.send(WsMessage::Text(sub_msg.to_string().into())).await.is_err() {
-                return;
-            }
-
-            // 监听消息流
-            while let Some(msg) = ws_stream.next().await {
-                // 使用 let_chains 语法精简结构
-                if let Ok(WsMessage::Text(text)) = msg
-                    && let Ok(binary) = base64::engine::general_purpose::STANDARD.decode(text.as_bytes())
-                    && let Ok(pricing) = PricingData::decode(&binary[..])
-                {
-                    // 数据转换：Float 转 Decimal，处理精度
-                    let price = Decimal::from_f32(pricing.price).unwrap_or_default();
-                    let high = Decimal::from_f32(pricing.day_high).unwrap_or(price);
-                    let low = Decimal::from_f32(pricing.day_low).unwrap_or(price);
-                    // 显式转换 i128 以符合 lossless 规范
-                    let volume = Decimal::from_i128(i128::from(pricing.day_volume)).unwrap_or_default();
-
-                    let candle = Candle {
-                        // Yahoo 提供的时间戳通常是毫秒级
-                        time: Utc.timestamp_opt(pricing.time / 1000, 0).single().unwrap_or_else(Utc::now),
-                        open: price,
-                        high,
-                        low,
-                        close: price,
-                        adj_close: None,
-                        volume,
-                        is_final: false, // 实时 Tick 始终为非最终态
-                    };
-
-                    // 发送数据到流，若通道关闭则退出
-                    if tx.send(candle).await.is_err() {
+                // 发送订阅消息
+                let sub_msg = serde_json::json!({ "subscribe": [symbol] });
+                if let Err(e) = ws_stream.send(WsMessage::Text(sub_msg.to_string().into())).await {
+                    let err_msg = format!("failed to send subscription: {}", e);
+                    tracing::error!("{}", err_msg);
+                    if tx.send(Err(MarketError::Network(err_msg))).await.is_err() {
                         break;
                     }
+                    tokio::time::sleep(backoff).await;
+                    continue;
                 }
+
+                // 监听消息流
+                while let Some(msg) = ws_stream.next().await {
+                    match msg {
+                        Ok(WsMessage::Text(text)) => {
+                            let binary = match base64::engine::general_purpose::STANDARD.decode(text.as_bytes()) {
+                                Ok(b) => b,
+                                Err(e) => {
+                                    tracing::warn!("failed to decode base64: {}", e);
+                                    continue;
+                                }
+                            };
+
+                            let pricing = match PricingData::decode(&binary[..]) {
+                                Ok(p) => p,
+                                Err(e) => {
+                                    tracing::warn!("failed to decode protobuf: {}", e);
+                                    continue;
+                                }
+                            };
+
+                            // 数据转换
+                            let Some(price) = Decimal::from_f32(pricing.price) else {
+                                tracing::warn!("yahoo ws: invalid price: {}", pricing.price);
+                                continue;
+                            };
+
+                            // 严禁掩盖错误：若高低价缺失或为 0 (Protobuf 默认值)，判定数据不完整，跳过。
+                            let high = Decimal::from_f32(pricing.day_high).filter(|d| !d.is_zero());
+                            let low = Decimal::from_f32(pricing.day_low).filter(|d| !d.is_zero());
+                            
+                            let (high, low) = if let (Some(h), Some(l)) = (high, low) {
+                                (h, l)
+                            } else {
+                                tracing::warn!("yahoo ws: incomplete ohlc data (high: {:?}, low: {:?}) for {}", high, low, symbol);
+                                continue;
+                            };
+
+                            // 显式转换 i128
+                            let Some(volume) = Decimal::from_i128(i128::from(pricing.day_volume)) else {
+                                tracing::warn!("yahoo ws: invalid volume: {}", pricing.day_volume);
+                                continue;
+                            };
+
+                            // 时间戳修正逻辑：
+                            // Yahoo 的 time 字段 (Tag 3) 有时会返回过期或异常值。
+                            // 优先使用 time，但如果 time 高于当前时间太久或为 0，则考虑 skip。
+                            let raw_ts = pricing.time;
+                            // 校验是否为毫秒（Unixtime 10^12 级别为 ms, 10^9 为 s）
+                            let ts_sec = if raw_ts > 10_000_000_000 { raw_ts / 1000 } else { raw_ts };
+                            
+                            let time = match Utc.timestamp_opt(ts_sec, 0).single() {
+                                Some(t) => {
+                                    // 2028 Bug 检查：如果时间在未来 1 年以上，判定为异常数据
+                                    if t.timestamp() > Utc::now().timestamp() + 31536000 {
+                                        tracing::error!("yahoo ws: suspicious timestamp (2028 bug?): {} for {}", t, symbol);
+                                        continue;
+                                    }
+                                    t
+                                },
+                                None => {
+                                    tracing::error!("yahoo ws: invalid timestamp: {}", raw_ts);
+                                    continue;
+                                }
+                            };
+
+                            let candle = Candle {
+                                time,
+                                open: price,
+                                high,
+                                low,
+                                close: price,
+                                adj_close: None,
+                                volume,
+                                is_final: false,
+                            };
+
+                            if tx.send(Ok(candle)).await.is_err() {
+                                return;
+                            }
+                        }
+                        Ok(_) => continue,
+                        Err(e) => {
+                            tracing::error!("ws connection error: {}", e);
+                            break; // 退出内部循环以触发外部重连
+                        }
+                    }
+                }
+                
+                tokio::time::sleep(backoff).await;
+                backoff = std::cmp::min(backoff * 2, max_backoff);
             }
         });
 
@@ -328,7 +410,10 @@ impl MarketDataProvider for YahooProvider {
     }
 
     /// # Summary
-    /// 在 Yahoo Finance 中模糊搜索证券。
+    /// # Logic
+    /// 1. 构建 Yahoo Finance 搜索 API URL。
+    /// 2. 发起 GET 请求并解析返回的证券列表。
+    /// 3. 过滤无效数据并保留最近的 10 条匹配项。
     ///
     /// # Arguments
     /// * `query`: 搜索关键字。
@@ -350,7 +435,7 @@ impl MarketDataProvider for YahooProvider {
             .map_err(|e| MarketError::Network(e.to_string()))?;
 
         if !resp.status().is_success() {
-            return Err(MarketError::Network(format!("HTTP {}", resp.status())));
+            return Err(MarketError::Network(format!("http {}", resp.status())));
         }
 
         #[derive(Deserialize, Debug)]
@@ -365,6 +450,8 @@ impl MarketDataProvider for YahooProvider {
             exchange: Option<String>,
             /// 所属行业
             industry: Option<String>,
+            /// 货币
+            currency: Option<String>,
         }
 
         #[derive(Deserialize, Debug)]
@@ -379,18 +466,24 @@ impl MarketDataProvider for YahooProvider {
             .map_err(|e| MarketError::Parse(e.to_string()))?;
 
         let results = json.quotes.into_iter().filter(|q| {
-            !q.symbol.is_empty() && (q.longname.is_some() || q.shortname.is_some())
-        }).map(|q| {
-            let name = q.longname.or(q.shortname).unwrap_or_else(|| "Unknown".to_string());
-            okane_core::store::port::StockMetadata {
+            // 严禁使用默认值：必须确保核心元数据完整
+            !q.symbol.is_empty() 
+            && (q.longname.is_some() || q.shortname.is_some())
+            && q.exchange.is_some()
+            && q.currency.is_some()
+        }).filter_map(|q| {
+            let name = q.longname.or(q.shortname)?;
+            let exchange = q.exchange?;
+            let currency = q.currency?;
+            
+            Some(okane_core::store::port::StockMetadata {
                 symbol: q.symbol,
                 name,
-                exchange: q.exchange.unwrap_or_else(|| "N/A".to_string()),
+                exchange,
                 sector: q.industry,
-                currency: "USD".to_string(), 
-            }
+                currency, 
+            })
         }).collect();
-
         Ok(results)
     }
 }
@@ -404,6 +497,12 @@ impl YahooProvider {
     /// 2. 提取最近的一个结果对象。
     /// 3. 遍历时间戳，关联对应的 OHLCV 数据。
     /// 4. 将浮点数转换为 Decimal 以确保精度安全。
+    ///
+    /// # Arguments
+    /// * `json`: Yahoo API 返回的 JSON 响应体。
+    ///
+    /// # Returns
+    /// 成功返回 K 线列表，失败返回 `MarketError`。
     fn parse_yahoo_response(json: YahooResponse) -> Result<Vec<Candle>, MarketError> {
         if let Some(err) = json.chart.error {
             return Err(MarketError::Unknown(err.description));
@@ -421,7 +520,7 @@ impl YahooProvider {
             .indicators
             .quote
             .first()
-            .ok_or(MarketError::Parse("No quote data".into()))?;
+            .ok_or(MarketError::Parse("no quote data".into()))?;
 
         let adj_close_list = result
             .indicators
@@ -440,14 +539,14 @@ impl YahooProvider {
             ) {
                 let adj_c = adj_close_list.and_then(|list| list.get(i)).and_then(|x| *x);
 
-                let open = Decimal::from_f64_retain(o).ok_or_else(|| MarketError::Parse(format!("Invalid open price: {}", o)))?;
-                let high = Decimal::from_f64_retain(h).ok_or_else(|| MarketError::Parse(format!("Invalid high price: {}", h)))?;
-                let low = Decimal::from_f64_retain(l).ok_or_else(|| MarketError::Parse(format!("Invalid low price: {}", l)))?;
-                let close = Decimal::from_f64_retain(c).ok_or_else(|| MarketError::Parse(format!("Invalid close price: {}", c)))?;
-                let volume = Decimal::from_f64_retain(v).ok_or_else(|| MarketError::Parse(format!("Invalid volume: {}", v)))?;
+                let open = Decimal::from_f64_retain(o).ok_or_else(|| MarketError::Parse(format!("invalid open price: {}", o)))?;
+                let high = Decimal::from_f64_retain(h).ok_or_else(|| MarketError::Parse(format!("invalid high price: {}", h)))?;
+                let low = Decimal::from_f64_retain(l).ok_or_else(|| MarketError::Parse(format!("invalid low price: {}", l)))?;
+                let close = Decimal::from_f64_retain(c).ok_or_else(|| MarketError::Parse(format!("invalid close price: {}", c)))?;
+                let volume = Decimal::from_f64_retain(v).ok_or_else(|| MarketError::Parse(format!("invalid volume: {}", v)))?;
 
                 candles.push(Candle {
-                    time: Utc.timestamp_opt(ts, 0).single().ok_or_else(|| MarketError::Parse("Invalid timestamp".into()))?,
+                    time: Utc.timestamp_opt(ts, 0).single().ok_or_else(|| MarketError::Parse("invalid timestamp".into()))?,
                     open,
                     high,
                     low,

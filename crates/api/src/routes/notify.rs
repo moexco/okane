@@ -1,10 +1,9 @@
-use axum::{extract::State, Json};
-
+use axum::extract::State;
 use crate::{
     error::ApiError,
     middleware::auth::CurrentUser,
     server::AppState,
-    types::{ApiResponse, NotifyConfigResponse, UpdateNotifyConfigRequest},
+    types::{ApiResponse, ApiResult, NotifyConfigResponse, UpdateNotifyConfigRequest},
 };
 
 /// 查询用户通知配置
@@ -23,15 +22,15 @@ use crate::{
 pub async fn get_notify_config(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
-) -> Result<Json<ApiResponse<NotifyConfigResponse>>, ApiError> {
+) -> Result<ApiResult<NotifyConfigResponse>, ApiError> {
     let config = state
         .system_store
         .get_user_notify_config(&user.id)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
-        .ok_or_else(|| ApiError::NotFound("Notify config not found".to_string()))?;
+        .ok_or_else(|| ApiError::NotFound("notify config not found".to_string()))?;
 
-    Ok(Json(ApiResponse::ok(NotifyConfigResponse::from(config))))
+    Ok(ApiResult(NotifyConfigResponse::from(config)))
 }
 
 /// 更新用户通知配置
@@ -52,8 +51,8 @@ pub async fn get_notify_config(
 pub async fn update_notify_config(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
-    Json(req): Json<UpdateNotifyConfigRequest>,
-) -> Result<Json<ApiResponse<String>>, ApiError> {
+    axum::Json(req): axum::Json<UpdateNotifyConfigRequest>,
+) -> Result<ApiResult<String>, ApiError> {
     let config: okane_core::config::UserNotifyConfig = req.into();
 
     let valid_channels = ["none", "telegram", "email"];
@@ -70,5 +69,5 @@ pub async fn update_notify_config(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    Ok(Json(ApiResponse::ok("通知配置已更新".to_string())))
+    Ok(ApiResult("通知配置已更新".to_string()))
 }

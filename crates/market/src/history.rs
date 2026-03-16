@@ -185,7 +185,7 @@ impl Stock for BacktestStock {
                     trade.tick(&symbol, &candle).await.ok();
 
                     let candle_time = candle.time;
-                    yield candle;
+                    yield Ok(candle);
                     current = candle_time + timeframe.duration();
                 }
             }
@@ -348,12 +348,12 @@ mod tests {
         // Tick through subscription
         let mut stream = stock.subscribe(TimeFrame::Minute1)?;
         
-        let c1 = stream.next().await.ok_or_else(|| anyhow::anyhow!("Stream ended too early"))?;
+        let c1 = stream.next().await.ok_or_else(|| anyhow::anyhow!("Stream ended too early"))??;
         assert_eq!(c1.time.timestamp(), 1000);
         assert_eq!(tp.now()?, c1.time);
         assert_eq!(stock.current_price()?, Some(dec!(100)));
         
-        let c2 = stream.next().await.ok_or_else(|| anyhow::anyhow!("Stream ended too early"))?;
+        let c2 = stream.next().await.ok_or_else(|| anyhow::anyhow!("Stream ended too early"))??;
         assert_eq!(c2.time.timestamp(), 1060);
         assert_eq!(tp.now()?, c2.time);
         assert_eq!(stock.current_price()?, Some(dec!(101)));

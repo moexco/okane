@@ -74,8 +74,9 @@ impl IndicatorService for MarketIndicatorService {
         }
 
         let mut ema = prices[0];
-        let multiplier = Decimal::from_f64(2.0 / (f64::from(period) + 1.0))
-            .ok_or_else(|| MarketError::Parse("Failed to calculate EMA multiplier".into()))?;
+        let period_plus_one = Decimal::from_u32(period.saturating_add(1))
+            .ok_or_else(|| MarketError::Parse("invalid period".into()))?;
+        let multiplier = Decimal::from(2) / period_plus_one;
 
         for price in &prices[1..] {
             ema = (*price - ema) * multiplier + ema;
@@ -152,7 +153,9 @@ mod tests {
         fn current_price(&self) -> Result<Option<Decimal>, MarketError> { Ok(None) }
         fn latest_candle(&self, _tf: TimeFrame) -> Result<Option<Candle>, MarketError> { Ok(None) }
         fn last_closed_candle(&self, _tf: TimeFrame) -> Result<Option<Candle>, MarketError> { Ok(None) }
-        fn subscribe(&self, _tf: TimeFrame) -> Result<CandleStream, MarketError> { Err(MarketError::Parse("Not implemented".into())) }
+        fn subscribe(&self, _tf: TimeFrame) -> Result<CandleStream, MarketError> { 
+            Err(MarketError::Parse("Not implemented".into())) 
+        }
         async fn fetch_history(&self, _tf: TimeFrame, _start: chrono::DateTime<Utc>, _end: chrono::DateTime<Utc>) -> Result<Vec<Candle>, MarketError> {
             Ok(self.history.clone())
         }

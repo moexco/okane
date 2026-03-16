@@ -54,7 +54,7 @@ async fn test_yahoo_stream_subscribe() -> Result<(), Box<dyn std::error::Error>>
 
     // 初始订阅后，WS 连接并等待数据
     let first_item = timeout(Duration::from_secs(60), stream.next()).await?;
-    let candle = first_item.ok_or("流已关闭且未收到数据")?;
+    let candle = first_item.ok_or("流已关闭且未收到数据")??;
 
     assert!(candle.close > rust_decimal::Decimal::ZERO);
     Ok(())

@@ -126,7 +126,7 @@ async fn test_deterministic_sid_and_global_cleanup() -> anyhow::Result<()> {
     let fail_elapsed = fail_start.elapsed();
     
     assert_eq!(fail_response.status(), StatusCode::UNAUTHORIZED);
-    assert!(fail_elapsed >= StdDuration::from_secs(10), "Login failure must take at least 10 seconds, took {:?}", fail_elapsed);
+    assert!(fail_elapsed < StdDuration::from_secs(2), "Login failure should be fast after removing DoS-prone latency injection, took {:?}", fail_elapsed);
     
     let fail_res: ApiErrorResponse = fail_response.json().await?;
     assert!(fail_res.latency_ms.is_some(), "Error response should also contain latency_ms");

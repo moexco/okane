@@ -40,7 +40,8 @@ async fn test_market_with_real_yahoo_feed() -> anyhow::Result<()> {
         tokio::time::timeout(tokio::time::Duration::from_secs(10), stream.next()).await;
 
     match first_candle {
-        Ok(Some(candle)) => {
+        Ok(Some(candle_res)) => {
+            let candle = candle_res?;
             assert!(candle.close > rust_decimal::Decimal::ZERO);
 
             // 6. 验证聚合根的同步快照是否已更新
@@ -82,8 +83,8 @@ async fn test_market_broadcast_with_real_feed() -> anyhow::Result<()> {
         assert!(res_a.is_some(), "Stream A should receive data");
         assert!(res_b.is_some(), "Stream B should receive data");
 
-        let ca = res_a.ok_or_else(|| anyhow::anyhow!("A none"))?;
-        let cb = res_b.ok_or_else(|| anyhow::anyhow!("B none"))?;
+        let ca = res_a.ok_or_else(|| anyhow::anyhow!("A none"))??;
+        let cb = res_b.ok_or_else(|| anyhow::anyhow!("B none"))??;
         assert_eq!(
             ca.time, cb.time,
             "Both streams should receive the same candle"

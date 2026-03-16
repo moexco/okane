@@ -4,10 +4,9 @@ use reqwest::StatusCode;
 use okane_api::types::{
     ApiResponse, LoginRequest, LoginResponse,
     CreateUserRequest, StrategyResponse, StartStrategyRequest, SaveStrategySourceRequest,
-    AlgoOrderResponse, OrderResponse,
+    AlgoOrderResponse, OrderResponse, WatchlistRequest,
 };
 use base64::Engine;
-use okane_api::routes::watchlist::WatchlistRequest;
 use common::spawn_test_server;
 use anyhow::Context;
 
@@ -275,15 +274,15 @@ async fn test_idor_view_others_orders() -> anyhow::Result<()> {
 
     // 1. 受害者自己应该能看到（正向基准）
     let res = assert_get!(&client, format!("{}/api/v1/user/orders?account_id=victim_acc", base_url), Some(&victim_token), StatusCode::OK);
-    let orders = res.json::<ApiResponse<Vec<OrderResponse>>>().await?.data.context("data null")?;
+    let orders_page = res.json::<ApiResponse<okane_api::types::Page<OrderResponse>>>().await?.data.context("data null")?;
     
     // 2. 攻击者查看受害者订单（越权测试）
     assert_get!(&client, format!("{}/api/v1/user/orders?account_id=victim_acc", base_url), Some(&attacker_token), StatusCode::FORBIDDEN);
     
     // 3. 闭环验证：受害者数据未被泄露或篡改
     let res = assert_get!(&client, format!("{}/api/v1/user/orders?account_id=victim_acc", base_url), Some(&victim_token), StatusCode::OK);
-    let orders_post = res.json::<ApiResponse<Vec<OrderResponse>>>().await?.data.context("data null")?;
-    assert_eq!(orders.len(), orders_post.len());
+    let orders_post_page = res.json::<ApiResponse<okane_api::types::Page<OrderResponse>>>().await?.data.context("data null")?;
+    assert_eq!(orders_page.items.len(), orders_post_page.items.len());
     Ok(())
 }
 
@@ -295,8 +294,8 @@ async fn test_strategy_lifecycle_gap_coverage() -> anyhow::Result<()> {
 
     // 1. List strategies (initially empty)
     let res = assert_get!(&client, format!("{}/api/v1/user/strategies", base_url), Some(&token), StatusCode::OK);
-    let list = res.json::<ApiResponse<Vec<StrategyResponse>>>().await?.data.context("data null")?;
-    assert!(list.is_empty());
+    let list_page = res.json::<ApiResponse<okane_api::types::Page<StrategyResponse>>>().await?.data.context("data null")?;
+    assert!(list_page.items.is_empty());
 
     // 2. Deploy a strategy
     let source_b64 = base64::prelude::BASE64_STANDARD.encode("print('hello')");
@@ -414,8 +413,8 @@ async fn test_idor_deploy_strategy_others_account() -> anyhow::Result<()> {
 
     // Side-Effect Verification: 验证受害者的策略列表依然为空，攻击者的脏逻辑未落盘
     let res = assert_get!(&client, format!("{}/api/v1/user/strategies", base_url), Some(&admin_token), StatusCode::OK);
-    let list = res.json::<ApiResponse<Vec<StrategyResponse>>>().await?.data.context("data null")?;
-    assert!(list.is_empty(), "Victim's strategy list should remain empty after blocked IDOR attempt");
+    let list_page = res.json::<ApiResponse<okane_api::types::Page<StrategyResponse>>>().await?.data.context("data null")?;
+    assert!(list_page.items.is_empty(), "Victim's strategy list should remain empty after blocked IDOR attempt");
 
     Ok(())
 }
@@ -446,8 +445,8 @@ async fn test_trade_place_order_idor() -> anyhow::Result<()> {
 
     // Side-Effect Verification: 受害者的订单列表应保持为空（或未增加）
     let res = assert_get!(&client, format!("{}/api/v1/user/orders?account_id=trader_01", base_url), Some(&token), StatusCode::OK);
-    let orders = res.json::<ApiResponse<Vec<OrderResponse>>>().await?.data.context("data null")?;
-    assert!(orders.is_empty(), "Victim orders should be empty after blocked IDOR attempt");
+    let orders_page = res.json::<ApiResponse<okane_api::types::Page<OrderResponse>>>().await?.data.context("data null")?;
+    assert!(orders_page.items.is_empty(), "Victim orders should be empty after blocked IDOR attempt");
     
     Ok(())
 }
@@ -628,8 +627,8 @@ async fn test_trade_cancel_order_idor() -> anyhow::Result<()> {
 
     // 闭环验证：验证订单依然是 Pending 状态，未被删除
     let res = assert_get!(&client, format!("{}/api/v1/user/orders?account_id=trader_01", base_url), Some(&admin_token), StatusCode::OK);
-    let orders = res.json::<ApiResponse<Vec<OrderResponse>>>().await?.data.context("data null")?;
-    assert!(orders.iter().any(|o| o.id == order_id), "Order should still exist after failed attacker IDOR");
+    let orders_page = res.json::<ApiResponse<okane_api::types::Page<OrderResponse>>>().await?.data.context("data null")?;
+    assert!(orders_page.items.iter().any(|o| o.id == order_id), "Order should still exist after failed attacker IDOR");
     Ok(())
 }
 
@@ -761,8 +760,8 @@ async fn test_trade_get_orders_not_found() -> anyhow::Result<()> {
     system_store.bind_account("admin", "ghost").await?;
     // For a list resource, empty result is 200 OK
     let res = assert_get!(&client, format!("{}/api/v1/user/orders?account_id=ghost", base_url), Some(&token), StatusCode::OK);
-    let data = res.json::<ApiResponse<Vec<okane_api::types::OrderResponse>>>().await?.data.context("data null")?;
-    assert!(data.is_empty());
+    let data_page = res.json::<ApiResponse<okane_api::types::Page<okane_api::types::OrderResponse>>>().await?.data.context("data null")?;
+    assert!(data_page.items.is_empty());
     Ok(())
 }
 
@@ -779,8 +778,8 @@ async fn test_trade_place_order_none_price() -> anyhow::Result<()> {
 
     // Side-Effect Verification: 验证订单已落盘且状态为 Filled (由于是 Mock 环境通常会立即成交) 或存在于列表
     let res = assert_get!(&client, format!("{}/api/v1/user/orders?account_id=trader_01", base_url), Some(&token), StatusCode::OK);
-    let orders = res.json::<ApiResponse<Vec<OrderResponse>>>().await?.data.context("data null")?;
-    assert!(orders.iter().any(|o| o.symbol == "AAPL" && o.volume == "1"), "Market order should be visible in order list");
+    let orders_page = res.json::<ApiResponse<okane_api::types::Page<OrderResponse>>>().await?.data.context("data null")?;
+    assert!(orders_page.items.iter().any(|o| o.symbol == "AAPL" && o.volume == "1"), "Market order should be visible in order list");
     
     Ok(())
 }

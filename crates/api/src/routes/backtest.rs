@@ -4,13 +4,12 @@
 //! 对应 UI 原型中的 Backtest 功能模块。
 
 use axum::extract::State;
-use axum::Json;
 use chrono::{DateTime, Utc};
 
 use crate::error::ApiError;
 use crate::middleware::auth::CurrentUser;
 use crate::server::AppState;
-use crate::types::{ApiResponse, BacktestRequest, BacktestResponse};
+use crate::types::{ApiResponse, ApiResult, BacktestRequest, BacktestResponse};
 
 // ============================================================
 //  Handler 实现
@@ -34,8 +33,8 @@ use crate::types::{ApiResponse, BacktestRequest, BacktestResponse};
 pub async fn run_backtest(
     State(state): State<AppState>,
     CurrentUser(_user): CurrentUser,
-    Json(req): Json<BacktestRequest>,
-) -> Result<Json<ApiResponse<BacktestResponse>>, ApiError> {
+    axum::Json(req): axum::Json<BacktestRequest>,
+) -> Result<ApiResult<BacktestResponse>, ApiError> {
     use okane_core::common::TimeFrame;
     use okane_core::strategy::entity::EngineType;
     use rust_decimal::Decimal;
@@ -55,27 +54,27 @@ pub async fn run_backtest(
 
     // 解析起止时间
     let start_time = DateTime::parse_from_rfc3339(&req.start)
-        .map_err(|e| ApiError::BadRequest(format!("Invalid start time format: {}", e)))?
+        .map_err(|e| ApiError::BadRequest(format!("invalid start time format: {}", e)))?
         .with_timezone(&Utc);
 
     let end_time = DateTime::parse_from_rfc3339(&req.end)
-        .map_err(|e| ApiError::BadRequest(format!("Invalid end time format: {}", e)))?
+        .map_err(|e| ApiError::BadRequest(format!("invalid end time format: {}", e)))?
         .with_timezone(&Utc);
 
     // 校验时间范围
     if start_time >= end_time {
-        return Err(ApiError::BadRequest("Start time must be before end time".to_string()));
+        return Err(ApiError::BadRequest("start time must be before end time".to_string()));
     }
 
     // 解析初始资金
     let initial_balance = Decimal::from_str(&req.initial_balance)
-        .map_err(|_| ApiError::BadRequest("Invalid initial balance value".to_string()))?;
+        .map_err(|_| ApiError::BadRequest("invalid initial balance value".to_string()))?;
 
     // Base64 解码源码
     use base64::prelude::{Engine as _, BASE64_STANDARD};
     let source = BASE64_STANDARD
         .decode(&req.source_base64)
-        .map_err(|e| ApiError::BadRequest(format!("Base64 decode failed: {}", e)))?;
+        .map_err(|e| ApiError::BadRequest(format!("base64 decode failed: {}", e)))?;
 
     // 构建 Runner 请求
     let run_req = okane_manager::backtest::BacktestRequest {
@@ -93,7 +92,7 @@ pub async fn run_backtest(
         .backtest_runner
         .run(run_req)
         .await
-        .map_err(|e| ApiError::Internal(format!("Backtest execution failed: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("backtest execution failed: {}", e)))?;
 
     // 转换结果为 Response
     let ret = BacktestResponse {
@@ -102,5 +101,5 @@ pub async fn run_backtest(
         candle_count: result.candle_count,
     };
 
-    Ok(Json(ApiResponse::ok(ret)))
+    Ok(ApiResult(ret))
 }

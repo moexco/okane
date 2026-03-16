@@ -32,7 +32,7 @@ pub async fn auth_middleware(
         }
         None => {
             // 如果 Header 缺失，尝试从 Query 参数解析 (适配浏览器原生 WebSocket)
-            let query_string = req.uri().query().unwrap_or_default();
+            let query_string = req.uri().query().ok_or_else(|| ApiError::Unauthorized("Missing Authorization header or query string".into()))?;
             let mut token = None;
             for pair in query_string.split('&') {
                 let mut parts = pair.split('=');

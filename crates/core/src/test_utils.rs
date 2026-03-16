@@ -91,7 +91,7 @@ impl crate::market::port::Stock for MockStock {
         let s = async_stream::stream! {
             let mut rx = rx.lock().await;
             while let Some(candle) = rx.recv().await {
-                yield candle;
+                yield Ok(candle);
             }
         };
         Ok(box_pin_stream(s))
@@ -107,7 +107,7 @@ impl crate::market::port::Stock for MockStock {
     }
 }
 
-fn box_pin_stream(s: impl futures::Stream<Item = Candle> + Send + 'static) -> CandleStream {
+fn box_pin_stream(s: impl futures::Stream<Item = Result<Candle, MarketError>> + Send + 'static) -> CandleStream {
     Box::pin(s)
 }
 
@@ -147,7 +147,7 @@ impl MarketDataProvider for MockMarketDataProvider {
         let s = async_stream::stream! {
             let mut rx = rx.lock().await;
             while let Some(candle) = rx.recv().await {
-                yield candle;
+                yield Ok(candle);
             }
         };
         Ok(Box::pin(s))
@@ -202,8 +202,8 @@ impl MarketStore for MemMarketStore {
         // 内存存储 Mock 逻辑：如果 key 不存在，返回空列表是合规的初始化状态。
         // OK: Mock store fallback
         let candles = self.db.get(&(stock.symbol.clone(), timeframe))
-            .map(|v| v.clone())
-            .unwrap_or_default();
+            .ok_or(StoreError::NotFound)?
+            .clone();
         Ok(candles.into_iter().filter(|c| c.time >= start && c.time <= end).collect())
     }
 }

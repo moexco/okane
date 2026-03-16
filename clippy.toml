@@ -1,0 +1,4 @@
+disallowed-methods = [
+    "core::option::Option::unwrap_or_default",
+    "core::result::Result::unwrap_or_default"
+]

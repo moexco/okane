@@ -138,21 +138,29 @@ impl JsEngine {
         let mut stream = self.base.subscribe(symbol, timeframe).await?;
 
         // 核心执行循环
-        while let Some(candle) = stream.next().await {
-            // 序列化 K 线数据
-            let candle_json = serde_json::to_string(&candle)
-                .map_err(|_| EngineError::Plugin("log set failed".to_string()))?;
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(candle) => {
+                    // 序列化 K 线数据
+                    let candle_json = serde_json::to_string(&candle)
+                        .map_err(|e| EngineError::Plugin(format!("candle serialization failed: {}", e)))?;
 
-            // 调用 JS 的 onCandle 函数 (void — 策略通过 host.* API 直接执行动作)
-            let candle_json_clone = candle_json.clone();
-            let result: Result<(), EngineError> = async_with!(ctx => |ctx| {
-                Self::call_on_candle(&ctx, &candle_json_clone)
-            })
-            .await;
+                    // 调用 JS 的 onCandle 函数 (void — 策略通过 host.* API 直接执行动作)
+                    let candle_json_clone = candle_json.clone();
+                    let exec_result: Result<(), EngineError> = async_with!(ctx => |ctx| {
+                        Self::call_on_candle(&ctx, &candle_json_clone)
+                    })
+                    .await;
 
-            if let Err(e) = result {
-                error!("JsEngine: Strategy execution failed for {}: {}", symbol, e);
-                return Err(e);
+                    if let Err(e) = exec_result {
+                        error!("JsEngine: Strategy execution failed for {}: {}", symbol, e);
+                        return Err(e);
+                    }
+                }
+                Err(e) => {
+                    error!("JsEngine: Stream error for {}: {}", symbol, e);
+                    // 可以在后续扩展中加入 host.onError 回调通知策略
+                }
             }
         }
 

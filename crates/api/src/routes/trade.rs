@@ -1,4 +1,3 @@
-use axum::Json;
 use axum::extract::{Path, Query, State};
 use serde::Deserialize;
 use utoipa::ToSchema;
@@ -8,7 +7,7 @@ use std::str::FromStr;
 
 use okane_core::trade::entity::{AccountId, Order, OrderDirection, OrderId, AlgoOrder, AlgoType};
 use crate::error::ApiError;
-use crate::types::{ApiResponse, OrderResponse, AlgoOrderResponse};
+use crate::types::{ApiResponse, ApiResult, OrderResponse, AlgoOrderResponse, Page};
 use crate::middleware::auth::CurrentUser;
 use crate::server::AppState;
 
@@ -33,7 +32,7 @@ pub struct GetOrdersQuery {
         ("offset" = Option<usize>, Query, description = "跳过的记录数，默认 0")
     ),
     responses(
-        (status = 200, description = "获取成功", body = ApiResponse<Vec<OrderResponse>>),
+        (status = 200, description = "获取成功", body = ApiResponse<Page<OrderResponse>>),
         (status = 500, description = "服务器内部错误")
     )
 )]
@@ -41,14 +40,14 @@ pub async fn get_orders(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Query(query): Query<GetOrdersQuery>,
-) -> Result<Json<ApiResponse<Vec<OrderResponse>>>, ApiError> {
+) -> Result<ApiResult<Page<OrderResponse>>, ApiError> {
     let account = AccountId(query.account_id);
     
     // IDOR Check
     let is_owner = state.system_store.verify_account_ownership(&user.id, &account.0).await
-        .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("database error: {}", e)))?;
     if !is_owner {
-        return Err(ApiError::Forbidden("Forbidden: Account does not belong to you".to_string()));
+        return Err(ApiError::Forbidden("forbidden: account does not belong to you".to_string()));
     }
 
     match state.trade_port.get_orders(&account).await {
@@ -56,20 +55,21 @@ pub async fn get_orders(
             // Sort by created_at descending (newest first)
             orders.sort_by_key(|b| std::cmp::Reverse(b.created_at));
             
-            // 分页参数遵循 REST API 协议默认值：如果不传，默认从第 0 条开始，每页返回 50 条。
-            // OK: Protocol default values
+            let total = orders.len();
             let offset = query.offset.unwrap_or(0);
-            let limit = query.limit.unwrap_or(50);
+            let limit = query.limit.unwrap_or(50).min(500);
             
             let paginated_orders: Vec<_> = orders.into_iter()
                 .skip(offset)
                 .take(limit)
                 .collect();
                 
-            let dtos = paginated_orders.into_iter().map(Into::into).collect();
-            Ok(Json(ApiResponse::ok(dtos)))
+            let items: Vec<OrderResponse> = paginated_orders.into_iter().map(Into::into).collect();
+            
+            // 使用标准的 Page 结构，包含在 data 字段内
+            Ok(ApiResult(Page::new(items, total, offset, limit)))
         }
-        Err(e) => Err(ApiError::Internal(format!("Trade error: {}", e))),
+        Err(e) => Err(ApiError::Internal(format!("trade error: {}", e))),
     }
 }
 
@@ -100,29 +100,29 @@ pub struct PlaceOrderRequest {
 pub async fn place_order(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
-    Json(req): Json<PlaceOrderRequest>,
-) -> Result<Json<ApiResponse<String>>, ApiError> {
+    axum::Json(req): axum::Json<PlaceOrderRequest>,
+) -> Result<ApiResult<String>, ApiError> {
     // IDOR Check
     let is_owner = state.system_store.verify_account_ownership(&user.id, &req.account_id).await
-        .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("database error: {}", e)))?;
     if !is_owner {
-        return Err(ApiError::Forbidden("Forbidden: Account does not belong to you".to_string()));
+        return Err(ApiError::Forbidden("forbidden: account does not belong to you".to_string()));
     }
 
     let direction = match req.direction.to_uppercase().as_str() {
         "BUY" => OrderDirection::Buy,
         "SELL" => OrderDirection::Sell,
-        _ => return Err(ApiError::BadRequest("Invalid direction, expected Buy or Sell".to_string())),
+        _ => return Err(ApiError::BadRequest("invalid direction, expected buy or sell".to_string())),
     };
     
     let volume = Decimal::from_str(&req.volume)
-        .map_err(|_| ApiError::BadRequest("Invalid volume precision".to_string()))?;
+        .map_err(|_| ApiError::BadRequest("invalid volume precision".to_string()))?;
     if volume <= Decimal::ZERO {
-        return Err(ApiError::BadRequest("Volume must be greater than zero".to_string()));
+        return Err(ApiError::BadRequest("volume must be greater than zero".to_string()));
     }
         
     let price = match req.price {
-        Some(p) => Some(Decimal::from_str(&p).map_err(|_| ApiError::BadRequest("Invalid price precision".to_string()))?),
+        Some(p) => Some(Decimal::from_str(&p).map_err(|_| ApiError::BadRequest("invalid price precision".to_string()))?),
         None => None,
     };
     
@@ -137,7 +137,7 @@ pub async fn place_order(
     );
 
     match state.trade_port.submit_order(order).await {
-        Ok(order_id) => Ok(Json(ApiResponse::ok(order_id.0))),
+        Ok(order_id) => Ok(ApiResult(order_id.0)),
         Err(e) => Err(ApiError::from(e)),
     }
 }
@@ -163,25 +163,25 @@ pub async fn cancel_order(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Path(order_id): Path<String>,
-) -> Result<Json<ApiResponse<String>>, ApiError> {
+) -> Result<ApiResult<String>, ApiError> {
     let order_id = OrderId(order_id);
     
     // 1. 获取订单以验证归属权
     let order = state.trade_port.get_order(&order_id)
         .await
-        .map_err(|e| ApiError::Internal(format!("Failed to fetch order: {}", e)))?
-        .ok_or_else(|| ApiError::NotFound("Order not found".to_string()))?;
+        .map_err(|e| ApiError::Internal(format!("failed to fetch order: {}", e)))?
+        .ok_or_else(|| ApiError::NotFound("order not found".to_string()))?;
 
     // 2. IDOR Check: Ensures the user owns the account associated with the order
     let is_owner = state.system_store.verify_account_ownership(&user.id, &order.account_id.0).await
-        .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("database error: {}", e)))?;
     if !is_owner {
         tracing::warn!("IDOR attempt: user {} tried to cancel order {} belonging to account {}", user.id, order.id.0, order.account_id.0);
-        return Err(ApiError::Forbidden("Forbidden: Order does not belong to you".to_string()));
+        return Err(ApiError::Forbidden("forbidden: order does not belong to you".to_string()));
     }
 
     match state.trade_port.cancel_order(order_id).await {
-        Ok(_) => Ok(Json(ApiResponse::ok("ok".to_string()))),
+        Ok(_) => Ok(ApiResult("ok".to_string())),
         Err(e) => Err(ApiError::from(e)),
     }
 }
@@ -209,12 +209,12 @@ pub struct SubmitAlgoRequest {
 pub async fn submit_algo_order(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
-    Json(req): Json<SubmitAlgoRequest>,
-) -> Result<Json<ApiResponse<String>>, ApiError> {
+    axum::Json(req): axum::Json<SubmitAlgoRequest>,
+) -> Result<ApiResult<String>, ApiError> {
     let is_owner = state.system_store.verify_account_ownership(&user.id, &req.account_id).await
-        .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("database error: {}", e)))?;
     if !is_owner {
-        return Err(ApiError::Forbidden("Forbidden".to_string()));
+        return Err(ApiError::Forbidden("forbidden".to_string()));
     }
 
     let algo = match req.algo_type.as_str() {
@@ -238,7 +238,7 @@ pub async fn submit_algo_order(
                 max_slippage: Decimal::ZERO,
             }
         },
-        _ => return Err(ApiError::BadRequest("Unsupported algo type".into())),
+        _ => return Err(ApiError::BadRequest("unsupported algo type".into())),
     };
 
     let order = AlgoOrder::new(
@@ -250,7 +250,7 @@ pub async fn submit_algo_order(
     );
 
     match state.algo_port.submit_algo_order(order).await {
-        Ok(id) => Ok(Json(ApiResponse::ok(id.0))),
+        Ok(id) => Ok(ApiResult(id.0)),
         Err(e) => Err(ApiError::from(e)),
     }
 }
@@ -272,18 +272,18 @@ pub async fn get_algo_orders(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Query(query): Query<GetOrdersQuery>,
-) -> Result<Json<ApiResponse<Vec<AlgoOrderResponse>>>, ApiError> {
+) -> Result<ApiResult<Vec<AlgoOrderResponse>>, ApiError> {
     let account = AccountId(query.account_id);
     let is_owner = state.system_store.verify_account_ownership(&user.id, &account.0).await
-        .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("database error: {}", e)))?;
     if !is_owner {
-        return Err(ApiError::Forbidden("Forbidden".to_string()));
+        return Err(ApiError::Forbidden("forbidden".to_string()));
     }
 
     match state.algo_port.get_algo_orders(&account).await {
         Ok(orders) => {
             let dtos = orders.into_iter().map(Into::into).collect();
-            Ok(Json(ApiResponse::ok(dtos)))
+            Ok(ApiResult(dtos))
         }
         Err(e) => Err(ApiError::from(e)),
     }
@@ -308,22 +308,22 @@ pub async fn cancel_algo_order(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Path(algo_id): Path<String>,
-) -> Result<Json<ApiResponse<String>>, ApiError> {
+) -> Result<ApiResult<String>, ApiError> {
     let order_id = OrderId(algo_id);
     
     // 权限检查
     let order = state.algo_port.get_algo_order(&order_id).await
-        .map_err(|e| ApiError::Internal(format!("Failed to fetch algo order: {}", e)))?
-        .ok_or_else(|| ApiError::NotFound("Algo order not found".to_string()))?;
+        .map_err(|e| ApiError::Internal(format!("failed to fetch algo order: {}", e)))?
+        .ok_or_else(|| ApiError::NotFound("algo order not found".to_string()))?;
 
     let is_owner = state.system_store.verify_account_ownership(&user.id, &order.account_id.0).await
-        .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("database error: {}", e)))?;
     if !is_owner {
-        return Err(ApiError::Forbidden("Forbidden".to_string()));
+        return Err(ApiError::Forbidden("forbidden".to_string()));
     }
 
     match state.algo_port.cancel_algo_order(&order_id).await {
-        Ok(_) => Ok(Json(ApiResponse::ok("ok".to_string()))),
+        Ok(_) => Ok(ApiResult("ok".to_string())),
         Err(e) => Err(ApiError::from(e)),
     }
 }
@@ -345,18 +345,18 @@ pub async fn get_positions(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Path(account_id): Path<String>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+) -> Result<ApiResult<serde_json::Value>, ApiError> {
     let account = AccountId(account_id);
     let is_owner = state.system_store.verify_account_ownership(&user.id, &account.0).await
-        .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("database error: {}", e)))?;
     if !is_owner {
-        return Err(ApiError::Forbidden("Forbidden".to_string()));
+        return Err(ApiError::Forbidden("forbidden".to_string()));
     }
 
     match state.trade_port.get_account(account).await {
         Ok(acc) => {
             // 返回持仓快照的 JSON 形式
-            Ok(Json(ApiResponse::ok(serde_json::to_value(acc.positions).map_err(|e| ApiError::Internal(e.to_string()))?)))
+            Ok(ApiResult(serde_json::to_value(acc.positions).map_err(|e| ApiError::Internal(e.to_string()))?))
         }
         Err(e) => Err(ApiError::from(e)),
     }

@@ -8,15 +8,15 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum StoreError {
     /// 数据库操作失败
-    #[error("Database error: {0}")]
+    #[error("database error: {0}")]
     Database(String),
     /// 记录未找到
-    #[error("Not found")]
+    #[error("not found")]
     NotFound,
     /// 未知或未分类的错误
-    #[error("Unknown error: {0}")]
+    #[error("unknown error: {0}")]
     Unknown(String),
     /// 初始化存储失败
-    #[error("Initialization error: {0}")]
+    #[error("initialization error: {0}")]
     InitError(String),
 }

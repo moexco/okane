@@ -151,7 +151,7 @@ async fn test_stock_subscribe() -> anyhow::Result<()> {
 
     let received = stream.next().await;
     assert!(received.is_some());
-    assert_eq!(received.ok_or_else(|| anyhow::anyhow!("Received null"))?.close, dec!(99.0));
+    assert_eq!(received.ok_or_else(|| anyhow::anyhow!("Received null"))??.close, dec!(99.0));
     Ok(())
 }
 

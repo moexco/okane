@@ -4,9 +4,8 @@
 //! 对应 UI 原型中 "Key Metrics" 顶部指标卡片区域的数据源。
 
 use axum::extract::{Path, State};
-use axum::Json;
 
-use crate::types::{AccountSnapshotResponse, ApiResponse, CreateAccountRequest};
+use crate::types::{ApiResponse, AccountSnapshotResponse, ApiResult, CreateAccountRequest};
 use crate::error::ApiError;
 use crate::middleware::auth::CurrentUser;
 use crate::server::AppState;
@@ -31,8 +30,8 @@ use std::str::FromStr;
 pub async fn register_account(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
-    Json(req): Json<CreateAccountRequest>,
-) -> Result<Json<ApiResponse<String>>, ApiError> {
+    axum::Json(req): axum::Json<CreateAccountRequest>,
+) -> Result<ApiResult<String>, ApiError> {
     // 1. 检查账号是否已存在
     if let Ok(Some(_)) = state.system_store.get_account_owner(&req.account_id).await {
         return Err(ApiError::BadRequest(format!("Account {} already exists and is owned by someone", req.account_id)));
@@ -54,7 +53,7 @@ pub async fn register_account(
         .map_err(|e| ApiError::Internal(format!("Failed to initialize trade account: {}", e)))?;
 
     tracing::info!("User {} created and bound account {}", user.id, req.account_id);
-    Ok(Json(ApiResponse::ok(req.account_id)))
+    Ok(ApiResult(req.account_id))
 }
 
 /// 列出当前用户拥有的所有金融账号
@@ -71,11 +70,11 @@ pub async fn register_account(
 pub async fn list_accounts(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
-) -> Result<Json<ApiResponse<Vec<String>>>, ApiError> {
+) -> Result<ApiResult<Vec<String>>, ApiError> {
     let accounts = state.system_store.get_user_accounts(&user.id).await
         .map_err(|e| ApiError::Internal(format!("Failed to list accounts: {}", e)))?;
     
-    Ok(Json(ApiResponse::ok(accounts)))
+    Ok(ApiResult(accounts))
 }
 
 /// 获取指定系统账户的资金与持仓快照
@@ -100,7 +99,7 @@ pub async fn get_account_snapshot(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     Path(account_id): Path<String>,
-) -> Result<Json<ApiResponse<AccountSnapshotResponse>>, ApiError> {
+) -> Result<ApiResult<AccountSnapshotResponse>, ApiError> {
     // IDOR Check: Ensures the user owns this account strictly via DB
     let is_owner = state.system_store.verify_account_ownership(&user.id, &account_id).await
         .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?;
@@ -115,5 +114,5 @@ pub async fn get_account_snapshot(
     // 利用 impl From<AccountSnapshot> for AccountSnapshotResponse 惯用转换
     let response: AccountSnapshotResponse = snapshot.into();
 
-    Ok(Json(ApiResponse::ok(response)))
+    Ok(ApiResult(response))
 }

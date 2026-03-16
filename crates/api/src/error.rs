@@ -4,55 +4,67 @@
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use thiserror::Error;
-
-use crate::types::ApiErrorResponse;
 
 /// API 层统一错误枚举
 #[derive(Error, Debug)]
 pub enum ApiError {
-    /// Unauthorized (401)
-    #[error("unauthorized: {0}")]
-    Unauthorized(String),
-
-    /// Forbidden (403)
-    #[error("forbidden: {0}")]
-    Forbidden(String),
-
-    /// Not Found (404)
-    #[error("not found: {0}")]
-    NotFound(String),
-
-    /// Bad Request (400)
+    // === 00: Common/System Errors (00XXX) ===
     #[error("bad request: {0}")]
     BadRequest(String),
 
-    /// Internal Error (500)
+    #[error("not found: {0}")]
+    NotFound(String),
+
     #[error("internal server error: {0}")]
     Internal(String),
+
+    // === 10: Auth & Identity Errors (10XXX) ===
+    #[error("unauthorized: {0}")]
+    Unauthorized(String),
+
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+}
+
+impl ApiError {
+    /// 获取 HTTP 状态码和业务错误码 (MMXXX)
+    pub fn codes(&self) -> (StatusCode, u32) {
+        match self {
+            // Common (00)
+            ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, 400),
+            ApiError::NotFound(_) => (StatusCode::NOT_FOUND, 404),
+            ApiError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, 500),
+
+            // Auth (10)
+            ApiError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, 10001),
+            ApiError::Forbidden(_) => (StatusCode::FORBIDDEN, 10003),
+        }
+    }
 }
 
 /// 将 `ApiError` 转换为 axum 的 HTTP 响应
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let (status, message) = match &self {
-            ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
-            ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
-            ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
-            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
-            ApiError::Internal(msg) => {
+        let (status, business_code) = self.codes();
+        let message = match &self {
+            ApiError::Internal(_) => {
                 // Internal error only logged, not leaked fully to client
-                tracing::error!("internal server error: {}", msg);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal server error".to_string(),
-                )
+                tracing::error!("internal server error: {}", self);
+                "internal server error".to_string()
             }
+            _ => self.to_string(),
         };
 
-        let body = Json(ApiErrorResponse::from_msg(message));
-        (status, body).into_response()
+        let mut res = status.into_response();
+        let marker = crate::types::ErrorMarker {
+            message,
+            status,
+            code: business_code,
+            latency_ms: None, // 彻底移除延迟逻辑，防止审计漏洞
+        };
+        res.extensions_mut().insert(std::sync::Arc::new(marker) as std::sync::Arc<dyn crate::types::ErasedResponse>);
+        res
     }
 }
 
@@ -64,10 +76,10 @@ impl From<okane_manager::strategy::ManagerError> for ApiError {
                 ApiError::NotFound(msg.clone())
             }
             okane_manager::strategy::ManagerError::Store(okane_core::store::error::StoreError::NotFound) => {
-                ApiError::NotFound("Not found".to_string())
+                ApiError::NotFound("not found".to_string())
             }
             okane_manager::strategy::ManagerError::AlreadyRunning(msg) => {
-                ApiError::BadRequest(format!("Strategy already running: {}", msg))
+                ApiError::BadRequest(format!("strategy already running: {}", msg))
             }
             _ => ApiError::Internal(err.to_string()),
         }

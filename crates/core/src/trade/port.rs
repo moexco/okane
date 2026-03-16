@@ -7,24 +7,24 @@ use thiserror::Error;
 /// 交易执行环节中可能发生的错误。
 #[derive(Error, Debug)]
 pub enum TradeError {
-    #[error("Account not found: {0}")]
+    #[error("account not found: {0}")]
     AccountNotFound(String),
-    #[error("Insufficient funds. Required: {required}, Actual: {actual}")]
+    #[error("insufficient funds. required: {required}, actual: {actual}")]
     InsufficientFunds {
         required: rust_decimal::Decimal,
         actual: rust_decimal::Decimal,
     },
-    #[error("Order not found or does not exist: {0}")]
+    #[error("order not found or does not exist: {0}")]
     OrderNotFound(String),
-    #[error("Order status does not allow this operation")]
+    #[error("order status does not allow this operation")]
     InvalidOrderStatus,
-    #[error("Broker integration failure: {0}")]
+    #[error("broker integration failure: {0}")]
     BrokerIntegrationError(String),
-    #[error("Internal system error: {0}")]
+    #[error("internal system error: {0}")]
     InternalError(String),
-    #[error("Algo order not found: {0}")]
+    #[error("algo order not found: {0}")]
     AlgoOrderNotFound(String),
-    #[error("Algo order protocol error: {0}")]
+    #[error("algo order protocol error: {0}")]
     AlgoOrderError(String),
 }
 

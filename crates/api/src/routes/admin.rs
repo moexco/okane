@@ -1,23 +1,9 @@
-//! # 管理员专有路由控制器
-//!
-//! 提供系统级别的用户管理、配置控制等能力。
-//! 对应的路由受 `auth_middleware` 和 `require_admin` 中间件验证保护。
-
-use axum::extract::State;
-use axum::Json;
-use chrono::Utc;
-
-use crate::types::{ApiResponse, CreateUserRequest, UserResponse};
+use crate::types::{ApiResponse, ApiResult, CreateUserRequest, UserResponse, UpdateSettingsRequest};
 use crate::error::ApiError;
 use crate::server::AppState;
 use okane_core::store::port::{User, UserRole};
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize, utoipa::ToSchema)]
-pub struct UpdateSettingsRequest {
-    pub setting_key: String,
-    pub setting_value: String,
-}
+use chrono::Utc;
+use axum::extract::State;
 
 /// 创建新子账户
 ///
@@ -37,8 +23,8 @@ pub struct UpdateSettingsRequest {
 )]
 pub async fn create_user(
     State(state): State<AppState>,
-    Json(req_json): Json<serde_json::Value>,
-) -> Result<Json<ApiResponse<UserResponse>>, ApiError> {
+    axum::Json(req_json): axum::Json<serde_json::Value>,
+) -> Result<ApiResult<UserResponse>, ApiError> {
     let req: CreateUserRequest = serde_json::from_value(req_json.clone())
         .map_err(|e| ApiError::BadRequest(format!("invalid request: {}", e)))?;
     // 1. 判断 ID 是否存在
@@ -83,7 +69,7 @@ pub async fn create_user(
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to save new user to database: {}", e)))?;
 
-    Ok(Json(ApiResponse::ok(UserResponse::from(&new_user))))
+    Ok(ApiResult(UserResponse::from(&new_user)))
 }
 
 /// 更新系统全局设置
@@ -102,13 +88,13 @@ pub async fn create_user(
 )]
 pub async fn update_settings(
     State(state): State<AppState>,
-    Json(req): Json<UpdateSettingsRequest>,
-) -> Result<Json<ApiResponse<String>>, ApiError> {
+    axum::Json(req): axum::Json<UpdateSettingsRequest>,
+) -> Result<ApiResult<String>, ApiError> {
     tracing::info!("Admin updating setting '{}' to '{}'", req.setting_key, req.setting_value);
     
     state.system_store.set_setting(&req.setting_key, &req.setting_value).await
-        .map_err(|e| ApiError::Internal(format!("Failed to save setting: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("failed to save setting: {}", e)))?;
         
     // TODO: Broadcast event to Engine for hot-reloading if applicable
-    Ok(Json(ApiResponse::ok("ok".to_string())))
+    Ok(ApiResult("ok".to_string()))
 }

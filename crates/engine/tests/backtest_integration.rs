@@ -36,7 +36,7 @@ impl Stock for HistoricalMockStock {
         let (_tx, rx) = mpsc::unbounded_channel::<Candle>();
         let s = async_stream::stream! {
             let mut rx = rx;
-            while let Some(c) = rx.recv().await { yield c; }
+            while let Some(c) = rx.recv().await { yield Ok(c); }
         };
         Ok(Box::pin(s))
     }

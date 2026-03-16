@@ -5,35 +5,36 @@ exclude = ["examples/js-strategy-demo"]
 
 [workspace.lints.clippy]
 # 拦截 let _ = 忽略 Result/Option 的情况
-let_underscore_must_use = "warn"
+let_underscore_must_use = "deny"
 # 拦截未 await 的 Future
-let_underscore_future = "warn"
+let_underscore_future = "deny"
 # 禁用 .expect()
-expect_used = "warn"
+expect_used = "deny"
 # 禁用 .unwrap()
-unwrap_used = "warn"
-# 甚至可以把 panic 标记为警告
-panic = "warn"
-unwrap_or_default = "warn"
-result_filter_map = "warn"
+unwrap_used = "deny"
+# 禁用 panic
+panic = "deny"
+# 使用 disallowed_methods 配合 clippy.toml 真正禁用特定方法
+disallowed_methods = "deny"
+result_filter_map = "deny"
 
 # 拦截所有可以无损转换的 as（例如 u32 as u64），强制改为使用更安全的 .into()
-cast_lossless = "warn"
+cast_lossless = "deny"
 
 # 拦截可能导致高位截断的强转（例如 u64 as u32），防止因数值过大导致数据丢失
-cast_possible_truncation = "warn"
+cast_possible_truncation = "deny"
 
 # 拦截可能导致符号位翻转的强转（例如大的 u32 as i32），防止正数意外变为负数
-cast_possible_wrap = "warn"
+cast_possible_wrap = "deny"
 
 # 拦截从整数到浮点数可能导致的精度丢失（例如 i64 as f32），防止大额数值不准确
-cast_precision_loss = "warn"
+cast_precision_loss = "deny"
 
 # 拦截有符号转无符号的强转（例如 i8 as u8），防止负数转换后变成巨大的正数
-cast_sign_loss = "warn"
+cast_sign_loss = "deny"
 
 # 拦截使用 as 进行的指针类型转换，强制改用语义更明确的 .cast() 方法
-ptr_as_ptr = "warn"
+ptr_as_ptr = "deny"
 
 # 拦截将函数指针转换为数值类型的行为，防止底层的内存地址非法操作
-fn_to_numeric_cast = "warn"
+fn_to_numeric_cast = "deny"

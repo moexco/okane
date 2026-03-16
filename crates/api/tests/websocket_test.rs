@@ -29,7 +29,7 @@ async fn test_market_websocket_push() -> anyhow::Result<()> {
     let ws_url = base_url.replace("http://", "ws://");
     let ws_endpoint = format!("{}/api/v1/market/ws/AAPL?tf=1m", ws_url);
     let host = base_url.trim_start_matches("http://");
-    println!("Connecting to WS: {}", ws_endpoint);
+    // ("Connecting to WS: {}", ws_endpoint);
     
     let request = http::Request::builder()
         .uri(&ws_endpoint)

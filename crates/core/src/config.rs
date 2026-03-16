@@ -77,14 +77,27 @@ impl Default for UserNotifyConfig {
 }
 
 impl AppConfig {
-    /// # Summary
     /// 校验配置合法性与安全性。
     /// 
     /// # Logic
-    /// 如果 JWT 密钥仍为默认值，在非测试环境下发出警告。
+    /// 如果 JWT 密钥仍为默认值，在非测试环境下直接 panic。
+    #[allow(clippy::panic)]
     pub fn validate(&self) {
         if self.server.jwt_secret == "YOUR_SUPER_SECRET_KEY" {
-            tracing::warn!("⚠️  SECURITY WARNING: Using default JWT secret key. This is highly discouraged for production use.");
+            // 在测试环境或 Debug 模式（cargo run）下，允许使用默认密钥并仅发出警告。
+            // 仅在 Release 模式（通常是生产部署）下强制安全退出。
+            if cfg!(any(test, debug_assertions)) {
+                tracing::warn!(
+                    "⚠️ SECURITY WARNING: Using default JWT secret. \
+                    This is only acceptable for development/testing."
+                );
+            } else {
+                panic!(
+                    "❌ FATAL SECURITY ERROR: Default JWT secret found in production build! \
+                    You MUST set OKANE_SERVER_JWT_SECRET environment variable for security. \
+                    System shutting down to prevent unauthorized access."
+                );
+            }
         }
     }
 }

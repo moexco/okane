@@ -18,9 +18,22 @@ pub async fn timer_middleware(req: Request<Body>, next: Next) -> Response {
 
     tracing::info!("API Request: {} {} - Completed in {}ms", method, path, elapsed);
 
-    let (parts, body) = response.into_parts();
+    let (mut parts, body) = response.into_parts();
 
-    // Check if it's JSON
+    // 1. 尝试从 Extension 中获取待序列化的原始数据 (ErasedResponse)
+    // 这是核心优化：避免 Handler 序列化一次，中间件再反序列化+注入+序列化
+    if let Some(erased) = parts.extensions.remove::<std::sync::Arc<dyn crate::types::ErasedResponse>>() {
+        let status = erased.status();
+        let bytes = erased.render(elapsed);
+        parts.status = status;
+        parts.headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        return Response::from_parts(parts, Body::from(bytes));
+    }
+
+    // 2. 兼容逻辑：处理那些仍然直接返回 Json<ApiResponse<T>> 的旧 Handler
     let content_type = parts.headers.get(axum::http::header::CONTENT_TYPE);
     let is_json = content_type
         .and_then(|h| h.to_str().ok())
@@ -34,10 +47,10 @@ pub async fn timer_middleware(req: Request<Body>, next: Next) -> Response {
             Err(_) => return Response::from_parts(parts, Body::empty()),
         };
 
-        // Try to inject latency_ms into JSON
+        // Try to inject latency_ms into JSON (这是旧的耗时方式)
         if let Ok(mut json) = serde_json::from_slice::<Value>(&bytes) {
             if let Some(obj) = json.as_object_mut() {
-                // Only inject if it looks like our standard ApiResponse or ApiErrorResponse (has 'success' field)
+                // Only inject if it looks like our standard ApiResponse or ApiErrorResponse
                 if obj.contains_key("success") {
                     obj.insert("latency_ms".to_string(), Value::from(elapsed));
                     
@@ -48,7 +61,6 @@ pub async fn timer_middleware(req: Request<Body>, next: Next) -> Response {
             }
         }
         
-        // Return original if injection fails
         Response::from_parts(parts, Body::from(bytes))
     } else {
         Response::from_parts(parts, body)

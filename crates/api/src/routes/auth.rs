@@ -3,18 +3,17 @@
 //! 实现登录、密码修改等鉴权相关接口。
 
 use axum::extract::State;
-use axum::Json;
 use chrono::Utc;
 use jsonwebtoken::{encode, EncodingKey, Header};
 
 use sha2::{Sha256, Digest};
-use crate::types::{ApiResponse, ChangePasswordRequest, Claims, LoginRequest, LoginResponse};
+use crate::types::{ApiResponse, ApiResult, ChangePasswordRequest, Claims, LoginRequest, LoginResponse};
 use crate::error::ApiError;
-use crate::middleware::auth::CurrentUser;
 use crate::server::AppState;
+use crate::middleware::auth::CurrentUser;
 
-const ACCESS_TOKEN_EXPIRES_IN: i64 = 60 * 15; // 15 minutes
-const REFRESH_TOKEN_EXPIRES_IN: i64 = 86400 * 180; // 180 days (半年)
+const ACCESS_TOKEN_EXPIRES_IN: i64 = 900; // 15 min
+const REFRESH_TOKEN_EXPIRES_IN: i64 = 180 * 24 * 3600; // 180 days
 
 /// 用户登录
 ///
@@ -31,38 +30,26 @@ const REFRESH_TOKEN_EXPIRES_IN: i64 = 86400 * 180; // 180 days (半年)
 )]
 pub async fn login(
     State(state): State<AppState>,
-    Json(req): Json<LoginRequest>,
-) -> Result<Json<ApiResponse<LoginResponse>>, ApiError> {
-    let start_time = std::time::Instant::now();
-
-    // 辅助函数：处理登录失败并确保 10 秒固定返回
-    let handle_auth_fail = |msg: String| async move {
-        let elapsed = start_time.elapsed();
-        let target = std::time::Duration::from_secs(10);
-        if elapsed < target {
-            tokio::time::sleep(target - elapsed).await;
-        }
-        ApiError::Unauthorized(msg)
-    };
-
+    axum::Json(req): axum::Json<LoginRequest>,
+) -> Result<ApiResult<LoginResponse>, ApiError> {
     // 1. 获取用户
     let user_opt = state
         .system_store
         .get_user(&req.username)
         .await
-        .map_err(|e| ApiError::Internal(format!("DB error: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("db error: {}", e)))?;
         
     let user = match user_opt {
         Some(u) => u,
-        None => return Err(handle_auth_fail("Invalid username or password".into()).await),
+        None => return Err(ApiError::Unauthorized("invalid username or password".into())),
     };
 
     // 2. 验证密码
     let valid = bcrypt::verify(&req.password, &user.password_hash)
-        .map_err(|e| ApiError::Internal(format!("Hash verification failed: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("hash verification failed: {}", e)))?;
 
     if !valid {
-        return Err(handle_auth_fail("Invalid username or password".into()).await);
+        return Err(ApiError::Unauthorized("invalid username or password".into()));
     }
 
     // 3. 创建或复用 Session (确定性 SID)
@@ -90,7 +77,7 @@ pub async fn login(
 
     // 4. 同步至 DB & RAM (仅在登录成功后进行全局清理)
     state.system_store.save_session(&session).await
-        .map_err(|e| ApiError::Internal(format!("Failed to save session: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("failed to save session: {}", e)))?;
     
     // 全局自动净化：仅在登录成功后，顺便清理系统中所有过期数据
     state.system_store.delete_expired_sessions().await.ok();
@@ -101,11 +88,11 @@ pub async fn login(
     let access_token = generate_access_token(&user, &session_id, &uuid::Uuid::new_v4().to_string(), &state.app_config.server.jwt_secret)?;
     let refresh_token = generate_refresh_token(&user, &session_id, &current_jti, &state.app_config.server.jwt_secret)?;
 
-    Ok(Json(ApiResponse::ok(LoginResponse {
+    Ok(ApiResult(LoginResponse {
         access_token,
         refresh_token,
         expires_in: ACCESS_TOKEN_EXPIRES_IN as u64,
-    })))
+    }))
 }
 
 /// 刷新令牌 (Rolling Refresh)
@@ -124,22 +111,22 @@ pub async fn login(
 pub async fn refresh(
     State(state): State<AppState>,
     req: axum::extract::Request,
-) -> Result<Json<ApiResponse<LoginResponse>>, ApiError> {
+) -> Result<ApiResult<LoginResponse>, ApiError> {
     // 提取并验证 Refresh Token
     let auth_header = req.headers().get(axum::http::header::AUTHORIZATION)
-        .ok_or_else(|| ApiError::Unauthorized("Missing refresh token".into()))?;
+        .ok_or_else(|| ApiError::Unauthorized("missing refresh token".into()))?;
     
     let token_str = auth_header.to_str()
-        .map_err(|_| ApiError::Unauthorized("Invalid header".into()))?
+        .map_err(|_| ApiError::Unauthorized("invalid header".into()))?
         .strip_prefix("Bearer ")
-        .ok_or_else(|| ApiError::Unauthorized("Invalid format".into()))?;
+        .ok_or_else(|| ApiError::Unauthorized("invalid format".into()))?;
 
     let claims = crate::middleware::auth::verify_jwt(token_str, &state.app_config.server.jwt_secret)?;
 
     // 1. 获取 Session (严格零 DB 读取，仅查内存)
     let mut session = state.session_cache.get(&claims.sid)
         .map(|s| s.clone())
-        .ok_or_else(|| ApiError::Unauthorized("Invalid or expired session. Please log in again.".into()))?;
+        .ok_or_else(|| ApiError::Unauthorized("invalid or expired session. please log in again.".into()))?;
 
     // 2. 重放攻击探测 (Reuse Detection)
     // 提交的 jti 必须与当前 Session 记录的唯一合法 jti 一致
@@ -150,11 +137,11 @@ pub async fn refresh(
         state.system_store.revoke_all_user_sessions(&claims.sub).await.ok();
         state.session_cache.retain(|_, v| v.user_id != claims.sub);
         
-        return Err(ApiError::Unauthorized("Token reuse detected. All sessions revoked for security.".into()));
+        return Err(ApiError::Unauthorized("token reuse detected. all sessions revoked for security.".into()));
     }
 
     if session.is_revoked || session.expires_at < Utc::now() {
-        return Err(ApiError::Unauthorized("Session revoked or expired".into()));
+        return Err(ApiError::Unauthorized("session revoked or expired".into()));
     }
 
     // 3. 令牌轮转 (Rotation / JTI Rotation)
@@ -170,16 +157,16 @@ pub async fn refresh(
     // 获取用户实体以生成 AT
     let user = state.system_store.get_user(&claims.sub).await
         .map_err(|e| ApiError::Internal(e.to_string()))?
-        .ok_or_else(|| ApiError::Unauthorized("User not found".into()))?;
+        .ok_or_else(|| ApiError::Unauthorized("user not found".into()))?;
 
     let access_token = generate_access_token(&user, &session.id, &uuid::Uuid::new_v4().to_string(), &state.app_config.server.jwt_secret)?;
     let refresh_token = generate_refresh_token(&user, &session.id, &new_jti, &state.app_config.server.jwt_secret)?;
 
-    Ok(Json(ApiResponse::ok(LoginResponse {
+    Ok(ApiResult(LoginResponse {
         access_token,
         refresh_token,
         expires_in: ACCESS_TOKEN_EXPIRES_IN as u64,
-    })))
+    }))
 }
 
 /// 用户登出
@@ -199,7 +186,7 @@ pub async fn logout(
     State(state): State<AppState>,
     crate::middleware::auth::CurrentUser(user_ctx): crate::middleware::auth::CurrentUser,
     axum::Extension(claims): axum::Extension<Claims>,
-) -> Result<Json<ApiResponse<String>>, ApiError> {
+) -> Result<ApiResult<String>, ApiError> {
     // 1. 在持久化存储中撤销 Session
     state.system_store.revoke_session(&claims.sid).await
         .map_err(|e| ApiError::Internal(format!("failed to revoke session: {}", e)))?;
@@ -209,7 +196,7 @@ pub async fn logout(
 
     tracing::info!("user logout success: {}, sid: {}", user_ctx.id, claims.sid);
 
-    Ok(Json(ApiResponse::ok("Logged out successfully".into())))
+    Ok(ApiResult("Logged out successfully".into()))
 }
 
 /// 修改密码
@@ -229,24 +216,24 @@ pub async fn logout(
 pub async fn change_password(
     State(state): State<AppState>,
     CurrentUser(user_ctx): CurrentUser,
-    Json(req): Json<ChangePasswordRequest>,
-) -> Result<Json<ApiResponse<String>>, ApiError> {
+    axum::Json(req): axum::Json<ChangePasswordRequest>,
+) -> Result<ApiResult<String>, ApiError> {
     // 1. 显式从数据库获取完整用户信息（包含密码哈希）
     let mut user = state.system_store.get_user(&user_ctx.id).await
         .map_err(|e| ApiError::Internal(e.to_string()))?
-        .ok_or_else(|| ApiError::Unauthorized("User not found".into()))?;
+        .ok_or_else(|| ApiError::Unauthorized("user not found".into()))?;
 
     // 2. 验证旧密码
     let valid = bcrypt::verify(&req.old_password, &user.password_hash)
-        .map_err(|e| ApiError::Internal(format!("Hash verification failed: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("hash verification failed: {}", e)))?;
 
     if !valid {
-        return Err(ApiError::Unauthorized("Invalid old password".into()));
+        return Err(ApiError::Unauthorized("invalid old password".into()));
     }
 
     // 3. 更新密码
     let new_hashed = bcrypt::hash(&req.new_password, bcrypt::DEFAULT_COST)
-        .map_err(|_| ApiError::Internal("Failed to hash new password".into()))?;
+        .map_err(|_| ApiError::Internal("failed to hash new password".into()))?;
 
     user.password_hash = new_hashed;
     user.force_password_change = false;
@@ -255,28 +242,28 @@ pub async fn change_password(
         .system_store
         .save_user(&user)
         .await
-        .map_err(|e| ApiError::Internal(format!("Failed to save user: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("failed to save user: {}", e)))?;
 
     // 4. 全局注销：撤销该用户所有活跃 Session (强制重新登录)
     state.system_store.revoke_all_user_sessions(&user.id).await
-        .map_err(|e| ApiError::Internal(format!("Failed to revoke sessions: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("failed to revoke sessions: {}", e)))?;
     
     state.session_cache.retain(|_, v| v.user_id != user.id);
 
-    Ok(Json(ApiResponse::ok("Password changed successfully. All other sessions revoked.".into())))
+    Ok(ApiResult("Password changed successfully. All other sessions revoked.".into()))
 }
 
 fn generate_access_token(user: &okane_core::store::port::User, sid: &str, jti: &str, secret: &str) -> Result<String, ApiError> {
     let expiration = Utc::now()
         .checked_add_signed(chrono::Duration::seconds(ACCESS_TOKEN_EXPIRES_IN))
-        .ok_or_else(|| ApiError::Internal("Timestamp calculation overflow".into()))?
+        .ok_or_else(|| ApiError::Internal("timestamp calculation overflow".into()))?
         .timestamp();
 
     let claims = Claims {
         sub: user.id.clone(),
         sid: sid.to_string(),
         jti: jti.to_string(),
-        exp: expiration.try_into().map_err(|_| ApiError::Internal("Timestamp out of bounds".into()))?,
+        exp: expiration.try_into().map_err(|_| ApiError::Internal("timestamp out of bounds".into()))?,
         role: user.role.to_string(),
         force_password_change: user.force_password_change,
     };
@@ -286,20 +273,20 @@ fn generate_access_token(user: &okane_core::store::port::User, sid: &str, jti: &
         &claims,
         &EncodingKey::from_secret(secret.as_ref()),
     )
-    .map_err(|e| ApiError::Internal(format!("JWT sign failed: {}", e)))
+    .map_err(|e| ApiError::Internal(format!("jwt sign failed: {}", e)))
 }
 
 fn generate_refresh_token(user: &okane_core::store::port::User, sid: &str, jti: &str, secret: &str) -> Result<String, ApiError> {
     let expiration = Utc::now()
         .checked_add_signed(chrono::Duration::seconds(REFRESH_TOKEN_EXPIRES_IN))
-        .ok_or_else(|| ApiError::Internal("Timestamp calculation overflow".into()))?
+        .ok_or_else(|| ApiError::Internal("timestamp calculation overflow".into()))?
         .timestamp();
 
     let claims = Claims {
         sub: user.id.clone(),
         sid: sid.to_string(),
         jti: jti.to_string(),
-        exp: expiration.try_into().map_err(|_| ApiError::Internal("Timestamp out of bounds".into()))?,
+        exp: expiration.try_into().map_err(|_| ApiError::Internal("timestamp out of bounds".into()))?,
         role: user.role.to_string(),
         force_password_change: user.force_password_change,
     };
@@ -309,7 +296,7 @@ fn generate_refresh_token(user: &okane_core::store::port::User, sid: &str, jti: 
         &claims,
         &EncodingKey::from_secret(secret.as_ref()),
     )
-    .map_err(|e| ApiError::Internal(format!("JWT refresh sign failed: {}", e)))
+    .map_err(|e| ApiError::Internal(format!("jwt refresh sign failed: {}", e)))
 }
 
 /// 生成确定性的 Session ID

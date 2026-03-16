@@ -166,8 +166,8 @@ async fn test_user_account_and_strategy_deployment() -> anyhow::Result<()> {
 
     // 5. 验证列表
     let list_res = assert_get!(&client, format!("{}/api/v1/user/strategies", base_url), Some(&trader_token), StatusCode::OK);
-    let strategies = list_res.json::<ApiResponse<Vec<StrategyResponse>>>().await.map_err(|e| anyhow::anyhow!(e))?.data.ok_or_else(|| anyhow::anyhow!("Strategies null"))?;
-    assert!(strategies.iter().any(|s| s.id == strategy_id));
+    let strategies_page = list_res.json::<ApiResponse<okane_api::types::Page<StrategyResponse>>>().await.map_err(|e| anyhow::anyhow!(e))?.data.ok_or_else(|| anyhow::anyhow!("Strategies null"))?;
+    assert!(strategies_page.items.iter().any(|s| s.id == strategy_id));
     Ok(())
 }
 

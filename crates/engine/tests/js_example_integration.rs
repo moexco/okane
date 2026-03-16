@@ -37,7 +37,7 @@ impl Stock for MockStock {
         let rx = self.rx.clone();
         let s = async_stream::stream! {
             let mut rx = rx.lock().await;
-            while let Some(c) = rx.recv().await { yield c; }
+            while let Some(c) = rx.recv().await { yield Ok(c); }
         };
         Ok(Box::pin(s))
     }

@@ -8,8 +8,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 /// # Summary
-/// K 线数据流别名，使用动态分发的异步流。
-pub type CandleStream = Pin<Box<dyn Stream<Item = Candle> + Send>>;
+/// K 线数据流别名，使用动态分发的异步流，支持错误透传。
+pub type CandleStream = Pin<Box<dyn Stream<Item = Result<Candle, MarketError>> + Send>>;
 
 /// # Summary
 /// Stock 聚合根行为契约。

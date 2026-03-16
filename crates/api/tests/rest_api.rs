@@ -5,9 +5,8 @@ use reqwest::StatusCode;
 use okane_api::types::{
     ApiResponse, LoginRequest, LoginResponse, CreateAccountRequest, AccountSnapshotResponse,
     StockMetadataResponse, NotifyConfigResponse, UpdateNotifyConfigRequest, OrderResponse,
+    UpdateSettingsRequest, WatchlistRequest,
 };
-use okane_api::routes::admin::UpdateSettingsRequest;
-use okane_api::routes::watchlist::WatchlistRequest;
 use common::spawn_test_server;
 use anyhow::Context;
 
@@ -192,16 +191,16 @@ async fn test_manual_trade_api() -> anyhow::Result<()> {
 
     // 2. 获取挂单列表 (修正：查询 trade_acc)
     let res = assert_get!(&client, format!("{}/api/v1/user/orders?account_id=trade_acc", base_url), Some(&token), StatusCode::OK);
-    let orders = res.json::<ApiResponse<Vec<OrderResponse>>>().await.map_err(|e| anyhow::anyhow!("Parse: {}", e))?.data.ok_or_else(|| anyhow::anyhow!("Data null"))?;
-    assert!(orders.iter().any(|o| o.id == order_id));
+    let orders_page = res.json::<ApiResponse<okane_api::types::Page<OrderResponse>>>().await.map_err(|e| anyhow::anyhow!("Parse: {}", e))?.data.ok_or_else(|| anyhow::anyhow!("Data null"))?;
+    assert!(orders_page.items.iter().any(|o| o.id == order_id));
 
     // 3. 撤单
     assert_delete!(&client, format!("{}/api/v1/user/orders/{}", base_url, order_id), Some(&token), StatusCode::OK);
 
     // 4. 确认列表中的订单已经消失
     let res = assert_get!(&client, format!("{}/api/v1/user/orders?account_id=trade_acc", base_url), Some(&token), StatusCode::OK);
-    let orders = res.json::<ApiResponse<Vec<OrderResponse>>>().await.map_err(|e| anyhow::anyhow!("Parse: {}", e))?.data.ok_or_else(|| anyhow::anyhow!("Data null"))?;
+    let orders_page = res.json::<ApiResponse<okane_api::types::Page<OrderResponse>>>().await.map_err(|e| anyhow::anyhow!("Parse: {}", e))?.data.ok_or_else(|| anyhow::anyhow!("Data null"))?;
     
-    assert!(!orders.iter().any(|o| o.id == order_id), "Order should be removed from active list after cancellation");
+    assert!(!orders_page.items.iter().any(|o| o.id == order_id), "Order should be removed from active list after cancellation");
     Ok(())
 }

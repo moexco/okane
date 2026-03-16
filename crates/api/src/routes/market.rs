@@ -1,5 +1,4 @@
 use axum::extract::{Path, Query, State, ws::{WebSocketUpgrade, WebSocket, Message}};
-use axum::Json;
 use serde::Deserialize;
 use std::str::FromStr;
 use chrono::{DateTime, Utc};
@@ -8,7 +7,7 @@ use futures::StreamExt;
 use okane_core::common::TimeFrame;
 use crate::server::AppState;
 use crate::error::ApiError;
-use crate::types::{ApiResponse, CandleResponse, StockMetadataResponse};
+use crate::types::{ApiResponse, ApiResult, CandleResponse, StockMetadataResponse};
 use utoipa::ToSchema;
 
 #[derive(Deserialize, ToSchema)]
@@ -35,14 +34,14 @@ pub struct SearchQuery {
 pub async fn search_stocks(
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
-) -> Result<Json<ApiResponse<Vec<StockMetadataResponse>>>, ApiError> {
+) -> Result<ApiResult<Vec<StockMetadataResponse>>, ApiError> {
     // 模糊搜索直接路由到上游数据源，不走本地数据库
     match state.market_port.search_symbols(&query.q).await {
         Ok(upstream_results) => {
             let dtos = upstream_results.into_iter().map(Into::into).collect();
-            Ok(Json(ApiResponse::ok(dtos)))
+            Ok(ApiResult(dtos))
         }
-        Err(e) => Err(ApiError::Internal(format!("Upstream search error: {}", e))),
+        Err(e) => Err(ApiError::Internal(format!("upstream search error: {}", e))),
     }
 }
 
@@ -77,26 +76,26 @@ pub async fn get_candles(
     State(state): State<AppState>,
     Path(symbol): Path<String>,
     Query(query): Query<CandlesQuery>,
-) -> Result<Json<ApiResponse<Vec<CandleResponse>>>, ApiError> {
+) -> Result<ApiResult<Vec<CandleResponse>>, ApiError> {
     let tf = TimeFrame::from_str(&query.tf)
-        .map_err(|e| ApiError::BadRequest(format!("Invalid timeframe: {}", e)))?;
+        .map_err(|e| ApiError::BadRequest(format!("invalid timeframe: {}", e)))?;
     
     let start = DateTime::parse_from_rfc3339(&query.start)
-        .map_err(|_| ApiError::BadRequest("Invalid start time format, expected RFC3339".to_string()))?
+        .map_err(|_| ApiError::BadRequest("invalid start time format, expected RFC3339".to_string()))?
         .with_timezone(&Utc);
         
     let end = DateTime::parse_from_rfc3339(&query.end)
-        .map_err(|_| ApiError::BadRequest("Invalid end time format, expected RFC3339".to_string()))?
+        .map_err(|_| ApiError::BadRequest("invalid end time format, expected RFC3339".to_string()))?
         .with_timezone(&Utc);
 
     let stock_agg = state.market_port.get_stock(&symbol).await
-        .map_err(|e| ApiError::Internal(format!("Market error: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("market error: {}", e)))?;
         
     let history: Vec<okane_core::market::entity::Candle> = stock_agg.fetch_history(tf, start, end).await
-        .map_err(|e| ApiError::Internal(format!("Fetch history error: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("fetch history error: {}", e)))?;
         
     let dtos = history.into_iter().map(Into::into).collect();
-    Ok(Json(ApiResponse::ok(dtos)))
+    Ok(ApiResult(dtos))
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -124,13 +123,13 @@ pub async fn get_rsi_indicator(
     State(state): State<AppState>,
     Path(symbol): Path<String>,
     Query(query): Query<IndicatorQuery>,
-) -> Result<Json<ApiResponse<String>>, ApiError> {
+) -> Result<ApiResult<String>, ApiError> {
     let tf = TimeFrame::from_str(&query.tf)
-        .map_err(|e| ApiError::BadRequest(format!("Invalid timeframe: {}", e)))?;
+        .map_err(|e| ApiError::BadRequest(format!("invalid timeframe: {}", e)))?;
 
     match state.indicator_service.rsi(&symbol, tf, query.period).await {
-        Ok(val) => Ok(Json(ApiResponse::ok(val.to_string()))),
-        Err(e) => Err(ApiError::Internal(format!("Indicator error: {}", e))),
+        Ok(val) => Ok(ApiResult(val.to_string())),
+        Err(e) => Err(ApiError::Internal(format!("indicator error: {}", e))),
     }
 }
 
@@ -192,17 +191,24 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, symbol: String, q
 
     loop {
         tokio::select! {
-            Some(candle) = stream.next() => {
-                let msg = match serde_json::to_string(&candle) {
-                    Ok(json) => Message::Text(json.into()),
-                    Err(e) => {
-                        tracing::error!("WS: Serialization error: {}", e);
-                        continue;
+            Some(result) = stream.next() => {
+                match result {
+                    Ok(candle) => {
+                        let msg = match serde_json::to_string(&candle) {
+                            Ok(json) => Message::Text(json.into()),
+                            Err(e) => {
+                                tracing::error!("WS: Serialization error: {}", e);
+                                continue;
+                            }
+                        };
+                        if let Err(e) = socket.send(msg).await {
+                            tracing::debug!("WS: Client disconnected from {}: {}", symbol, e);
+                            break;
+                        }
                     }
-                };
-                if let Err(e) = socket.send(msg).await {
-                    tracing::debug!("WS: Client disconnected from {}: {}", symbol, e);
-                    break;
+                    Err(e) => {
+                        tracing::error!("WS: Stream error for {}: {}", symbol, e);
+                    }
                 }
             }
             msg = socket.recv() => {

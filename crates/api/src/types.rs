@@ -353,6 +353,29 @@ pub struct BacktestResponse {
     pub candle_count: usize,
 }
 
+/// 分页数据包装器
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct Page<T: Serialize + ToSchema> {
+    /// 数据列表
+    pub items: Vec<T>,
+    /// 总记录数
+    #[schema(example = 100)]
+    pub total: usize,
+    /// 跳过的记录数
+    #[schema(example = 0)]
+    pub offset: usize,
+    /// 分页大小
+    #[schema(example = 50)]
+    pub limit: usize,
+}
+
+impl<T: Serialize + ToSchema> Page<T> {
+    /// 创建分页对象
+    pub fn new(items: Vec<T>, total: usize, offset: usize, limit: usize) -> Self {
+        Self { items, total, offset, limit }
+    }
+}
+
 // ============================================================
 //  通用响应 DTO
 // ============================================================
@@ -368,15 +391,18 @@ pub struct ApiResponse<T: Serialize + ToSchema> {
     pub error: Option<String>,
     /// 接口处理耗时 (毫秒)
     pub latency_ms: Option<u64>,
+    #[schema(example = 200)]
+    pub code: u32,
 }
 
 impl<T: Serialize + ToSchema> ApiResponse<T> {
-    /// 构建成功响应
+    /// 构建成功响应 (旧版兼容)
     pub fn ok(data: T) -> Self {
         Self {
             success: true,
             data: Some(data),
             error: None,
+            code: 200,
             latency_ms: None,
         }
     }
@@ -391,16 +417,133 @@ pub struct ApiErrorResponse {
     pub error: String,
     /// 接口处理耗时 (毫秒)
     pub latency_ms: Option<u64>,
+    /// 业务错误码 (5 位数)
+    pub code: u32,
 }
 
 impl ApiErrorResponse {
-    /// 从错误信息构建
-    pub fn from_msg(msg: impl Into<String>) -> Self {
+    /// 从错误信息和状态码构建
+    pub fn new(msg: impl Into<String>, code: u32) -> Self {
         Self {
             success: false,
             error: msg.into(),
+            code,
             latency_ms: None,
         }
+    }
+
+    /// 从错误信息构建 (默认使用系统错误码 00999)
+    pub fn from_msg(msg: impl Into<String>) -> Self {
+        Self::new(msg, 999)
+    }
+}
+
+// ============================================================
+//  扩展：用于中间件单次序列化的机制
+// ============================================================
+
+use axum::response::{IntoResponse, Response};
+use axum::http::StatusCode;
+
+/// 被擦除类型的响应数据，由中间件负责序列化
+pub trait ErasedResponse: Send + Sync + 'static {
+    fn status(&self) -> StatusCode;
+    fn code(&self) -> u32;
+    fn latency_ms(&self) -> Option<u64>;
+    fn render(&self, latency: u64) -> Vec<u8>;
+}
+
+/// 成功响应的中间态
+pub struct SuccessMarker<T: Serialize + ToSchema + Send + Sync + 'static> {
+    pub data: T,
+    pub status: StatusCode,
+    pub code: u32,
+    pub latency_ms: Option<u64>,
+}
+
+impl<T: Serialize + ToSchema + Send + Sync + 'static> ErasedResponse for SuccessMarker<T> {
+    fn status(&self) -> StatusCode {
+        self.status
+    }
+
+    fn code(&self) -> u32 {
+        self.code
+    }
+
+    fn latency_ms(&self) -> Option<u64> {
+        self.latency_ms
+    }
+
+    fn render(&self, latency: u64) -> Vec<u8> {
+        // 使用临时结构体进行序列化，支持引用数据
+        #[derive(Serialize)]
+        struct TempResponse<'a, D: Serialize> {
+            success: bool,
+            data: Option<&'a D>,
+            error: Option<String>,
+            code: u32,
+            latency_ms: Option<u64>,
+        }
+        
+        let resp = TempResponse {
+            success: true,
+            data: Some(&self.data),
+            error: None,
+            code: self.code,
+            latency_ms: Some(latency),
+        };
+        serde_json::to_vec(&resp).unwrap_or_else(|_| vec![])
+    }
+}
+
+/// 错误响应的中间态
+pub struct ErrorMarker {
+    pub message: String,
+    pub status: StatusCode,
+    pub code: u32,
+    pub latency_ms: Option<u64>,
+}
+
+impl ErasedResponse for ErrorMarker {
+    fn status(&self) -> StatusCode {
+        self.status
+    }
+
+    fn code(&self) -> u32 {
+        self.code
+    }
+
+    fn latency_ms(&self) -> Option<u64> {
+        self.latency_ms
+    }
+
+    fn render(&self, latency: u64) -> Vec<u8> {
+        let resp = ApiErrorResponse {
+            success: false,
+            error: self.message.clone(),
+            code: self.code,
+            latency_ms: Some(latency),
+        };
+        serde_json::to_vec(&resp).unwrap_or_else(|_| vec![])
+    }
+}
+
+/// Handler 返回的统一结果包装器
+pub struct ApiResult<T>(pub T);
+
+use std::sync::Arc;
+
+impl<T: Serialize + ToSchema + Send + Sync + 'static> IntoResponse for ApiResult<T> {
+    fn into_response(self) -> Response {
+        let mut res = StatusCode::OK.into_response();
+        let marker = SuccessMarker {
+            data: self.0,
+            status: StatusCode::OK,
+            code: 200,
+            latency_ms: None,
+        };
+        res.extensions_mut().insert(Arc::new(marker) as Arc<dyn ErasedResponse>);
+        res
     }
 }
 
@@ -479,6 +622,17 @@ pub struct LoginResponse {
     /// Access Token 过期时间 (秒)
     #[schema(example = 900)]
     pub expires_in: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct UpdateSettingsRequest {
+    pub setting_key: String,
+    pub setting_value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct WatchlistRequest {
+    pub symbol: String,
 }
 
 /// JWT Claims 内容 (内部使用，不暴露到 Swagger)

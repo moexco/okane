@@ -41,17 +41,17 @@ impl StrategyLogger for LogWrapper {
 /// Manager 层的统一错误类型。
 #[derive(Error, Debug)]
 pub enum ManagerError {
-    #[error("Store error: {0}")]
+    #[error("store error: {0}")]
     Store(#[from] StoreError),
-    #[error("Engine error: {0}")]
+    #[error("engine error: {0}")]
     Engine(#[from] EngineError),
-    #[error("Trade error: {0}")]
+    #[error("trade error: {0}")]
     Trade(#[from] okane_core::trade::port::TradeError),
-    #[error("Core error: {0}")]
+    #[error("core error: {0}")]
     Core(#[from] okane_core::error::CoreError),
-    #[error("Strategy not found: {0}")]
+    #[error("strategy not found: {0}")]
     NotFound(String),
-    #[error("Strategy already running: {0}")]
+    #[error("strategy already running: {0}")]
     AlreadyRunning(String),
 }
 

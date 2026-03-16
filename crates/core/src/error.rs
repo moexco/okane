@@ -1,15 +1,16 @@
 use thiserror::Error;
+use serde::{Serialize, Deserialize};
 
 /// # Summary
 /// Core 模块通用错误枚举。
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Serialize, Deserialize)]
 pub enum CoreError {
-    #[error("Lock poisoned: {0}")]
+    #[error("lock poisoned: {0}")]
     Poisoned(String),
     
-    #[error("Internal error: {0}")]
+    #[error("internal error: {0}")]
     Internal(String),
 
-    #[error("Conversion error: {0}")]
+    #[error("conversion error: {0}")]
     Conversion(String),
 }

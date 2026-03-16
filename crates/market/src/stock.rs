@@ -306,7 +306,7 @@ impl Stock for StockInner {
         let stream = async_stream::stream! {
             let mut rx: broadcast::Receiver<Candle> = rx;
             while let Ok(candle) = rx.recv().await {
-                yield candle;
+                yield Ok(candle);
             }
         };
 
@@ -432,13 +432,21 @@ impl StockFetcher {
             .subscribe_candles(&self.identity)
             .await
         {
-            while let Some(candle) = futures::StreamExt::next(&mut stream).await {
-                if let Some(stock) = self.inner.upgrade() {
-                    if let Err(e) = stock.update_and_broadcast(candle, TimeFrame::Minute1).await {
-                        error!("Fetcher: Failed to update stock: {}", e);
+            while let Some(result) = futures::StreamExt::next(&mut stream).await {
+                match result {
+                    Ok(candle) => {
+                        if let Some(stock) = self.inner.upgrade() {
+                            if let Err(e) = stock.update_and_broadcast(candle, TimeFrame::Minute1).await {
+                                error!("Fetcher: Failed to update stock: {}", e);
+                            }
+                        } else {
+                            break;
+                        }
                     }
-                } else {
-                    break;
+                    Err(e) => {
+                        error!("Fetcher: Stream error for {}: {}", self.identity.symbol, e);
+                        // 错误目前仅记录日志，流的重试逻辑将在 Provider 层（yahoo.rs）实现
+                    }
                 }
             }
         }
@@ -485,7 +493,7 @@ mod tests {
             })
             .ok();
             Ok(Box::pin(stream::unfold(rx, |mut rx| async move {
-                rx.recv().await.map(|c| (c, rx))
+                rx.recv().await.map(|c| (Ok(c), rx))
             })))
         }
 
