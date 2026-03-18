@@ -1,12 +1,12 @@
 use axum::extract::{Path, State};
 
-use crate::types::{ApiResponse, ApiResult, WatchlistRequest};
 use crate::error::ApiError;
-use crate::server::AppState;
 use crate::middleware::auth::CurrentUser;
+use crate::server::AppState;
+use crate::types::{ApiResponse, ApiResult, WatchlistRequest};
 
 /// 获取自选股列表 (占位)
-/// 
+///
 /// 获取当前用户的关注列表
 #[utoipa::path(
     get,
@@ -28,9 +28,8 @@ pub async fn get_watchlist(
     }
 }
 
-
 /// 添加自选股 (占位)
-/// 
+///
 /// 将股票添加到自选
 #[utoipa::path(
     post,
@@ -66,18 +65,24 @@ pub async fn add_to_watchlist(
     };
 
     if !is_valid {
-        return Err(ApiError::BadRequest("invalid symbol: stock not found".to_string()));
+        return Err(ApiError::BadRequest(
+            "invalid symbol: stock not found".to_string(),
+        ));
     }
 
     // 2. 插入自选股表
-    match state.system_store.add_to_watchlist(&user.id, &req.symbol).await {
+    match state
+        .system_store
+        .add_to_watchlist(&user.id, &req.symbol)
+        .await
+    {
         Ok(_) => Ok(ApiResult("ok".to_string())),
         Err(e) => Err(ApiError::Internal(format!("store error: {}", e))),
     }
 }
 
 /// 删除自选股 (占位)
-/// 
+///
 /// 将股票从自选移除
 #[utoipa::path(
     delete,
@@ -97,7 +102,11 @@ pub async fn remove_from_watchlist(
     CurrentUser(user): CurrentUser,
     Path(symbol): Path<String>,
 ) -> Result<ApiResult<String>, ApiError> {
-    match state.system_store.remove_from_watchlist(&user.id, &symbol).await {
+    match state
+        .system_store
+        .remove_from_watchlist(&user.id, &symbol)
+        .await
+    {
         Ok(_) => Ok(ApiResult("ok".to_string())),
         Err(e) => Err(ApiError::Internal(format!("Store error: {}", e))),
     }

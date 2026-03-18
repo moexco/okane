@@ -7,11 +7,11 @@ use axum::http::request::Parts;
 use axum::middleware::Next;
 use axum::response::Response;
 use chrono::Utc;
-use jsonwebtoken::{decode, DecodingKey, Validation};
+use jsonwebtoken::{DecodingKey, Validation, decode};
 
-use crate::types::Claims;
 use crate::error::ApiError;
 use crate::server::AppState;
+use crate::types::Claims;
 use okane_core::store::port::UserRole;
 
 /// 提取并验证 Authorization: Bearer <token>
@@ -21,10 +21,12 @@ pub async fn auth_middleware(
     next: Next,
 ) -> Result<Response, ApiError> {
     let auth_header = req.headers().get(axum::http::header::AUTHORIZATION);
-    
+
     let token = match auth_header {
         Some(header_val) => {
-            let s = header_val.to_str().map_err(|_| ApiError::Unauthorized("Invalid auth header".into()))?;
+            let s = header_val
+                .to_str()
+                .map_err(|_| ApiError::Unauthorized("Invalid auth header".into()))?;
             match s.strip_prefix("Bearer ") {
                 Some(t) => t.to_string(),
                 None => return Err(ApiError::Unauthorized("Invalid Bearer format".into())),
@@ -32,7 +34,9 @@ pub async fn auth_middleware(
         }
         None => {
             // 如果 Header 缺失，尝试从 Query 参数解析 (适配浏览器原生 WebSocket)
-            let query_string = req.uri().query().ok_or_else(|| ApiError::Unauthorized("Missing Authorization header or query string".into()))?;
+            let query_string = req.uri().query().ok_or_else(|| {
+                ApiError::Unauthorized("Missing Authorization header or query string".into())
+            })?;
             let mut token = None;
             for pair in query_string.split('&') {
                 let mut parts = pair.split('=');
@@ -43,13 +47,15 @@ pub async fn auth_middleware(
                     }
                 }
             }
-            token.ok_or_else(|| ApiError::Unauthorized("Missing Authorization header or token in query".into()))?
+            token.ok_or_else(|| {
+                ApiError::Unauthorized("Missing Authorization header or token in query".into())
+            })?
         }
     };
 
     // 1. 验证 JWT 基础合法性
     let claims = verify_jwt(&token, &state.app_config.server.jwt_secret)?;
-    
+
     // 2. 检查 Session 状态 (即时撤销核心逻辑)
     // 强制运行时零 DB 读取，内存未命中视为无效
     let session = state.session_cache.get(&claims.sid).map(|s| s.clone());
@@ -57,17 +63,24 @@ pub async fn auth_middleware(
     let session = session.ok_or_else(|| ApiError::Unauthorized("Session not found".into()))?;
 
     if session.is_revoked || session.expires_at < Utc::now() {
-        return Err(ApiError::Unauthorized("Session has been revoked or expired".into()));
+        return Err(ApiError::Unauthorized(
+            "Session has been revoked or expired".into(),
+        ));
     }
 
     // 3. 构造 User 实体注入 Context (利用 Claims 中的冗余信息)
+    let role = claims
+        .role
+        .parse()
+        .map_err(|_| ApiError::Unauthorized("invalid role claim".into()))?;
+
     let user = okane_core::store::port::User {
         id: claims.sub.clone(),
-        name: "".to_string(), 
+        name: "".to_string(),
         password_hash: "".to_string(),
-        role: claims.role.parse().unwrap_or(UserRole::Standard),
+        role,
         force_password_change: claims.force_password_change,
-        created_at: Utc::now(), 
+        created_at: Utc::now(),
     };
 
     req.extensions_mut().insert(user);
@@ -78,17 +91,16 @@ pub async fn auth_middleware(
 
 /// 检查用户是否需要强制修改密码
 /// 必须在 `auth_middleware` 之后应用！
-pub async fn require_password_changed(
-    req: Request,
-    next: Next,
-) -> Result<Response, ApiError> {
+pub async fn require_password_changed(req: Request, next: Next) -> Result<Response, ApiError> {
     let user = req
         .extensions()
         .get::<okane_core::store::port::User>()
         .ok_or_else(|| ApiError::Unauthorized("User context not found".into()))?;
 
     if user.force_password_change {
-        return Err(ApiError::Forbidden("You must change your password before using the API".into()));
+        return Err(ApiError::Forbidden(
+            "You must change your password before using the API".into(),
+        ));
     }
 
     Ok(next.run(req).await)
@@ -96,10 +108,7 @@ pub async fn require_password_changed(
 
 /// Admin 级别权限校验中间件
 /// 必须在 `auth_middleware` 之后应用！
-pub async fn require_admin(
-    req: Request,
-    next: Next,
-) -> Result<Response, ApiError> {
+pub async fn require_admin(req: Request, next: Next) -> Result<Response, ApiError> {
     let user = req
         .extensions()
         .get::<okane_core::store::port::User>()

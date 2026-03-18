@@ -44,8 +44,5 @@ pub trait EngineBuilder: Send + Sync {
     ///
     /// # Returns
     /// * `Result<Pin<Box<dyn Future<...>>>>` - 可 spawn 的异步任务闭包。
-    fn build(
-        &self,
-        params: EngineBuildParams,
-    ) -> Result<EngineFuture, EngineError>;
+    fn build(&self, params: EngineBuildParams) -> Result<EngineFuture, EngineError>;
 }

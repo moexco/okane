@@ -34,11 +34,7 @@ pub trait StrategyStore: Send + Sync {
     ///
     /// # Returns
     /// * `Result<StrategyInstance, StoreError>` - 找到则返回实体，否则 `StoreError::NotFound`。
-    async fn get_instance(
-        &self,
-        user_id: &str,
-        id: &str,
-    ) -> Result<StrategyInstance, StoreError>;
+    async fn get_instance(&self, user_id: &str, id: &str) -> Result<StrategyInstance, StoreError>;
 
     /// # Summary
     /// 更新策略运行状态。
@@ -65,10 +61,7 @@ pub trait StrategyStore: Send + Sync {
     ///
     /// # Returns
     /// * `Result<Vec<StrategyInstance>, StoreError>`
-    async fn list_instances(
-        &self,
-        user_id: &str,
-    ) -> Result<Vec<StrategyInstance>, StoreError>;
+    async fn list_instances(&self, user_id: &str) -> Result<Vec<StrategyInstance>, StoreError>;
 
     /// # Summary
     /// 删除指定用户的策略实例。
@@ -79,11 +72,7 @@ pub trait StrategyStore: Send + Sync {
     ///
     /// # Returns
     /// * `Result<(), StoreError>`
-    async fn delete_instance(
-        &self,
-        user_id: &str,
-        id: &str,
-    ) -> Result<(), StoreError>;
+    async fn delete_instance(&self, user_id: &str, id: &str) -> Result<(), StoreError>;
 }
 
 /// # Summary

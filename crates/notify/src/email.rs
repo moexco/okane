@@ -37,7 +37,13 @@ impl EmailNotifier {
     ///
     /// # Returns
     /// * A new instance of `EmailNotifier` or `NotifyError`.
-    pub fn new(host: &str, user: &str, pass: &str, from: &str, to: &str) -> Result<Self, NotifyError> {
+    pub fn new(
+        host: &str,
+        user: &str,
+        pass: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<Self, NotifyError> {
         let creds = Credentials::new(user.to_string(), pass.to_string());
 
         // Use default submission port 587 with STARTTLS

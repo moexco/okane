@@ -3,9 +3,9 @@ use okane_core::common::time::TimeProvider;
 
 use okane_core::common::TimeFrame;
 use okane_core::engine::error::EngineError;
-use okane_core::market::port::Market;
 use okane_core::market::indicator::IndicatorService;
-use okane_core::trade::port::{TradePort, AlgoOrderPort};
+use okane_core::market::port::Market;
+use okane_core::trade::port::{AlgoOrderPort, TradePort};
 use std::sync::Arc;
 
 /// # Summary
@@ -85,6 +85,8 @@ impl EngineBase {
             .get_stock(symbol)
             .await
             .map_err(|e| EngineError::Market(e.to_string()))?;
-        stock.subscribe(timeframe).map_err(|e| EngineError::Market(e.to_string()))
+        stock
+            .subscribe(timeframe)
+            .map_err(|e| EngineError::Market(e.to_string()))
     }
 }

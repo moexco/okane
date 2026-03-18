@@ -46,5 +46,8 @@ pub trait NotifierFactory: Send + Sync {
     /// * `Ok(Some(notifier))` - 用户已配置通知, 返回对应实例。
     /// * `Ok(None)` - 用户未配置通知或配置为 "none"。
     /// * `Err(NotifyError)` - 查询或创建失败。
-    async fn create_for_user(&self, user_id: &str) -> Result<Option<Arc<dyn Notifier>>, NotifyError>;
+    async fn create_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<Arc<dyn Notifier>>, NotifyError>;
 }

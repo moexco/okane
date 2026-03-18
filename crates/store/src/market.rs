@@ -5,11 +5,11 @@ use okane_core::common::{Stock, TimeFrame};
 use okane_core::market::entity::Candle;
 use okane_core::store::error::StoreError;
 use okane_core::store::port::MarketStore;
+use rust_decimal::Decimal;
 use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow},
 };
-use rust_decimal::Decimal;
 use std::path::PathBuf;
 
 /// MarketStore 的 SQLite 实现，采用“一库一股”策略。
@@ -45,7 +45,8 @@ INSERT OR REPLACE INTO candles (timeframe, time, open, high, low, close, adj_clo
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#;
 
-const SQL_SELECT_CANDLES: &str = "SELECT * FROM candles WHERE timeframe = ? AND time >= ? AND time <= ? ORDER BY time ASC";
+const SQL_SELECT_CANDLES: &str =
+    "SELECT * FROM candles WHERE timeframe = ? AND time >= ? AND time <= ? ORDER BY time ASC";
 
 impl SqliteMarketStore {
     /// 创建新的 SqliteMarketStore 实例。
@@ -108,9 +109,9 @@ impl SqliteMarketStore {
 
         // 初始化个股 K 下表 (同步 Candle 最新结构)
         sqlx::query(SQL_INIT_TABLES)
-        .execute(&pool)
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))?;
+            .execute(&pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
 
         self.pools.insert(key, pool.clone());
         Ok(pool)
@@ -144,18 +145,18 @@ impl MarketStore for SqliteMarketStore {
 
         for candle in candles {
             sqlx::query(SQL_INSERT_CANDLE)
-            .bind(&timeframe_str)
-            .bind(candle.time)
-            .bind(candle.open.to_string())
-            .bind(candle.high.to_string())
-            .bind(candle.low.to_string())
-            .bind(candle.close.to_string())
-            .bind(candle.adj_close.map(|a| a.to_string()))
-            .bind(candle.volume.to_string())
-            .bind(i32::from(candle.is_final))
-            .execute(&pool)
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+                .bind(&timeframe_str)
+                .bind(candle.time)
+                .bind(candle.open.to_string())
+                .bind(candle.high.to_string())
+                .bind(candle.low.to_string())
+                .bind(candle.close.to_string())
+                .bind(candle.adj_close.map(|a| a.to_string()))
+                .bind(candle.volume.to_string())
+                .bind(i32::from(candle.is_final))
+                .execute(&pool)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
         }
 
         Ok(())
@@ -207,12 +208,22 @@ impl MarketStore for SqliteMarketStore {
 
             results.push(Candle {
                 time: row.get("time"),
-                open: Decimal::from_str(&open_str).map_err(|e| StoreError::Database(format!("Failed to parse Decimal '{}': {}", open_str, e)))?,
-                high: Decimal::from_str(&high_str).map_err(|e| StoreError::Database(format!("Failed to parse Decimal '{}': {}", high_str, e)))?,
-                low: Decimal::from_str(&low_str).map_err(|e| StoreError::Database(format!("Failed to parse Decimal '{}': {}", low_str, e)))?,
-                close: Decimal::from_str(&close_str).map_err(|e| StoreError::Database(format!("Failed to parse Decimal '{}': {}", close_str, e)))?,
+                open: Decimal::from_str(&open_str).map_err(|e| {
+                    StoreError::Database(format!("Failed to parse Decimal '{}': {}", open_str, e))
+                })?,
+                high: Decimal::from_str(&high_str).map_err(|e| {
+                    StoreError::Database(format!("Failed to parse Decimal '{}': {}", high_str, e))
+                })?,
+                low: Decimal::from_str(&low_str).map_err(|e| {
+                    StoreError::Database(format!("Failed to parse Decimal '{}': {}", low_str, e))
+                })?,
+                close: Decimal::from_str(&close_str).map_err(|e| {
+                    StoreError::Database(format!("Failed to parse Decimal '{}': {}", close_str, e))
+                })?,
                 adj_close: adj_close_str.and_then(|s| Decimal::from_str(&s).ok()),
-                volume: Decimal::from_str(&volume_str).map_err(|e| StoreError::Database(format!("Failed to parse Decimal '{}': {}", volume_str, e)))?,
+                volume: Decimal::from_str(&volume_str).map_err(|e| {
+                    StoreError::Database(format!("Failed to parse Decimal '{}': {}", volume_str, e))
+                })?,
                 is_final: row.get::<i32, _>("is_final") != 0,
             });
         }

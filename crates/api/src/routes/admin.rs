@@ -1,9 +1,11 @@
-use crate::types::{ApiResponse, ApiResult, CreateUserRequest, UserResponse, UpdateSettingsRequest};
 use crate::error::ApiError;
 use crate::server::AppState;
-use okane_core::store::port::{User, UserRole};
-use chrono::Utc;
+use crate::types::{
+    ApiResponse, ApiResult, CreateUserRequest, UpdateSettingsRequest, UserResponse,
+};
 use axum::extract::State;
+use chrono::Utc;
+use okane_core::store::port::{User, UserRole};
 
 /// 创建新子账户
 ///
@@ -41,16 +43,14 @@ pub async fn create_user(
     }
 
     // 2. 角色解析与密码安全哈希
-    let role = req
-        .role
-        .parse::<UserRole>()
-        .map_err(ApiError::BadRequest)?;
+    let role = req.role.parse::<UserRole>().map_err(ApiError::BadRequest)?;
 
     let hashed_pwd = bcrypt::hash(&req.password, bcrypt::DEFAULT_COST)
         .map_err(|_| ApiError::Internal("Failed to hash new user password".into()))?;
 
     // 3. 构造并保存
-    let force_change = req_json.get("force_password_change")
+    let force_change = req_json
+        .get("force_password_change")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
 
@@ -90,11 +90,18 @@ pub async fn update_settings(
     State(state): State<AppState>,
     axum::Json(req): axum::Json<UpdateSettingsRequest>,
 ) -> Result<ApiResult<String>, ApiError> {
-    tracing::info!("Admin updating setting '{}' to '{}'", req.setting_key, req.setting_value);
-    
-    state.system_store.set_setting(&req.setting_key, &req.setting_value).await
+    tracing::info!(
+        "Admin updating setting '{}' to '{}'",
+        req.setting_key,
+        req.setting_value
+    );
+
+    state
+        .system_store
+        .set_setting(&req.setting_key, &req.setting_value)
+        .await
         .map_err(|e| ApiError::Internal(format!("failed to save setting: {}", e)))?;
-        
+
     // TODO: Broadcast event to Engine for hot-reloading if applicable
     Ok(ApiResult("ok".to_string()))
 }

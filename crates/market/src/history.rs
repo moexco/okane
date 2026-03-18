@@ -10,6 +10,7 @@
 //!
 //! 策略和引擎完全不感知自己运行在回测环境中。
 
+use crate::buffer::RollingBuffer;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use okane_core::common::time::{FakeClockProvider, TimeProvider};
@@ -20,7 +21,6 @@ use okane_core::market::port::{CandleStream, Market, Stock, StockStatus};
 use okane_core::trade::port::BacktestTradePort;
 use rust_decimal::Decimal;
 use std::sync::Arc;
-use crate::buffer::RollingBuffer;
 use std::sync::Mutex;
 use tracing::debug;
 
@@ -60,7 +60,10 @@ impl BacktestStock {
         trade_port: Arc<dyn BacktestTradePort>,
     ) -> Self {
         Self {
-            identity: StockIdentity { symbol, exchange: None },
+            identity: StockIdentity {
+                symbol,
+                exchange: None,
+            },
             buffer: Arc::new(Mutex::new(RollingBuffer::new(1000))),
             start_time: start,
             end_time: end,
@@ -84,7 +87,10 @@ impl BacktestStock {
             (Utc::now(), Utc::now())
         };
         Self {
-            identity: StockIdentity { symbol, exchange: None },
+            identity: StockIdentity {
+                symbol,
+                exchange: None,
+            },
             buffer: Arc::new(Mutex::new(RollingBuffer::new(candles.len().max(1)))),
             start_time: start,
             end_time: end,
@@ -103,17 +109,26 @@ impl Stock for BacktestStock {
     }
 
     fn current_price(&self) -> Result<Option<Decimal>, MarketError> {
-        let buffer = self.buffer.lock().map_err(|e| MarketError::Unknown(e.to_string()))?;
+        let buffer = self
+            .buffer
+            .lock()
+            .map_err(|e| MarketError::Unknown(e.to_string()))?;
         Ok(buffer.last().map(|c| c.close))
     }
 
     fn latest_candle(&self, _timeframe: TimeFrame) -> Result<Option<Candle>, MarketError> {
-        let buffer = self.buffer.lock().map_err(|e| MarketError::Unknown(e.to_string()))?;
+        let buffer = self
+            .buffer
+            .lock()
+            .map_err(|e| MarketError::Unknown(e.to_string()))?;
         Ok(buffer.last())
     }
 
     fn last_closed_candle(&self, _timeframe: TimeFrame) -> Result<Option<Candle>, MarketError> {
-        let buffer = self.buffer.lock().map_err(|e| MarketError::Unknown(e.to_string()))?;
+        let buffer = self
+            .buffer
+            .lock()
+            .map_err(|e| MarketError::Unknown(e.to_string()))?;
         let vec = buffer.to_vec();
         if vec.len() >= 2 {
             Ok(Some(vec[vec.len() - 2].clone()))
@@ -131,7 +146,7 @@ impl Stock for BacktestStock {
         let trade = self.trade_port.clone();
         let symbol = self.identity.symbol.clone();
         let buffer = self.buffer.clone();
-        
+
         let source = self.source.clone();
         let static_candles = self.static_candles.clone();
         let start = self.start_time;
@@ -143,7 +158,11 @@ impl Stock for BacktestStock {
                 let candles = if let Some(ref s) = source {
                     // 批量拉取数据，提高效率
                     let limit = 100u32;
-                    let duration = timeframe.duration() * (i32::try_from(limit).unwrap_or(0));
+                    let Ok(limit_i32) = i32::try_from(limit) else {
+                        debug!("streaming fetch limit overflow for {}", symbol);
+                        break;
+                    };
+                    let duration = timeframe.duration() * limit_i32;
                     match s.fetch_history(timeframe, current, current + duration).await {
                         Ok(h) => h,
                         Err(e) => {
@@ -173,7 +192,7 @@ impl Stock for BacktestStock {
                     if let Err(e) = tp.set_time(candle.time) {
                         debug!("Clock set failed: {}", e);
                     }
-                    
+
                     // 更新缓冲区
                     {
                         if let Ok(mut b) = buffer.lock() {
@@ -203,13 +222,20 @@ impl Stock for BacktestStock {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<Vec<Candle>, MarketError> {
-        let now = self.time_provider.now().map_err(|e| MarketError::Unknown(e.to_string()))?;
-        
+        let now = self
+            .time_provider
+            .now()
+            .map_err(|e| MarketError::Unknown(e.to_string()))?;
+
         // 核心加固：禁止获取当前回测时刻之后的数据
         let safe_end = std::cmp::min(end, now);
 
-        let buffer = self.buffer.lock().map_err(|e| MarketError::Unknown(e.to_string()))?;
-        let filtered: Vec<Candle> = buffer.to_vec()
+        let buffer = self
+            .buffer
+            .lock()
+            .map_err(|e| MarketError::Unknown(e.to_string()))?;
+        let filtered: Vec<Candle> = buffer
+            .to_vec()
             .into_iter()
             .filter(|c| c.time >= start && c.time <= safe_end)
             .collect();
@@ -283,12 +309,12 @@ impl Market for BacktestMarket {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use okane_core::common::time::FakeClockProvider;
-    use okane_core::trade::port::{BacktestTradePort, TradePort, TradeError};
-    use okane_core::trade::entity::{AccountId, AccountSnapshot, Order, OrderId};
-    use rust_decimal_macros::dec;
     use chrono::{TimeZone, Utc};
     use futures::StreamExt;
+    use okane_core::common::time::FakeClockProvider;
+    use okane_core::trade::entity::{AccountId, AccountSnapshot, Order, OrderId};
+    use okane_core::trade::port::{BacktestTradePort, TradeError, TradePort};
+    use rust_decimal_macros::dec;
 
     struct MockTradePort;
 
@@ -310,7 +336,11 @@ mod tests {
             Ok(None)
         }
 
-        async fn ensure_account(&self, _account_id: AccountId, _initial_balance: rust_decimal::Decimal) -> Result<(), TradeError> {
+        async fn ensure_account(
+            &self,
+            _account_id: AccountId,
+            _initial_balance: rust_decimal::Decimal,
+        ) -> Result<(), TradeError> {
             Ok(())
         }
     }
@@ -324,80 +354,152 @@ mod tests {
 
     #[tokio::test]
     async fn test_backtest_stock_basic() -> anyhow::Result<()> {
-        let tp = Arc::new(FakeClockProvider::new(Utc.timestamp_opt(1000, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?));
+        let tp = Arc::new(FakeClockProvider::new(
+            Utc.timestamp_opt(1000, 0)
+                .single()
+                .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?,
+        ));
         let spy_trade = Arc::new(MockTradePort);
         let candles = vec![
-            Candle { 
-                time: Utc.timestamp_opt(1000, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?, 
-                open: dec!(100), high: dec!(101), low: dec!(99), close: dec!(100), adj_close: None, volume: dec!(1000), is_final: true 
+            Candle {
+                time: Utc
+                    .timestamp_opt(1000, 0)
+                    .single()
+                    .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?,
+                open: dec!(100),
+                high: dec!(101),
+                low: dec!(99),
+                close: dec!(100),
+                adj_close: None,
+                volume: dec!(1000),
+                is_final: true,
             },
-            Candle { 
-                time: Utc.timestamp_opt(1060, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?, 
-                open: dec!(100), high: dec!(102), low: dec!(98), close: dec!(101), adj_close: None, volume: dec!(1100), is_final: true 
+            Candle {
+                time: Utc
+                    .timestamp_opt(1060, 0)
+                    .single()
+                    .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?,
+                open: dec!(100),
+                high: dec!(102),
+                low: dec!(98),
+                close: dec!(101),
+                adj_close: None,
+                volume: dec!(1100),
+                is_final: true,
             },
         ];
-        
+
         let stock = BacktestStock::new("AAPL".into(), candles, tp.clone(), spy_trade.clone());
-        
+
         assert_eq!(stock.identity().symbol, "AAPL");
         assert_eq!(stock.status(), StockStatus::Online);
-        
+
         // Initial state
         assert_eq!(stock.current_price()?, None);
-        
+
         // Tick through subscription
         let mut stream = stock.subscribe(TimeFrame::Minute1)?;
-        
-        let c1 = stream.next().await.ok_or_else(|| anyhow::anyhow!("Stream ended too early"))??;
+
+        let c1 = stream
+            .next()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Stream ended too early"))??;
         assert_eq!(c1.time.timestamp(), 1000);
         assert_eq!(tp.now()?, c1.time);
         assert_eq!(stock.current_price()?, Some(dec!(100)));
-        
-        let c2 = stream.next().await.ok_or_else(|| anyhow::anyhow!("Stream ended too early"))??;
+
+        let c2 = stream
+            .next()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Stream ended too early"))??;
         assert_eq!(c2.time.timestamp(), 1060);
         assert_eq!(tp.now()?, c2.time);
         assert_eq!(stock.current_price()?, Some(dec!(101)));
-        assert_eq!(stock.last_closed_candle(TimeFrame::Minute1)?.ok_or_else(|| anyhow::anyhow!("Last candle missing"))?.time.timestamp(), 1000);
+        assert_eq!(
+            stock
+                .last_closed_candle(TimeFrame::Minute1)?
+                .ok_or_else(|| anyhow::anyhow!("Last candle missing"))?
+                .time
+                .timestamp(),
+            1000
+        );
 
         Ok(())
     }
 
     #[tokio::test]
     async fn test_backtest_stock_prevent_future_leak() -> anyhow::Result<()> {
-        let tp = Arc::new(FakeClockProvider::new(Utc.timestamp_opt(1000, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?));
+        let tp = Arc::new(FakeClockProvider::new(
+            Utc.timestamp_opt(1000, 0)
+                .single()
+                .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?,
+        ));
         let spy_trade = Arc::new(MockTradePort);
         let candles = vec![
-            Candle { 
-                time: Utc.timestamp_opt(1000, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?, 
-                open: dec!(100), high: dec!(101), low: dec!(99), close: dec!(100), adj_close: None, volume: dec!(1000), is_final: true 
+            Candle {
+                time: Utc
+                    .timestamp_opt(1000, 0)
+                    .single()
+                    .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?,
+                open: dec!(100),
+                high: dec!(101),
+                low: dec!(99),
+                close: dec!(100),
+                adj_close: None,
+                volume: dec!(1000),
+                is_final: true,
             },
-            Candle { 
-                time: Utc.timestamp_opt(1060, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?, 
-                open: dec!(101), high: dec!(102), low: dec!(100), close: dec!(101), adj_close: None, volume: dec!(1100), is_final: true 
+            Candle {
+                time: Utc
+                    .timestamp_opt(1060, 0)
+                    .single()
+                    .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?,
+                open: dec!(101),
+                high: dec!(102),
+                low: dec!(100),
+                close: dec!(101),
+                adj_close: None,
+                volume: dec!(1100),
+                is_final: true,
             },
-            Candle { 
-                time: Utc.timestamp_opt(1120, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?, 
-                open: dec!(101), high: dec!(103), low: dec!(101), close: dec!(102), adj_close: None, volume: dec!(1200), is_final: true 
+            Candle {
+                time: Utc
+                    .timestamp_opt(1120, 0)
+                    .single()
+                    .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?,
+                open: dec!(101),
+                high: dec!(103),
+                low: dec!(101),
+                close: dec!(102),
+                adj_close: None,
+                volume: dec!(1200),
+                is_final: true,
             },
         ];
-        
+
         let stock = BacktestStock::new("AAPL".into(), candles, tp.clone(), spy_trade.clone());
-        
+
         // Load some data into the buffer by ticking once
         let mut stream = stock.subscribe(TimeFrame::Minute1)?;
         let _ = stream.next().await; // Now clock is at 1000
-        
+
         // Strategy asks for history up to 1120
-        let history = stock.fetch_history(
-            TimeFrame::Minute1, 
-            Utc.timestamp_opt(1000, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?, 
-            Utc.timestamp_opt(1120, 0).single().ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?
-        ).await?;
-        
+        let history = stock
+            .fetch_history(
+                TimeFrame::Minute1,
+                Utc.timestamp_opt(1000, 0)
+                    .single()
+                    .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?,
+                Utc.timestamp_opt(1120, 0)
+                    .single()
+                    .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?,
+            )
+            .await?;
+
         // Should only see up to 1000, because clock is at 1000
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].time.timestamp(), 1000);
-        
+
         Ok(())
     }
 }

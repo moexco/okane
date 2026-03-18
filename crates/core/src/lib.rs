@@ -1,8 +1,8 @@
-pub mod error;
 pub mod cache;
 pub mod common;
 pub mod config;
 pub mod engine;
+pub mod error;
 pub mod market;
 pub mod notify;
 pub mod store;

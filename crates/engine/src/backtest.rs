@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
-use okane_core::common::time::FakeClockProvider;
 use okane_core::common::TimeFrame;
+use okane_core::common::time::FakeClockProvider;
 use okane_core::market::port::Market;
 use okane_core::trade::port::BacktestTradePort;
 use std::sync::Arc;
@@ -60,8 +60,8 @@ impl BacktestDriver {
         // 统一预拉取回测所需的所有历史 K 线
         // 计算一个足够宽的时间窗口，考虑周末和停牌缺口 (使用 2x 缓冲)
         // 此处 limit 必须能安全转换为 i32 以参与时长计算，严禁溢出导致静默产生 0 长度窗口。
-        let limit_i32 = i32::try_from(limit)
-            .map_err(|e| format!("Backtest limit overflow: {}", e))?;
+        let limit_i32 =
+            i32::try_from(limit).map_err(|e| format!("Backtest limit overflow: {}", e))?;
         let duration = timeframe.duration() * (limit_i32 * 2);
         let end_time = start_time + duration;
 
@@ -79,7 +79,9 @@ impl BacktestDriver {
         // 以历史数据长度推演时间轴并派发给下游引擎
         for candle in history {
             // 步骤 1: 将时间拨动到当前 K 线的时间
-            self.time_provider.set_time(candle.time).map_err(|e| e.to_string())?;
+            self.time_provider
+                .set_time(candle.time)
+                .map_err(|e| e.to_string())?;
 
             // 步骤 2: 触发订单路由器的 Tick 检查挂单穿越
             if let Err(e) = self.trade_port.tick(symbol, &candle).await {

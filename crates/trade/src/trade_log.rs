@@ -23,20 +23,30 @@ impl TradeLog {
 
     /// 记录一笔成交
     pub fn record(&self, trade: &Trade) -> Result<(), okane_core::error::CoreError> {
-        let mut trades = self.trades.lock().map_err(|e| okane_core::error::CoreError::Poisoned(format!("TradeLog record lock error: {}", e)))?;
+        let mut trades = self.trades.lock().map_err(|e| {
+            okane_core::error::CoreError::Poisoned(format!("TradeLog record lock error: {}", e))
+        })?;
         trades.push(trade.clone());
         Ok(())
     }
 
     /// 取出所有已记录的成交并清空收集器
     pub fn drain(&self) -> Result<Vec<Trade>, okane_core::error::CoreError> {
-        let mut trades = self.trades.lock().map_err(|e| okane_core::error::CoreError::Poisoned(format!("TradeLog drain lock error: {}", e)))?;
+        let mut trades = self.trades.lock().map_err(|e| {
+            okane_core::error::CoreError::Poisoned(format!("TradeLog drain lock error: {}", e))
+        })?;
         Ok(std::mem::take(&mut *trades))
     }
 
     /// 获取已记录的成交数量
     pub fn len(&self) -> Result<usize, okane_core::error::CoreError> {
-        Ok(self.trades.lock().map_err(|e| okane_core::error::CoreError::Poisoned(format!("TradeLog len lock error: {}", e)))?.len())
+        Ok(self
+            .trades
+            .lock()
+            .map_err(|e| {
+                okane_core::error::CoreError::Poisoned(format!("TradeLog len lock error: {}", e))
+            })?
+            .len())
     }
 
     /// 检查是否为空
@@ -54,7 +64,7 @@ impl Default for TradeLog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use okane_core::trade::entity::{Trade, OrderId, AccountId, OrderDirection};
+    use okane_core::trade::entity::{AccountId, OrderDirection, OrderId, Trade};
     use rust_decimal_macros::dec;
 
     #[test]

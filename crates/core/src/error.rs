@@ -1,5 +1,5 @@
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use serde::{Serialize, Deserialize};
 
 /// # Summary
 /// Core 模块通用错误枚举。
@@ -7,7 +7,7 @@ use serde::{Serialize, Deserialize};
 pub enum CoreError {
     #[error("lock poisoned: {0}")]
     Poisoned(String),
-    
+
     #[error("internal error: {0}")]
     Internal(String),
 

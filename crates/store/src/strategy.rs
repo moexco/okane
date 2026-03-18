@@ -5,13 +5,13 @@ use okane_core::store::error::StoreError;
 use okane_core::strategy::entity::{StrategyInstance, StrategyLogEntry, StrategyStatus};
 use okane_core::strategy::port::{StrategyLogPort, StrategyStore};
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     Row, SqlitePool,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 use std::io::SeekFrom;
+use std::path::PathBuf;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
-use std::path::PathBuf;
 
 /// # Summary
 /// StrategyStore 的 SQLite 实现，采用"一户一库"策略。
@@ -54,14 +54,14 @@ INSERT OR REPLACE INTO strategy_instances
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#;
 
-const SQL_UPDATE_STATUS: &str = "UPDATE strategy_instances SET status = ?, updated_at = ? WHERE id = ?";
+const SQL_UPDATE_STATUS: &str =
+    "UPDATE strategy_instances SET status = ?, updated_at = ? WHERE id = ?";
 
 const SQL_SELECT_STRATEGY: &str = "SELECT * FROM strategy_instances WHERE id = ?";
 
 const SQL_SELECT_ALL_STRATEGIES: &str = "SELECT * FROM strategy_instances";
 
 const SQL_DELETE_STRATEGY: &str = "DELETE FROM strategy_instances WHERE id = ?";
-
 
 impl SqliteStrategyStore {
     /// # Summary
@@ -104,9 +104,9 @@ impl SqliteStrategyStore {
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
         sqlx::query(SQL_INIT_TABLES)
-        .execute(&pool)
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))?;
+            .execute(&pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
 
         self.pools.insert(user_id.to_string(), pool.clone());
         Ok(pool)
@@ -124,26 +124,37 @@ impl StrategyStore for SqliteStrategyStore {
     ) -> Result<(), StoreError> {
         let pool = self.get_or_init_pool(user_id).await?;
         sqlx::query(SQL_INSERT_STRATEGY)
-        .bind(&instance.id)
-        .bind(&instance.symbol)
-        .bind(&instance.account_id)
-        .bind(instance.timeframe.to_string())
-        .bind(instance.engine_type.to_string())
-        .bind(&instance.source)
-        .bind(instance.status.to_string())
-        .bind(instance.created_at)
-        .bind(instance.updated_at)
-        .execute(&pool)
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))?;
+            .bind(&instance.id)
+            .bind(&instance.symbol)
+            .bind(&instance.account_id)
+            .bind(instance.timeframe.to_string())
+            .bind(instance.engine_type.to_string())
+            .bind(&instance.source)
+            .bind(instance.status.to_string())
+            .bind(instance.created_at)
+            .bind(instance.updated_at)
+            .execute(&pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
         Ok(())
     }
 
     async fn get_instance(&self, user_id: &str, id: &str) -> Result<StrategyInstance, StoreError> {
         let pool = self.get_or_init_pool(user_id).await?;
-        let row = sqlx::query_as::<_, (String, String, String, String, String, Vec<u8>, String, DateTime<Utc>, DateTime<Utc>)>(
-            SQL_SELECT_STRATEGY
-        )
+        let row = sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                String,
+                String,
+                String,
+                Vec<u8>,
+                String,
+                DateTime<Utc>,
+                DateTime<Utc>,
+            ),
+        >(SQL_SELECT_STRATEGY)
         .bind(id)
         .fetch_optional(&pool)
         .await
@@ -157,13 +168,20 @@ impl StrategyStore for SqliteStrategyStore {
             timeframe: row.3.parse().map_err(|e: String| StoreError::Database(e))?,
             engine_type: row.4.parse().map_err(|e: String| StoreError::Database(e))?,
             source: row.5,
-            status: row.6.parse().unwrap_or_else(|e| StrategyStatus::Failed(format!("Parse error: {}", e))),
+            status: row.6.parse().map_err(|e: String| {
+                StoreError::Database(format!("failed to parse strategy status: {}", e))
+            })?,
             created_at: row.7,
             updated_at: row.8,
         })
     }
 
-    async fn update_status(&self, user_id: &str, id: &str, status: StrategyStatus) -> Result<(), StoreError> {
+    async fn update_status(
+        &self,
+        user_id: &str,
+        id: &str,
+        status: StrategyStatus,
+    ) -> Result<(), StoreError> {
         let pool = self.get_or_init_pool(user_id).await?;
         let res = sqlx::query(SQL_UPDATE_STATUS)
             .bind(status.to_string())
@@ -172,7 +190,7 @@ impl StrategyStore for SqliteStrategyStore {
             .execute(&pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
-        
+
         if res.rows_affected() == 0 {
             return Err(StoreError::NotFound);
         }
@@ -181,26 +199,41 @@ impl StrategyStore for SqliteStrategyStore {
 
     async fn list_instances(&self, user_id: &str) -> Result<Vec<StrategyInstance>, StoreError> {
         let pool = self.get_or_init_pool(user_id).await?;
-        let rows = sqlx::query_as::<_, (String, String, String, String, String, Vec<u8>, String, DateTime<Utc>, DateTime<Utc>)> (
-            SQL_SELECT_ALL_STRATEGIES
-        )
+        let rows = sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                String,
+                String,
+                String,
+                Vec<u8>,
+                String,
+                DateTime<Utc>,
+                DateTime<Utc>,
+            ),
+        >(SQL_SELECT_ALL_STRATEGIES)
         .fetch_all(&pool)
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?;
 
-        rows.into_iter().map(|row| {
-             Ok(StrategyInstance {
-                id: row.0,
-                symbol: row.1,
-                account_id: row.2,
-                timeframe: row.3.parse().map_err(|e: String| StoreError::Database(e))?,
-                engine_type: row.4.parse().map_err(|e: String| StoreError::Database(e))?,
-                source: row.5,
-                status: row.6.parse().unwrap_or_else(|e| StrategyStatus::Failed(format!("Parse error: {}", e))),
-                created_at: row.7,
-                updated_at: row.8,
+        rows.into_iter()
+            .map(|row| {
+                Ok(StrategyInstance {
+                    id: row.0,
+                    symbol: row.1,
+                    account_id: row.2,
+                    timeframe: row.3.parse().map_err(|e: String| StoreError::Database(e))?,
+                    engine_type: row.4.parse().map_err(|e: String| StoreError::Database(e))?,
+                    source: row.5,
+                    status: row.6.parse().map_err(|e: String| {
+                        StoreError::Database(format!("failed to parse strategy status: {}", e))
+                    })?,
+                    created_at: row.7,
+                    updated_at: row.8,
+                })
             })
-        }).collect()
+            .collect()
     }
 
     async fn delete_instance(&self, user_id: &str, id: &str) -> Result<(), StoreError> {
@@ -210,7 +243,7 @@ impl StrategyStore for SqliteStrategyStore {
             .execute(&pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
-        
+
         if res.rows_affected() == 0 {
             return Err(StoreError::NotFound);
         }
@@ -220,13 +253,9 @@ impl StrategyStore for SqliteStrategyStore {
 
 #[async_trait]
 impl StrategyLogPort for SqliteStrategyStore {
-    async fn append_log(
-        &self,
-        user_id: &str,
-        entry: &StrategyLogEntry,
-    ) -> Result<(), StoreError> {
+    async fn append_log(&self, user_id: &str, entry: &StrategyLogEntry) -> Result<(), StoreError> {
         let pool = self.get_or_init_pool(user_id).await?;
-        
+
         // 1. 确定物理文件路径
         let log_dir = self.base_path.join("logs").join(user_id);
         if !log_dir.exists() {
@@ -235,9 +264,13 @@ impl StrategyLogPort for SqliteStrategyStore {
         let log_path = log_dir.join(format!("{}.logl", entry.strategy_id));
 
         // 2. 序列化并写入文件
-        let mut json = serde_json::to_vec(entry).map_err(|e| StoreError::Database(e.to_string()))?;
+        let mut json =
+            serde_json::to_vec(entry).map_err(|e| StoreError::Database(e.to_string()))?;
         json.push(b'\n');
-        let length: i64 = json.len().try_into().map_err(|_| StoreError::Database("Log entry too large".to_string()))?;
+        let length: i64 = json
+            .len()
+            .try_into()
+            .map_err(|_| StoreError::Database("Log entry too large".to_string()))?;
 
         let mut file = OpenOptions::new()
             .create(true)
@@ -245,12 +278,21 @@ impl StrategyLogPort for SqliteStrategyStore {
             .open(&log_path)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
-        
-        let offset_u = file.seek(SeekFrom::End(0)).await.map_err(|e| StoreError::Database(e.to_string()))?;
-        let offset: i64 = offset_u.try_into().map_err(|_| StoreError::Database("File offset too large".to_string()))?;
-        
-        file.write_all(&json).await.map_err(|e| StoreError::Database(e.to_string()))?;
-        file.flush().await.map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let offset_u = file
+            .seek(SeekFrom::End(0))
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let offset: i64 = offset_u
+            .try_into()
+            .map_err(|_| StoreError::Database("File offset too large".to_string()))?;
+
+        file.write_all(&json)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        file.flush()
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
 
         // 3. 写入 SQLite 索引
         sqlx::query("INSERT INTO strategy_log_index (strategy_id, timestamp, level, offset, length) VALUES (?, ?, ?, ?, ?)")
@@ -275,8 +317,12 @@ impl StrategyLogPort for SqliteStrategyStore {
     ) -> Result<Vec<StrategyLogEntry>, StoreError> {
         let pool = self.get_or_init_pool(user_id).await?;
 
-        let i_limit: i64 = limit.try_into().map_err(|_| StoreError::Database("Limit too large".to_string()))?;
-        let i_offset: i64 = offset.try_into().map_err(|_| StoreError::Database("Offset too large".to_string()))?;
+        let i_limit: i64 = limit
+            .try_into()
+            .map_err(|_| StoreError::Database("Limit too large".to_string()))?;
+        let i_offset: i64 = offset
+            .try_into()
+            .map_err(|_| StoreError::Database("Offset too large".to_string()))?;
 
         // 1. 从索引表中查找偏移量
         let rows = sqlx::query("SELECT offset, length FROM strategy_log_index WHERE strategy_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?")
@@ -292,22 +338,37 @@ impl StrategyLogPort for SqliteStrategyStore {
         }
 
         // 2. 从物理文件中批量读取
-        let log_path = self.base_path.join("logs").join(user_id).join(format!("{}.logl", strategy_id));
-        let mut file = tokio::fs::File::open(&log_path).await.map_err(|e| StoreError::Database(e.to_string()))?;
-        
+        let log_path = self
+            .base_path
+            .join("logs")
+            .join(user_id)
+            .join(format!("{}.logl", strategy_id));
+        let mut file = tokio::fs::File::open(&log_path)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
         let mut entries = Vec::new();
         for row in rows {
             let off: i64 = row.get(0);
             let len: i64 = row.get(1);
-            
-            let u_off: u64 = off.try_into().map_err(|_| StoreError::Database("Negative log offset".to_string()))?;
-            let u_len: usize = len.try_into().map_err(|_| StoreError::Database("Negative log length".to_string()))?;
+
+            let u_off: u64 = off
+                .try_into()
+                .map_err(|_| StoreError::Database("Negative log offset".to_string()))?;
+            let u_len: usize = len
+                .try_into()
+                .map_err(|_| StoreError::Database("Negative log length".to_string()))?;
 
             let mut buf = vec![0u8; u_len];
-            file.seek(SeekFrom::Start(u_off)).await.map_err(|e| StoreError::Database(e.to_string()))?;
-            file.read_exact(&mut buf).await.map_err(|e| StoreError::Database(e.to_string()))?;
-            
-            let entry: StrategyLogEntry = serde_json::from_slice(&buf).map_err(|e| StoreError::Database(e.to_string()))?;
+            file.seek(SeekFrom::Start(u_off))
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            file.read_exact(&mut buf)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let entry: StrategyLogEntry =
+                serde_json::from_slice(&buf).map_err(|e| StoreError::Database(e.to_string()))?;
             entries.push(entry);
         }
 

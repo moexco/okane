@@ -2,13 +2,13 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use okane_core::store::error::StoreError;
 use okane_core::store::port::{Position, StockMetadata, SystemStore, User};
+use rust_decimal::Decimal;
 use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
-use std::path::PathBuf;
-use rust_decimal::Decimal;
 use std::fs;
+use std::path::PathBuf;
 
 /// 默认系统数据库存储路径
 const DEFAULT_SYSTEM_DB: &str = "system.db";
@@ -104,15 +104,18 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 const SQL_SELECT_SESSION: &str = "SELECT id, user_id, client_id, current_token_id, expires_at, is_revoked, created_at FROM user_sessions WHERE id = ?";
 const SQL_SELECT_SESSION_BY_CLIENT: &str = "SELECT id, user_id, client_id, current_token_id, expires_at, is_revoked, created_at FROM user_sessions WHERE user_id = ? AND client_id = ? AND is_revoked = 0 AND expires_at > ?";
 const SQL_REVOKE_SESSION: &str = "UPDATE user_sessions SET is_revoked = 1 WHERE id = ?";
-const SQL_REVOKE_ALL_USER_SESSIONS: &str = "UPDATE user_sessions SET is_revoked = 1 WHERE user_id = ?";
+const SQL_REVOKE_ALL_USER_SESSIONS: &str =
+    "UPDATE user_sessions SET is_revoked = 1 WHERE user_id = ?";
 const SQL_LIST_ACTIVE_SESSIONS: &str = "SELECT id, user_id, client_id, current_token_id, expires_at, is_revoked, created_at FROM user_sessions WHERE is_revoked = 0 AND expires_at > ?";
 const SQL_DELETE_EXPIRED_SESSIONS: &str = "DELETE FROM user_sessions WHERE expires_at < ?";
 
 const SQL_SELECT_WATCHLIST: &str = "SELECT symbol FROM watchlists WHERE user_id = ?";
-const SQL_INSERT_WATCHLIST: &str = "INSERT OR IGNORE INTO watchlists (user_id, symbol) VALUES (?, ?)";
+const SQL_INSERT_WATCHLIST: &str =
+    "INSERT OR IGNORE INTO watchlists (user_id, symbol) VALUES (?, ?)";
 const SQL_DELETE_WATCHLIST: &str = "DELETE FROM watchlists WHERE user_id = ? AND symbol = ?";
 
-const SQL_SELECT_POSITIONS: &str = "SELECT symbol, quantity, avg_price, last_updated FROM positions WHERE user_id = ?";
+const SQL_SELECT_POSITIONS: &str =
+    "SELECT symbol, quantity, avg_price, last_updated FROM positions WHERE user_id = ?";
 const SQL_UPDATE_POSITION: &str = r#"
 INSERT OR REPLACE INTO positions (user_id, symbol, quantity, avg_price, last_updated)
 VALUES (?, ?, ?, ?, ?)
@@ -125,10 +128,12 @@ VALUES (?, ?, ?, ?, ?)
 "#;
 
 const SQL_SELECT_SETTING: &str = "SELECT value FROM settings WHERE key = ?";
-const SQL_INSERT_SETTING: &str = "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)";
+const SQL_INSERT_SETTING: &str =
+    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)";
 const SQL_COUNT_USERS: &str = "SELECT COUNT(*) FROM users";
 const SQL_SELECT_USER_NOTIFY: &str = "SELECT config_json FROM user_notify_config WHERE user_id = ?";
-const SQL_UPSERT_USER_NOTIFY: &str = "INSERT OR REPLACE INTO user_notify_config (user_id, config_json, updated_at) VALUES (?, ?, ?)";
+const SQL_UPSERT_USER_NOTIFY: &str =
+    "INSERT OR REPLACE INTO user_notify_config (user_id, config_json, updated_at) VALUES (?, ?, ?)";
 
 impl SqliteSystemStore {
     /// 创建新的 SqliteSystemStore 并初始化全局表结构。
@@ -172,9 +177,9 @@ impl SqliteSystemStore {
 
         // 初始化系统表
         sqlx::query(SQL_INIT_TABLES)
-        .execute(&pool)
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))?;
+            .execute(&pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
 
         let count: (i64,) = sqlx::query_as(SQL_COUNT_USERS)
             .fetch_one(&pool)
@@ -184,10 +189,10 @@ impl SqliteSystemStore {
         if count.0 == 0 {
             // 生成 12 位随机密码
             let pwd: String = uuid::Uuid::new_v4().to_string()[..12].to_string();
-            
+
             let hashed = bcrypt::hash(&pwd, bcrypt::DEFAULT_COST)
                 .map_err(|e| StoreError::Database(format!("Failed to hash password: {}", e)))?;
-            
+
             sqlx::query(SQL_INSERT_USER)
                 .bind("admin")
                 .bind("System Administrator")
@@ -198,12 +203,12 @@ impl SqliteSystemStore {
                 .execute(&pool)
                 .await
                 .map_err(|e| StoreError::Database(e.to_string()))?;
-                
+
             tracing::warn!("=====================================================");
-            tracing::warn!("🔒 CRITICAL: INITIALIZED SYSTEM ADMIN ACCOUNT 🔒");
-            tracing::warn!("Username: admin");
-            tracing::warn!("Password: {}", pwd);
-            tracing::warn!("⚠️ PLEASE CHANGE THIS PASSWORD UPON FIRST LOGIN ⚠️");
+            tracing::warn!("CRITICAL: initialized system admin account");
+            tracing::warn!("username: admin");
+            tracing::warn!("password: {}", pwd);
+            tracing::warn!("please change this password upon first login");
             tracing::warn!("=====================================================");
         }
 
@@ -235,7 +240,9 @@ impl SystemStore for SqliteSystemStore {
 
         match result {
             Some(r) => {
-                let role = r.3.parse().map_err(|e| StoreError::Database(format!("Invalid role: {}", e)))?;
+                let role =
+                    r.3.parse()
+                        .map_err(|e| StoreError::Database(format!("Invalid role: {}", e)))?;
                 Ok(Some(User {
                     id: r.0,
                     name: r.1,
@@ -349,20 +356,23 @@ impl SystemStore for SqliteSystemStore {
     /// # Returns
     /// * `Result<Vec<Position>, StoreError>`
     async fn get_positions(&self, user_id: &str) -> Result<Vec<Position>, StoreError> {
-        let records = sqlx::query_as::<_, (String, String, String, DateTime<Utc>)>(SQL_SELECT_POSITIONS)
-            .bind(user_id)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let records =
+            sqlx::query_as::<_, (String, String, String, DateTime<Utc>)>(SQL_SELECT_POSITIONS)
+                .bind(user_id)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| StoreError::Database(e.to_string()))?;
 
         Ok(records
             .into_iter()
             .map(|r| {
                 use std::str::FromStr;
-                let quantity = Decimal::from_str(&r.1)
-                    .map_err(|e| StoreError::Database(format!("Failed to parse Decimal '{}': {}", r.1, e)))?;
-                let avg_price = Decimal::from_str(&r.2)
-                    .map_err(|e| StoreError::Database(format!("Failed to parse Decimal '{}': {}", r.2, e)))?;
+                let quantity = Decimal::from_str(&r.1).map_err(|e| {
+                    StoreError::Database(format!("Failed to parse Decimal '{}': {}", r.1, e))
+                })?;
+                let avg_price = Decimal::from_str(&r.2).map_err(|e| {
+                    StoreError::Database(format!("Failed to parse Decimal '{}': {}", r.2, e))
+                })?;
                 Ok(Position {
                     symbol: r.0,
                     quantity,
@@ -411,12 +421,14 @@ impl SystemStore for SqliteSystemStore {
     /// * `Result<Vec<StockMetadata>, StoreError>` - 匹配的元数据列表。
     async fn search_stocks(&self, query: &str) -> Result<Vec<StockMetadata>, StoreError> {
         let like_query = format!("%{}%", query);
-        let records = sqlx::query_as::<_, (String, String, String, Option<String>, String)>(SQL_SEARCH_STOCKS)
-            .bind(&like_query)
-            .bind(&like_query)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))?
+        let records = sqlx::query_as::<_, (String, String, String, Option<String>, String)>(
+            SQL_SEARCH_STOCKS,
+        )
+        .bind(&like_query)
+        .bind(&like_query)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
         .into_iter()
         .map(|r| StockMetadata {
             symbol: r.0,
@@ -448,9 +460,9 @@ impl SystemStore for SqliteSystemStore {
             .bind(&metadata.exchange)
             .bind(&metadata.sector)
             .bind(&metadata.currency)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))?;
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))?;
         Ok(())
     }
 
@@ -469,7 +481,7 @@ impl SystemStore for SqliteSystemStore {
             .fetch_all(&self.pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
-        
+
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
@@ -504,7 +516,10 @@ impl SystemStore for SqliteSystemStore {
         Ok(())
     }
 
-    async fn get_user_notify_config(&self, user_id: &str) -> Result<Option<okane_core::config::UserNotifyConfig>, StoreError> {
+    async fn get_user_notify_config(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<okane_core::config::UserNotifyConfig>, StoreError> {
         let result = sqlx::query_scalar::<_, String>(SQL_SELECT_USER_NOTIFY)
             .bind(user_id)
             .fetch_optional(&self.pool)
@@ -514,16 +529,23 @@ impl SystemStore for SqliteSystemStore {
         match result {
             Some(json_str) => {
                 let config: okane_core::config::UserNotifyConfig = serde_json::from_str(&json_str)
-                    .map_err(|e| StoreError::Database(format!("Failed to deserialize notify config: {}", e)))?;
+                    .map_err(|e| {
+                        StoreError::Database(format!("Failed to deserialize notify config: {}", e))
+                    })?;
                 Ok(Some(config))
             }
             None => Ok(None),
         }
     }
 
-    async fn save_user_notify_config(&self, user_id: &str, config: &okane_core::config::UserNotifyConfig) -> Result<(), StoreError> {
-        let json_str = serde_json::to_string(config)
-            .map_err(|e| StoreError::Database(format!("Failed to serialize notify config: {}", e)))?;
+    async fn save_user_notify_config(
+        &self,
+        user_id: &str,
+        config: &okane_core::config::UserNotifyConfig,
+    ) -> Result<(), StoreError> {
+        let json_str = serde_json::to_string(config).map_err(|e| {
+            StoreError::Database(format!("Failed to serialize notify config: {}", e))
+        })?;
 
         sqlx::query(SQL_UPSERT_USER_NOTIFY)
             .bind(user_id)
@@ -535,7 +557,10 @@ impl SystemStore for SqliteSystemStore {
         Ok(())
     }
 
-    async fn save_session(&self, session: &okane_core::store::port::UserSession) -> Result<(), StoreError> {
+    async fn save_session(
+        &self,
+        session: &okane_core::store::port::UserSession,
+    ) -> Result<(), StoreError> {
         sqlx::query(SQL_INSERT_SESSION)
             .bind(&session.id)
             .bind(&session.user_id)
@@ -550,12 +575,26 @@ impl SystemStore for SqliteSystemStore {
         Ok(())
     }
 
-    async fn get_session(&self, session_id: &str) -> Result<Option<okane_core::store::port::UserSession>, StoreError> {
-        let row = sqlx::query_as::<_, (String, String, String, String, DateTime<Utc>, bool, DateTime<Utc>)>(SQL_SELECT_SESSION)
-            .bind(session_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+    async fn get_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<okane_core::store::port::UserSession>, StoreError> {
+        let row = sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                String,
+                String,
+                DateTime<Utc>,
+                bool,
+                DateTime<Utc>,
+            ),
+        >(SQL_SELECT_SESSION)
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?;
 
         Ok(row.map(|r| okane_core::store::port::UserSession {
             id: r.0,
@@ -568,15 +607,30 @@ impl SystemStore for SqliteSystemStore {
         }))
     }
 
-    async fn get_session_by_client(&self, user_id: &str, client_id: &str) -> Result<Option<okane_core::store::port::UserSession>, StoreError> {
+    async fn get_session_by_client(
+        &self,
+        user_id: &str,
+        client_id: &str,
+    ) -> Result<Option<okane_core::store::port::UserSession>, StoreError> {
         let now = Utc::now();
-        let row = sqlx::query_as::<_, (String, String, String, String, DateTime<Utc>, bool, DateTime<Utc>)>(SQL_SELECT_SESSION_BY_CLIENT)
-            .bind(user_id)
-            .bind(client_id)
-            .bind(now)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let row = sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                String,
+                String,
+                DateTime<Utc>,
+                bool,
+                DateTime<Utc>,
+            ),
+        >(SQL_SELECT_SESSION_BY_CLIENT)
+        .bind(user_id)
+        .bind(client_id)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?;
 
         Ok(row.map(|r| okane_core::store::port::UserSession {
             id: r.0,
@@ -617,22 +671,38 @@ impl SystemStore for SqliteSystemStore {
         Ok(())
     }
 
-    async fn list_active_sessions(&self) -> Result<Vec<okane_core::store::port::UserSession>, StoreError> {
+    async fn list_active_sessions(
+        &self,
+    ) -> Result<Vec<okane_core::store::port::UserSession>, StoreError> {
         let now = Utc::now();
-        let rows = sqlx::query_as::<_, (String, String, String, String, DateTime<Utc>, bool, DateTime<Utc>)>(SQL_LIST_ACTIVE_SESSIONS)
-            .bind(now)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let rows = sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                String,
+                String,
+                DateTime<Utc>,
+                bool,
+                DateTime<Utc>,
+            ),
+        >(SQL_LIST_ACTIVE_SESSIONS)
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?;
 
-        Ok(rows.into_iter().map(|r| okane_core::store::port::UserSession {
-            id: r.0,
-            user_id: r.1,
-            client_id: r.2,
-            current_token_id: r.3,
-            expires_at: r.4,
-            is_revoked: r.5,
-            created_at: r.6,
-        }).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| okane_core::store::port::UserSession {
+                id: r.0,
+                user_id: r.1,
+                client_id: r.2,
+                current_token_id: r.3,
+                expires_at: r.4,
+                is_revoked: r.5,
+                created_at: r.6,
+            })
+            .collect())
     }
 }

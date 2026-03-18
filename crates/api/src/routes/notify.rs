@@ -1,10 +1,10 @@
-use axum::extract::State;
 use crate::{
     error::ApiError,
     middleware::auth::CurrentUser,
     server::AppState,
     types::{ApiResponse, ApiResult, NotifyConfigResponse, UpdateNotifyConfigRequest},
 };
+use axum::extract::State;
 
 /// 查询用户通知配置
 ///
@@ -58,7 +58,7 @@ pub async fn update_notify_config(
     let valid_channels = ["none", "telegram", "email"];
     if !valid_channels.contains(&config.channel.as_str()) {
         return Err(ApiError::BadRequest(format!(
-            "无效的 channel: {}，允许值: {:?}",
+            "invalid channel: {}, allowed values: {:?}",
             config.channel, valid_channels
         )));
     }
@@ -69,5 +69,5 @@ pub async fn update_notify_config(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    Ok(ApiResult("通知配置已更新".to_string()))
+    Ok(ApiResult("notification config updated".to_string()))
 }

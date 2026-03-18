@@ -1,6 +1,6 @@
-use super::entity::{AccountId, AccountSnapshot, Order, OrderId, Trade, AlgoOrder};
-use async_trait::async_trait;
+use super::entity::{AccountId, AccountSnapshot, AlgoOrder, Order, OrderId, Trade};
 use crate::market::entity::Candle;
+use async_trait::async_trait;
 use thiserror::Error;
 
 /// # Summary
@@ -72,7 +72,11 @@ pub trait TradePort: Send + Sync {
     async fn get_order(&self, order_id: &OrderId) -> Result<Option<Order>, TradeError>;
 
     /// 确保某个账户在交易引擎中已初始化，并可按需设置初始资金（例如纸面交易）。
-    async fn ensure_account(&self, account_id: AccountId, initial_balance: rust_decimal::Decimal) -> Result<(), TradeError>;
+    async fn ensure_account(
+        &self,
+        account_id: AccountId,
+        initial_balance: rust_decimal::Decimal,
+    ) -> Result<(), TradeError>;
 }
 
 /// # Summary
@@ -84,7 +88,11 @@ pub trait PendingOrderPort: Send + Sync {
     async fn get(&self, order_id: &OrderId) -> Result<Option<Order>, TradeError>;
     async fn get_by_account(&self, account_id: &AccountId) -> Result<Vec<Order>, TradeError>;
     async fn get_by_symbol(&self, symbol: &str) -> Result<Vec<Order>, TradeError>;
-    async fn update_status(&self, order_id: &OrderId, status: crate::trade::entity::OrderStatus) -> Result<(), TradeError>;
+    async fn update_status(
+        &self,
+        order_id: &OrderId,
+        status: crate::trade::entity::OrderStatus,
+    ) -> Result<(), TradeError>;
 }
 
 /// # Summary
@@ -100,26 +108,48 @@ pub trait BacktestTradePort: TradePort {
 #[async_trait]
 pub trait AccountPort: Send + Sync {
     /// 开仓挂单时，请求冻结预估金额。
-    async fn freeze_funds(&self, account_id: &AccountId, amount: rust_decimal::Decimal) -> Result<(), TradeError>;
+    async fn freeze_funds(
+        &self,
+        account_id: &AccountId,
+        amount: rust_decimal::Decimal,
+    ) -> Result<(), TradeError>;
 
     /// 撤单时解冻未使用的金额。
-    async fn unfreeze_funds(&self, account_id: &AccountId, amount: rust_decimal::Decimal) -> Result<(), TradeError>;
+    async fn unfreeze_funds(
+        &self,
+        account_id: &AccountId,
+        amount: rust_decimal::Decimal,
+    ) -> Result<(), TradeError>;
 
     /// 行情撮合成功后，交由账户中心进行原子化持仓更新与资金结算。
-    async fn process_trade(&self, account_id: &AccountId, trade: &Trade, est_req_funds: rust_decimal::Decimal) -> Result<(), TradeError>;
+    async fn process_trade(
+        &self,
+        account_id: &AccountId,
+        trade: &Trade,
+        est_req_funds: rust_decimal::Decimal,
+    ) -> Result<(), TradeError>;
 
     /// 快照截取
     async fn snapshot(&self, account_id: &AccountId) -> Result<AccountSnapshot, TradeError>;
 
     /// 确保账户已加载或存在
-    async fn ensure_account(&self, account_id: &AccountId, initial_balance: rust_decimal::Decimal) -> Result<(), TradeError>;
+    async fn ensure_account(
+        &self,
+        account_id: &AccountId,
+        initial_balance: rust_decimal::Decimal,
+    ) -> Result<(), TradeError>;
 }
 
 /// # Summary
 /// 本地或远程撮合引擎对接端口。
 pub trait MatcherPort: Send + Sync {
     /// 执行/评估一张尚未完结的订单 (市场价或现价单，与当前 K 线价位对比)。
-    fn execute_order(&self, order: &mut Order, current_price: rust_decimal::Decimal, timestamp: i64) -> Option<Trade>;
+    fn execute_order(
+        &self,
+        order: &mut Order,
+        current_price: rust_decimal::Decimal,
+        timestamp: i64,
+    ) -> Option<Trade>;
 }
 
 /// # Summary
@@ -130,13 +160,13 @@ pub trait MatcherPort: Send + Sync {
 pub trait BrokerPort: Send + Sync {
     /// 向外部网关发送一笔真实物理订单
     async fn send_order(&self, order: &Order) -> Result<String, TradeError>;
-    
+
     /// 向外部网关请求取消某笔尚未成交的单子
     async fn cancel_order(&self, external_order_id: &str) -> Result<(), TradeError>;
-    
+
     /// 主动同步/查询某笔外发订单的最新网关状态 (如是否部分成交)
     async fn query_order_status(&self, external_order_id: &str) -> Result<(), TradeError>;
-    
+
     // TODO: 未来还会增加类似 subscribe_execution_report 的流式回报接口
 }
 
@@ -157,5 +187,9 @@ pub trait AlgoOrderPort: Send + Sync {
     async fn get_algo_orders(&self, account_id: &AccountId) -> Result<Vec<AlgoOrder>, TradeError>;
 
     /// 更新算法单状态
-    async fn update_algo_status(&self, order_id: &OrderId, status: super::entity::AlgoOrderStatus) -> Result<(), TradeError>;
+    async fn update_algo_status(
+        &self,
+        order_id: &OrderId,
+        status: super::entity::AlgoOrderStatus,
+    ) -> Result<(), TradeError>;
 }

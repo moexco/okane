@@ -1,6 +1,6 @@
-use okane_core::trade::entity::{AccountId, AccountSnapshot, Position, Trade, OrderDirection};
-use okane_core::trade::port::{AccountPort, TradeError};
 use async_trait::async_trait;
+use okane_core::trade::entity::{AccountId, AccountSnapshot, OrderDirection, Position, Trade};
+use okane_core::trade::port::{AccountPort, TradeError};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -82,13 +82,16 @@ impl AccountState {
         if delta_volume.is_zero() {
             return;
         }
-        
-        let position = self.positions.entry(symbol.to_string()).or_insert_with(|| Position {
-            account_id: self.account_id.clone(),
-            symbol: symbol.to_string(),
-            volume: Decimal::ZERO,
-            average_price: Decimal::ZERO,
-        });
+
+        let position = self
+            .positions
+            .entry(symbol.to_string())
+            .or_insert_with(|| Position {
+                account_id: self.account_id.clone(),
+                symbol: symbol.to_string(),
+                volume: Decimal::ZERO,
+                average_price: Decimal::ZERO,
+            });
 
         // 多头买入或空头卖出（开仓动作，通常会增加头寸绝对值，更新平均价）
         if (position.volume.is_sign_positive() && delta_volume.is_sign_positive())
@@ -170,24 +173,36 @@ impl AccountManager {
             .map(|kv| kv.value().clone())
             .ok_or_else(|| TradeError::AccountNotFound(id.0.clone()))
     }
-
 }
 
 #[async_trait]
 impl AccountPort for AccountManager {
-    async fn freeze_funds(&self, account_id: &AccountId, amount: rust_decimal::Decimal) -> Result<(), TradeError> {
+    async fn freeze_funds(
+        &self,
+        account_id: &AccountId,
+        amount: rust_decimal::Decimal,
+    ) -> Result<(), TradeError> {
         let account_lock = self.get_account(account_id)?;
         let mut acct = account_lock.write().await;
         acct.freeze_funds(amount)
     }
 
-    async fn unfreeze_funds(&self, account_id: &AccountId, amount: rust_decimal::Decimal) -> Result<(), TradeError> {
+    async fn unfreeze_funds(
+        &self,
+        account_id: &AccountId,
+        amount: rust_decimal::Decimal,
+    ) -> Result<(), TradeError> {
         let account_lock = self.get_account(account_id)?;
         let mut acct = account_lock.write().await;
         acct.unfreeze_funds(amount)
     }
 
-    async fn process_trade(&self, account_id: &AccountId, trade: &Trade, est_req_funds: rust_decimal::Decimal) -> Result<(), TradeError> {
+    async fn process_trade(
+        &self,
+        account_id: &AccountId,
+        trade: &Trade,
+        est_req_funds: rust_decimal::Decimal,
+    ) -> Result<(), TradeError> {
         let account_lock = self.get_account(account_id)?;
         let mut acct = account_lock.write().await;
 
@@ -203,7 +218,11 @@ impl AccountPort for AccountManager {
             acct.add_funds(actual_gain);
         }
 
-        let position_delta = if trade.direction == OrderDirection::Buy { trade.volume } else { -trade.volume };
+        let position_delta = if trade.direction == OrderDirection::Buy {
+            trade.volume
+        } else {
+            -trade.volume
+        };
         acct.update_position(&trade.symbol, position_delta, trade.price);
 
         Ok(())
@@ -215,7 +234,11 @@ impl AccountPort for AccountManager {
         Ok(state.to_snapshot())
     }
 
-    async fn ensure_account(&self, account_id: &AccountId, initial_balance: rust_decimal::Decimal) -> Result<(), TradeError> {
+    async fn ensure_account(
+        &self,
+        account_id: &AccountId,
+        initial_balance: rust_decimal::Decimal,
+    ) -> Result<(), TradeError> {
         self.ensure_account_exists(account_id.clone(), initial_balance);
         Ok(())
     }

@@ -2,9 +2,14 @@ use async_trait::async_trait;
 use okane_core::common::time::TimeProvider;
 use okane_core::market::entity::Candle;
 use okane_core::market::port::Market;
-use okane_core::trade::entity::{AccountId, AccountSnapshot, Order, OrderDirection, OrderId, OrderStatus};
-use okane_core::trade::port::{AccountPort, BacktestTradePort, MatcherPort, TradeError, TradePort, PendingOrderPort};
+use okane_core::trade::entity::{
+    AccountId, AccountSnapshot, Order, OrderDirection, OrderId, OrderStatus,
+};
+use okane_core::trade::port::{
+    AccountPort, BacktestTradePort, MatcherPort, PendingOrderPort, TradeError, TradePort,
+};
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use crate::trade_log::TradeLog;
 
@@ -19,7 +24,7 @@ pub struct TradeService {
     /// 活动订单持久化端口
     pending_port: Arc<dyn PendingOrderPort>,
     /// 算法单服务
-    algo_service: Option<Arc<crate::algo::AlgoOrderService>>,
+    algo_service: RwLock<Option<Arc<crate::algo::AlgoOrderService>>>,
     /// 逻辑时钟源，回测时由 FakeClockProvider 提供，实盘为 RealTimeProvider
     time_provider: Arc<dyn TimeProvider>,
     /// 可选的交易事件收集器 — 记录所有成交，用于回测结果提取
@@ -39,15 +44,29 @@ impl TradeService {
             matcher,
             market,
             pending_port,
-            algo_service: None,
+            algo_service: RwLock::new(None),
             time_provider,
             trade_log: None,
         }
     }
 
-    pub fn with_algo_service(mut self, algo_service: Arc<crate::algo::AlgoOrderService>) -> Self {
-        self.algo_service = Some(algo_service);
+    pub fn with_algo_service(self, algo_service: Arc<crate::algo::AlgoOrderService>) -> Self {
+        self.set_algo_service(algo_service);
         self
+    }
+
+    /// # Logic
+    /// Replace the currently configured algo order service.
+    ///
+    /// # Arguments
+    /// * `algo_service` - Algo order service used during backtest ticks.
+    ///
+    /// # Returns
+    /// None.
+    pub fn set_algo_service(&self, algo_service: Arc<crate::algo::AlgoOrderService>) {
+        if let Ok(mut guard) = self.algo_service.write() {
+            *guard = Some(algo_service);
+        }
     }
 
     /// 设置交易事件收集器。回测场景下使用。
@@ -66,18 +85,26 @@ impl TradePort for TradeService {
     /// 4. 撮合器吐出 Trade，账户端口按 Trade 真实价格和数量扣减冻结资金及更新持仓。
     async fn submit_order(&self, mut order: Order) -> Result<OrderId, TradeError> {
         let order_id = order.id.clone();
-        
+
         let stock = self.market.get_stock(&order.symbol).await.map_err(|e| {
             TradeError::BrokerIntegrationError(format!("Failed to get market data: {}", e))
         })?;
-        
+
         // 检查标的状态：停牌、退市等情况直接拒绝
         let status = stock.status();
         if status != okane_core::market::port::StockStatus::Online {
-            return Err(TradeError::InternalError(format!("Stock status is {:?}, order rejected", status)));
+            return Err(TradeError::InternalError(format!(
+                "Stock status is {:?}, order rejected",
+                status
+            )));
         }
 
-        let latest_price = stock.current_price().map_err(|e| TradeError::InternalError(e.to_string()))?.ok_or_else(|| TradeError::InternalError("No latest price available for stock".into()))?;
+        let latest_price = stock
+            .current_price()
+            .map_err(|e| TradeError::InternalError(e.to_string()))?
+            .ok_or_else(|| {
+                TradeError::InternalError("No latest price available for stock".into())
+            })?;
 
         // 预估单价 (限价单取限价，市价单取市场最新的成交价进行预估撮合)。
         // OK: Intentional business fallback for Market Orders
@@ -86,20 +113,29 @@ impl TradePort for TradeService {
 
         // 如果是多头买单，先冻结需要的总现金款
         if order.direction == OrderDirection::Buy {
-            self.account_port.freeze_funds(&order.account_id, est_req_funds).await?;
+            self.account_port
+                .freeze_funds(&order.account_id, est_req_funds)
+                .await?;
         }
 
         // 如果是市价单 (price == None)，立刻尝试撮合。
         // 如果是限价单，先放入 Pending 队列等待下一个 Tick。
         if order.price.is_none() {
-            let now_ms = self.time_provider.now().map_err(|e| TradeError::InternalError(e.to_string()))?.timestamp_millis();
+            let now_ms = self
+                .time_provider
+                .now()
+                .map_err(|e| TradeError::InternalError(e.to_string()))?
+                .timestamp_millis();
             order.status = OrderStatus::Submitted;
-            
+
             if let Some(trade) = self.matcher.execute_order(&mut order, latest_price, now_ms) {
                 if let Some(log) = &self.trade_log {
-                    log.record(&trade).map_err(|e| TradeError::InternalError(e.to_string()))?;
+                    log.record(&trade)
+                        .map_err(|e| TradeError::InternalError(e.to_string()))?;
                 }
-                self.account_port.process_trade(&order.account_id, &trade, est_req_funds).await?;
+                self.account_port
+                    .process_trade(&order.account_id, &trade, est_req_funds)
+                    .await?;
             }
 
             // 核心修复：市价单无论是否完全成交，均需记录到后端（用于历史查询和状态观测）
@@ -119,13 +155,19 @@ impl TradePort for TradeService {
         if let Some(mut order) = self.pending_port.remove(&order_id).await? {
             order.status = OrderStatus::Canceled;
             // 还需要退回冻结资金
-            if order.direction == OrderDirection::Buy && let Some(price) = order.price {
+            if order.direction == OrderDirection::Buy
+                && let Some(price) = order.price
+            {
                 let amount = price * (order.volume - order.filled_volume);
-                self.account_port.unfreeze_funds(&order.account_id, amount).await?;
+                self.account_port
+                    .unfreeze_funds(&order.account_id, amount)
+                    .await?;
             }
             Ok(())
         } else {
-            Err(TradeError::OrderNotFound("Order not found or already filled".into()))
+            Err(TradeError::OrderNotFound(
+                "Order not found or already filled".into(),
+            ))
         }
     }
 
@@ -141,8 +183,14 @@ impl TradePort for TradeService {
         self.pending_port.get(order_id).await
     }
 
-    async fn ensure_account(&self, account_id: AccountId, initial_balance: rust_decimal::Decimal) -> Result<(), TradeError> {
-        self.account_port.ensure_account(&account_id, initial_balance).await
+    async fn ensure_account(
+        &self,
+        account_id: AccountId,
+        initial_balance: rust_decimal::Decimal,
+    ) -> Result<(), TradeError> {
+        self.account_port
+            .ensure_account(&account_id, initial_balance)
+            .await
     }
 }
 
@@ -150,7 +198,12 @@ impl TradePort for TradeService {
 impl BacktestTradePort for TradeService {
     async fn tick(&self, symbol: &str, candle: &Candle) -> Result<(), TradeError> {
         // 首先驱动算法单
-        if let Some(algo) = &self.algo_service {
+        let algo_service = self
+            .algo_service
+            .read()
+            .map_err(|e| TradeError::InternalError(format!("algo service lock poisoned: {}", e)))?
+            .clone();
+        if let Some(algo) = algo_service {
             algo.tick(symbol, candle).await?;
         }
 
@@ -162,26 +215,37 @@ impl BacktestTradePort for TradeService {
         for mut order in pending {
             if let Some(limit_price) = order.price {
                 // 击穿判定
-                let is_hit = (order.direction == OrderDirection::Buy && low <= limit_price) || 
-                             (order.direction == OrderDirection::Sell && high >= limit_price);
-                
+                let is_hit = (order.direction == OrderDirection::Buy && low <= limit_price)
+                    || (order.direction == OrderDirection::Sell && high >= limit_price);
+
                 if is_hit {
                     // 成交取限价或者由于跳空引起的开盘价劣势
                     let exec_price = limit_price;
                     let now_ms = candle.time.timestamp_millis();
-                    
-                    if let Some(trade) = self.matcher.execute_order(&mut order, exec_price, now_ms) {
+
+                    if let Some(trade) = self.matcher.execute_order(&mut order, exec_price, now_ms)
+                    {
                         if let Some(log) = &self.trade_log {
-                            log.record(&trade).map_err(|e| TradeError::InternalError(e.to_string()))?;
+                            log.record(&trade)
+                                .map_err(|e| TradeError::InternalError(e.to_string()))?;
                         }
                         let est_req_funds = limit_price * trade.volume; // 原本冻结的总数
-                        if let Err(e) = self.account_port.process_trade(&order.account_id, &trade, est_req_funds).await {
-                            tracing::warn!("Backtest tick: Failed process trade on account {}: {}", order.id.0, e);
+                        if let Err(e) = self
+                            .account_port
+                            .process_trade(&order.account_id, &trade, est_req_funds)
+                            .await
+                        {
+                            tracing::warn!(
+                                "Backtest tick: Failed process trade on account {}: {}",
+                                order.id.0,
+                                e
+                            );
                         }
                     }
-                    
+
                     // 核心修复：只有达到终态才移除，否则更新（部分成交）
-                    if order.status == OrderStatus::Filled || order.status == OrderStatus::Canceled {
+                    if order.status == OrderStatus::Filled || order.status == OrderStatus::Canceled
+                    {
                         self.pending_port.remove(&order.id).await?;
                     } else {
                         // 如果有部分成交或状态变更，更新持久化存储

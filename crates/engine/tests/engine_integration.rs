@@ -1,12 +1,14 @@
-use okane_core::test_utils::{MockMarket, MockStock, SpyTradePort, MockAlgoOrderPort, MockIndicatorService};
+use chrono::Utc;
 use okane_core::common::time::FakeClockProvider;
 use okane_core::common::{Stock as StockIdentity, TimeFrame};
 use okane_core::market::entity::Candle;
-use chrono::Utc;
+use okane_core::test_utils::{
+    MockAlgoOrderPort, MockIndicatorService, MockMarket, MockStock, SpyTradePort,
+};
 use okane_engine::quickjs::JsEngine;
+use rust_decimal_macros::dec;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use rust_decimal_macros::dec;
 
 const JS_STRATEGY: &str = r#"
 function onCandle(input) {
@@ -50,7 +52,8 @@ async fn test_js_strategy_integration() -> anyhow::Result<()> {
         Arc::new(FakeClockProvider::new(chrono::Utc::now())),
         None,
         None,
-    ).map_err(|e| anyhow::anyhow!(e))?;
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
 
     let local = tokio::task::LocalSet::new();
 
@@ -108,13 +111,19 @@ async fn test_js_trade_execution() -> anyhow::Result<()> {
         Arc::new(FakeClockProvider::new(chrono::Utc::now())),
         None,
         None,
-    ).map_err(|e| anyhow::anyhow!(e))?;
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
 
     let local = tokio::task::LocalSet::new();
 
     let _handle = local.spawn_local(async move {
         engine
-            .run_strategy("AAPL", "mock_account", TimeFrame::Minute1, JS_TRADE_STRATEGY)
+            .run_strategy(
+                "AAPL",
+                "mock_account",
+                TimeFrame::Minute1,
+                JS_TRADE_STRATEGY,
+            )
             .await
     });
 
@@ -136,7 +145,9 @@ async fn test_js_trade_execution() -> anyhow::Result<()> {
             let start = std::time::Instant::now();
             let mut orders = Vec::new();
             while start.elapsed() < std::time::Duration::from_secs(2) {
-                orders = trade_arc.get_submitted_orders().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                orders = trade_arc
+                    .get_submitted_orders()
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 if !orders.is_empty() {
                     break;
                 }

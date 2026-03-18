@@ -5,8 +5,8 @@ use okane_core::trade::entity::{AccountId, AccountSnapshot, OrderDirection, Posi
 use okane_core::trade::port::{AccountPort, TradeError};
 use rust_decimal::Decimal;
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     SqlitePool,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -14,7 +14,8 @@ use tracing::{info, warn};
 
 /// Safely parse a database string into Decimal, returning an explicit error instead of defaulting to 0.
 fn parse_decimal(s: &str) -> Result<Decimal, TradeError> {
-    Decimal::from_str(s).map_err(|e| TradeError::InternalError(format!("Failed to parse Decimal '{}': {}", s, e)))
+    Decimal::from_str(s)
+        .map_err(|e| TradeError::InternalError(format!("Failed to parse Decimal '{}': {}", s, e)))
 }
 
 /// # Summary
@@ -54,9 +55,11 @@ INSERT OR IGNORE INTO asset_status (id, available_balance, frozen_balance, updat
 VALUES ('MAIN', '0', '0', ?)
 "#;
 
-const SQL_SELECT_ASSET: &str = "SELECT available_balance, frozen_balance FROM asset_status WHERE id = 'MAIN'";
+const SQL_SELECT_ASSET: &str =
+    "SELECT available_balance, frozen_balance FROM asset_status WHERE id = 'MAIN'";
 
-const SQL_UPDATE_ASSET_AVAIL: &str = "UPDATE asset_status SET available_balance = ?, updated_at = ? WHERE id = 'MAIN'";
+const SQL_UPDATE_ASSET_AVAIL: &str =
+    "UPDATE asset_status SET available_balance = ?, updated_at = ? WHERE id = 'MAIN'";
 
 const SQL_UPDATE_ASSET_FULL: &str = "UPDATE asset_status SET available_balance = ?, frozen_balance = ?, updated_at = ? WHERE id = 'MAIN'";
 
@@ -68,8 +71,9 @@ impl SqliteAccountStore {
             .map_err(|e| TradeError::InternalError(e.to_string()))?
             .join("accounts");
         if !base_path.exists() {
-            std::fs::create_dir_all(&base_path)
-                .map_err(|e| TradeError::InternalError(format!("Failed to create account dir: {}", e)))?;
+            std::fs::create_dir_all(&base_path).map_err(|e| {
+                TradeError::InternalError(format!("Failed to create account dir: {}", e))
+            })?;
         }
         Ok(Self {
             base_path,
@@ -98,16 +102,16 @@ impl SqliteAccountStore {
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
         sqlx::query(SQL_INIT_TABLES)
-        .execute(&pool)
-        .await
-        .map_err(|e| TradeError::InternalError(e.to_string()))?;
+            .execute(&pool)
+            .await
+            .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
         // 初始化默认的 MAIN 资产槽位
         sqlx::query(SQL_INSERT_ASSET_IGNORE)
-        .bind(Utc::now())
-        .execute(&pool)
-        .await
-        .map_err(|e| TradeError::InternalError(e.to_string()))?;
+            .bind(Utc::now())
+            .execute(&pool)
+            .await
+            .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
         self.pools.insert(account_id.to_string(), pool.clone());
         Ok(pool)
@@ -116,7 +120,10 @@ impl SqliteAccountStore {
     /// 后台充值接口 (供系统管理或测试接入资本)
     pub async fn deposit(&self, account_id: &AccountId, amount: Decimal) -> Result<(), TradeError> {
         let pool = self.get_or_init_pool(&account_id.0).await?;
-        let mut tx = pool.begin().await.map_err(|e| TradeError::InternalError(e.to_string()))?;
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
         let row: (String, String) = sqlx::query_as(SQL_SELECT_ASSET)
             .fetch_one(&mut *tx)
@@ -142,7 +149,9 @@ impl SqliteAccountStore {
             .await
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
-        tx.commit().await.map_err(|e| TradeError::InternalError(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| TradeError::InternalError(e.to_string()))?;
         info!("Deposited {} into account {}", amount, account_id.0);
         Ok(())
     }
@@ -150,9 +159,16 @@ impl SqliteAccountStore {
 
 #[async_trait]
 impl AccountPort for SqliteAccountStore {
-    async fn freeze_funds(&self, account_id: &AccountId, amount: Decimal) -> Result<(), TradeError> {
+    async fn freeze_funds(
+        &self,
+        account_id: &AccountId,
+        amount: Decimal,
+    ) -> Result<(), TradeError> {
         let pool = self.get_or_init_pool(&account_id.0).await?;
-        let mut tx = pool.begin().await.map_err(|e| TradeError::InternalError(e.to_string()))?;
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
         let row: (String, String) = sqlx::query_as(SQL_SELECT_ASSET)
             .fetch_one(&mut *tx)
@@ -179,7 +195,7 @@ impl AccountPort for SqliteAccountStore {
             .execute(&mut *tx)
             .await
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
-            
+
         sqlx::query(SQL_INSERT_LEDGER)
             .bind("FreezeFunds")
             .bind((-amount).to_string())
@@ -189,13 +205,22 @@ impl AccountPort for SqliteAccountStore {
             .await
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
-        tx.commit().await.map_err(|e| TradeError::InternalError(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| TradeError::InternalError(e.to_string()))?;
         Ok(())
     }
 
-    async fn unfreeze_funds(&self, account_id: &AccountId, amount: Decimal) -> Result<(), TradeError> {
+    async fn unfreeze_funds(
+        &self,
+        account_id: &AccountId,
+        amount: Decimal,
+    ) -> Result<(), TradeError> {
         let pool = self.get_or_init_pool(&account_id.0).await?;
-        let mut tx = pool.begin().await.map_err(|e| TradeError::InternalError(e.to_string()))?;
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
         let row: (String, String) = sqlx::query_as(SQL_SELECT_ASSET)
             .fetch_one(&mut *tx)
@@ -206,7 +231,10 @@ impl AccountPort for SqliteAccountStore {
         let mut frozen = parse_decimal(&row.1)?;
 
         let actual_unfreeze = if amount > frozen {
-            warn!("account {} unfreeze anomaly: trying to unfreeze {} but only {} available", account_id.0, amount, frozen);
+            warn!(
+                "account {} unfreeze anomaly: trying to unfreeze {} but only {} available",
+                account_id.0, amount, frozen
+            );
             frozen
         } else {
             amount
@@ -232,13 +260,23 @@ impl AccountPort for SqliteAccountStore {
             .await
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
-        tx.commit().await.map_err(|e| TradeError::InternalError(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| TradeError::InternalError(e.to_string()))?;
         Ok(())
     }
 
-    async fn process_trade(&self, account_id: &AccountId, trade: &Trade, est_req_funds: Decimal) -> Result<(), TradeError> {
+    async fn process_trade(
+        &self,
+        account_id: &AccountId,
+        trade: &Trade,
+        est_req_funds: Decimal,
+    ) -> Result<(), TradeError> {
         let pool = self.get_or_init_pool(&account_id.0).await?;
-        let mut tx = pool.begin().await.map_err(|e| TradeError::InternalError(e.to_string()))?;
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
         // 1. 获取账金
         let row: (String, String) = sqlx::query_as(SQL_SELECT_ASSET)
@@ -254,7 +292,7 @@ impl AccountPort for SqliteAccountStore {
         // 2. 资金结转
         if trade.direction == OrderDirection::Buy {
             let actual_cost = trade.price * trade.volume + trade.commission;
-            
+
             if frozen >= actual_cost {
                 frozen -= actual_cost;
                 ledger_frozen_change -= actual_cost;
@@ -268,7 +306,11 @@ impl AccountPort for SqliteAccountStore {
 
             let over_frozen = est_req_funds - actual_cost;
             if over_frozen > Decimal::ZERO {
-                let actual_unfreeze = if over_frozen > frozen { frozen } else { over_frozen };
+                let actual_unfreeze = if over_frozen > frozen {
+                    frozen
+                } else {
+                    over_frozen
+                };
                 frozen -= actual_unfreeze;
                 avail += actual_unfreeze;
                 ledger_frozen_change -= actual_unfreeze;
@@ -289,15 +331,20 @@ impl AccountPort for SqliteAccountStore {
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
         // 3. 持仓清算
-        let delta_volume = if trade.direction == OrderDirection::Buy { trade.volume } else { -trade.volume };
+        let delta_volume = if trade.direction == OrderDirection::Buy {
+            trade.volume
+        } else {
+            -trade.volume
+        };
         let mut pos_vol = Decimal::ZERO;
         let mut pos_price = Decimal::ZERO;
-        
-        let existing_pos: Option<(String, String)> = sqlx::query_as("SELECT quantity, avg_price FROM positions WHERE symbol = ?")
-            .bind(&trade.symbol)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| TradeError::InternalError(e.to_string()))?;
+
+        let existing_pos: Option<(String, String)> =
+            sqlx::query_as("SELECT quantity, avg_price FROM positions WHERE symbol = ?")
+                .bind(&trade.symbol)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
         if let Some((qv, qp)) = existing_pos {
             pos_vol = parse_decimal(&qv)?;
@@ -344,13 +391,15 @@ impl AccountPort for SqliteAccountStore {
             .await
             .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
-        tx.commit().await.map_err(|e| TradeError::InternalError(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| TradeError::InternalError(e.to_string()))?;
         Ok(())
     }
 
     async fn snapshot(&self, account_id: &AccountId) -> Result<AccountSnapshot, TradeError> {
         let pool = self.get_or_init_pool(&account_id.0).await?;
-        
+
         let row: (String, String) = sqlx::query_as(SQL_SELECT_ASSET)
             .fetch_one(&pool)
             .await
@@ -360,10 +409,12 @@ impl AccountPort for SqliteAccountStore {
         let frozen_balance = parse_decimal(&row.1)?;
         let total_equity = available_balance + frozen_balance;
 
-        let cur_positions = sqlx::query_as::<_, (String, String, String)>("SELECT symbol, quantity, avg_price FROM positions")
-            .fetch_all(&pool)
-            .await
-            .map_err(|e| TradeError::InternalError(e.to_string()))?;
+        let cur_positions = sqlx::query_as::<_, (String, String, String)>(
+            "SELECT symbol, quantity, avg_price FROM positions",
+        )
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| TradeError::InternalError(e.to_string()))?;
 
         let mut positions = Vec::new();
         for p in cur_positions {
@@ -387,7 +438,11 @@ impl AccountPort for SqliteAccountStore {
         })
     }
 
-    async fn ensure_account(&self, account_id: &AccountId, initial_balance: Decimal) -> Result<(), TradeError> {
+    async fn ensure_account(
+        &self,
+        account_id: &AccountId,
+        initial_balance: Decimal,
+    ) -> Result<(), TradeError> {
         // get_or_init_pool 已经包含了初始化表的逻辑。
         // 如果 initial_balance > 0，执行一次充值。
         self.get_or_init_pool(&account_id.0).await?;

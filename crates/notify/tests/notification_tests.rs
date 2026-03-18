@@ -15,8 +15,10 @@ use std::env;
 #[ignore] // 默认忽略，仅在手动测试时通过环境变量开启
 async fn test_telegram_notification() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
-    let bot_token = env::var("OKANE_TG_BOT_TOKEN").map_err(|_| anyhow::anyhow!("OKANE_TG_BOT_TOKEN must be set"))?;
-    let chat_id = env::var("OKANE_TG_CHAT_ID").map_err(|_| anyhow::anyhow!("OKANE_TG_CHAT_ID must be set"))?;
+    let bot_token = env::var("OKANE_TG_BOT_TOKEN")
+        .map_err(|_| anyhow::anyhow!("OKANE_TG_BOT_TOKEN must be set"))?;
+    let chat_id = env::var("OKANE_TG_CHAT_ID")
+        .map_err(|_| anyhow::anyhow!("OKANE_TG_CHAT_ID must be set"))?;
 
     let notifier = TelegramNotifier::new(bot_token, chat_id);
     notifier
@@ -39,11 +41,16 @@ async fn test_telegram_notification() -> anyhow::Result<()> {
 #[ignore] // 默认忽略
 async fn test_email_notification() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
-    let host = env::var("OKANE_EMAIL_HOST").map_err(|_| anyhow::anyhow!("OKANE_EMAIL_HOST must be set"))?;
-    let user = env::var("OKANE_EMAIL_USER").map_err(|_| anyhow::anyhow!("OKANE_EMAIL_USER must be set"))?;
-    let pass = env::var("OKANE_EMAIL_PASS").map_err(|_| anyhow::anyhow!("OKANE_EMAIL_PASS must be set"))?;
-    let from = env::var("OKANE_EMAIL_FROM").map_err(|_| anyhow::anyhow!("OKANE_EMAIL_FROM must be set"))?;
-    let to = env::var("OKANE_EMAIL_TO").map_err(|_| anyhow::anyhow!("OKANE_EMAIL_TO must be set"))?;
+    let host = env::var("OKANE_EMAIL_HOST")
+        .map_err(|_| anyhow::anyhow!("OKANE_EMAIL_HOST must be set"))?;
+    let user = env::var("OKANE_EMAIL_USER")
+        .map_err(|_| anyhow::anyhow!("OKANE_EMAIL_USER must be set"))?;
+    let pass = env::var("OKANE_EMAIL_PASS")
+        .map_err(|_| anyhow::anyhow!("OKANE_EMAIL_PASS must be set"))?;
+    let from = env::var("OKANE_EMAIL_FROM")
+        .map_err(|_| anyhow::anyhow!("OKANE_EMAIL_FROM must be set"))?;
+    let to =
+        env::var("OKANE_EMAIL_TO").map_err(|_| anyhow::anyhow!("OKANE_EMAIL_TO must be set"))?;
 
     let notifier = EmailNotifier::new(&host, &user, &pass, &from, &to)
         .map_err(|e| anyhow::anyhow!("Failed to initialize EmailNotifier: {:?}", e))?;

@@ -14,10 +14,10 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 use utoipa_swagger_ui::SwaggerUi;
 
-use okane_core::store::port::SystemStore;
-use okane_core::trade::port::{TradePort, AlgoOrderPort};
-use okane_core::market::port::Market;
 use okane_core::market::indicator::IndicatorService;
+use okane_core::market::port::Market;
+use okane_core::store::port::SystemStore;
+use okane_core::trade::port::{AlgoOrderPort, TradePort};
 use okane_manager::strategy::StrategyManager;
 
 use crate::routes::{account, admin, auth, backtest, market, notify, strategy, trade, watchlist};
@@ -117,7 +117,7 @@ impl Modify for SecurityAddon {
 /// # Panics
 /// 如果 TCP 绑定失败将 panic (生产环境应有优雅降级)。
 /// 构建完整的 axum 应用路由树。
-/// 
+///
 /// 该函数封装了所有路由定义、中间件层级（Auth/Admin/Password）、CORS 配置以及 Swagger UI 挂载。
 /// 生产环境和集成测试环境应一致调用此函数以确保逻辑同步。
 pub fn build_app(state: AppState) -> Router {
@@ -206,11 +206,16 @@ pub fn build_app(state: AppState) -> Router {
     router
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api))
         .layer(cors)
-        .layer(axum::middleware::from_fn(crate::middleware::timer_middleware))
+        .layer(axum::middleware::from_fn(
+            crate::middleware::timer_middleware,
+        ))
 }
 
 /// 绑定 TCP 端口并启动服务。
-pub async fn start_server(state: AppState, bind_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn start_server(
+    state: AppState,
+    bind_addr: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let app = build_app(state);
 
     tracing::info!("okane api server listening on {}", bind_addr);

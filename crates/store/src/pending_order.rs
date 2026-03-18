@@ -44,15 +44,27 @@ impl PendingOrderPort for MemoryPendingOrderStore {
 
     async fn get_by_account(&self, account_id: &AccountId) -> Result<Vec<Order>, TradeError> {
         let guard = self.orders.read().await;
-        Ok(guard.values().filter(|o| o.account_id == *account_id).cloned().collect())
+        Ok(guard
+            .values()
+            .filter(|o| o.account_id == *account_id)
+            .cloned()
+            .collect())
     }
 
     async fn get_by_symbol(&self, symbol: &str) -> Result<Vec<Order>, TradeError> {
         let guard = self.orders.read().await;
-        Ok(guard.values().filter(|o| o.symbol == symbol).cloned().collect())
+        Ok(guard
+            .values()
+            .filter(|o| o.symbol == symbol)
+            .cloned()
+            .collect())
     }
 
-    async fn update_status(&self, order_id: &OrderId, status: OrderStatus) -> Result<(), TradeError> {
+    async fn update_status(
+        &self,
+        order_id: &OrderId,
+        status: OrderStatus,
+    ) -> Result<(), TradeError> {
         let mut guard = self.orders.write().await;
         if let Some(order) = guard.get_mut(order_id) {
             order.status = status;

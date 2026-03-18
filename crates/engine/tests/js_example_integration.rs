@@ -1,4 +1,3 @@
-use okane_core::test_utils::{SpyTradePort, MockAlgoOrderPort, MockIndicatorService};
 use async_trait::async_trait;
 use chrono::Utc;
 use okane_core::common::time::FakeClockProvider;
@@ -6,10 +5,11 @@ use okane_core::common::{Stock as StockIdentity, TimeFrame};
 use okane_core::market::entity::Candle;
 use okane_core::market::error::MarketError;
 use okane_core::market::port::{CandleStream, Market, Stock, StockStatus};
+use okane_core::test_utils::{MockAlgoOrderPort, MockIndicatorService, SpyTradePort};
 use okane_engine::quickjs::JsEngine;
+use rust_decimal_macros::dec;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use rust_decimal_macros::dec;
 
 struct MockStock {
     identity: StockIdentity,
@@ -73,7 +73,10 @@ impl Market for MockMarket {
         Ok(self.stock.clone())
     }
 
-    async fn search_symbols(&self, _query: &str) -> Result<Vec<okane_core::store::port::StockMetadata>, MarketError> {
+    async fn search_symbols(
+        &self,
+        _query: &str,
+    ) -> Result<Vec<okane_core::store::port::StockMetadata>, MarketError> {
         Ok(vec![])
     }
 }
@@ -113,7 +116,8 @@ async fn test_js_example_strategy_execution() -> anyhow::Result<()> {
         Arc::new(FakeClockProvider::new(Utc::now())),
         None,
         None,
-    ).map_err(|e| anyhow::anyhow!(e))?;
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
 
     let local = tokio::task::LocalSet::new();
     let handle = local.spawn_local(async move {
@@ -170,7 +174,8 @@ async fn test_js_example_strategy_skip_non_final() -> anyhow::Result<()> {
         Arc::new(FakeClockProvider::new(Utc::now())),
         None,
         None,
-    ).map_err(|e| anyhow::anyhow!(e))?;
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
 
     let local = tokio::task::LocalSet::new();
     let handle = local.spawn_local(async move {

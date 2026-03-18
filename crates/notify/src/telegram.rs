@@ -94,7 +94,10 @@ impl Notifier for TelegramNotifier {
             .map_err(|e| NotifyError::Network(e.to_string()))?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await.map_err(|e| NotifyError::Network(e.to_string()))?;
+            let error_text = response
+                .text()
+                .await
+                .map_err(|e| NotifyError::Network(e.to_string()))?;
             return Err(NotifyError::Platform(format!(
                 "Telegram API error: {}",
                 error_text

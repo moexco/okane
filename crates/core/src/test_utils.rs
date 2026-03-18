@@ -1,10 +1,8 @@
 //! # 测试工具集 (Test Utilities)
-//! 
+//!
 //! 本模块提供统一的 Mock 实现和测试辅助工具，仅在启用 `test-utils` 特性时可用。
 //! 这些工具被设计为跨模块通用，以消除测试代码中的逻辑重复。
 
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use crate::common::{Stock as StockIdentity, TimeFrame};
 use crate::market::entity::Candle;
 use crate::market::error::MarketError;
@@ -13,6 +11,8 @@ use crate::store::error::StoreError;
 use crate::store::port::{MarketStore, StockMetadata};
 use crate::trade::entity::{AccountId, AccountSnapshot, Order, OrderId};
 use crate::trade::port::{TradeError, TradePort};
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
@@ -50,14 +50,23 @@ impl MockMarketDataProvider {
         }
     }
 
-    pub fn set_search_results(&self, results: Vec<StockMetadata>) -> Result<(), crate::error::CoreError> {
-        let mut guard = self.search_results.lock().map_err(|e| crate::error::CoreError::Poisoned(e.to_string()))?;
+    pub fn set_search_results(
+        &self,
+        results: Vec<StockMetadata>,
+    ) -> Result<(), crate::error::CoreError> {
+        let mut guard = self
+            .search_results
+            .lock()
+            .map_err(|e| crate::error::CoreError::Poisoned(e.to_string()))?;
         *guard = results;
         Ok(())
     }
 
     pub fn set_history(&self, candles: Vec<Candle>) -> Result<(), crate::error::CoreError> {
-        let mut guard = self.history.lock().map_err(|e| crate::error::CoreError::Poisoned(e.to_string()))?;
+        let mut guard = self
+            .history
+            .lock()
+            .map_err(|e| crate::error::CoreError::Poisoned(e.to_string()))?;
         *guard = candles;
         Ok(())
     }
@@ -107,7 +116,9 @@ impl crate::market::port::Stock for MockStock {
     }
 }
 
-fn box_pin_stream(s: impl futures::Stream<Item = Result<Candle, MarketError>> + Send + 'static) -> CandleStream {
+fn box_pin_stream(
+    s: impl futures::Stream<Item = Result<Candle, MarketError>> + Send + 'static,
+) -> CandleStream {
     Box::pin(s)
 }
 
@@ -135,14 +146,18 @@ impl MarketDataProvider for MockMarketDataProvider {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<Vec<Candle>, MarketError> {
-        let history = self.history.lock().map_err(|e| MarketError::Unknown(format!("Lock poisoned: {}", e)))?.clone();
-        Ok(history.into_iter().filter(|c| c.time >= start && c.time <= end).collect())
+        let history = self
+            .history
+            .lock()
+            .map_err(|e| MarketError::Unknown(format!("Lock poisoned: {}", e)))?
+            .clone();
+        Ok(history
+            .into_iter()
+            .filter(|c| c.time >= start && c.time <= end)
+            .collect())
     }
 
-    async fn subscribe_candles(
-        &self,
-        _: &StockIdentity,
-    ) -> Result<CandleStream, MarketError> {
+    async fn subscribe_candles(&self, _: &StockIdentity) -> Result<CandleStream, MarketError> {
         let rx = self.price_rx.clone();
         let s = async_stream::stream! {
             let mut rx = rx.lock().await;
@@ -154,7 +169,11 @@ impl MarketDataProvider for MockMarketDataProvider {
     }
 
     async fn search_symbols(&self, _query: &str) -> Result<Vec<StockMetadata>, MarketError> {
-        let results = self.search_results.lock().map_err(|e| MarketError::Unknown(format!("Lock poisoned: {}", e)))?.clone();
+        let results = self
+            .search_results
+            .lock()
+            .map_err(|e| MarketError::Unknown(format!("Lock poisoned: {}", e)))?
+            .clone();
         Ok(results)
     }
 }
@@ -169,7 +188,9 @@ pub struct MemMarketStore {
 
 impl Default for MemMarketStore {
     fn default() -> Self {
-        Self { db: dashmap::DashMap::new() }
+        Self {
+            db: dashmap::DashMap::new(),
+        }
     }
 }
 
@@ -187,7 +208,10 @@ impl MarketStore for MemMarketStore {
         timeframe: TimeFrame,
         candles: &[Candle],
     ) -> Result<(), StoreError> {
-        let mut entry = self.db.entry((stock.symbol.clone(), timeframe)).or_default();
+        let mut entry = self
+            .db
+            .entry((stock.symbol.clone(), timeframe))
+            .or_default();
         entry.extend_from_slice(candles);
         Ok(())
     }
@@ -201,10 +225,15 @@ impl MarketStore for MemMarketStore {
     ) -> Result<Vec<Candle>, StoreError> {
         // 内存存储 Mock 逻辑：如果 key 不存在，返回空列表是合规的初始化状态。
         // OK: Mock store fallback
-        let candles = self.db.get(&(stock.symbol.clone(), timeframe))
+        let candles = self
+            .db
+            .get(&(stock.symbol.clone(), timeframe))
             .ok_or(StoreError::NotFound)?
             .clone();
-        Ok(candles.into_iter().filter(|c| c.time >= start && c.time <= end).collect())
+        Ok(candles
+            .into_iter()
+            .filter(|c| c.time >= start && c.time <= end)
+            .collect())
     }
 }
 
@@ -230,7 +259,13 @@ impl SpyTradePort {
     }
 
     pub fn get_submitted_orders(&self) -> Result<Vec<Order>, crate::error::CoreError> {
-        Ok(self.submitted_orders.lock().map_err(|e| crate::error::CoreError::Poisoned(format!("SpyTradePort lock error: {}", e)))?.clone())
+        Ok(self
+            .submitted_orders
+            .lock()
+            .map_err(|e| {
+                crate::error::CoreError::Poisoned(format!("SpyTradePort lock error: {}", e))
+            })?
+            .clone())
     }
 }
 
@@ -238,7 +273,10 @@ impl SpyTradePort {
 impl TradePort for SpyTradePort {
     async fn submit_order(&self, order: Order) -> Result<OrderId, TradeError> {
         let id = OrderId(uuid::Uuid::new_v4().to_string());
-        let mut orders = self.submitted_orders.lock().map_err(|e| TradeError::InternalError(format!("Lock poisoned: {}", e)))?;
+        let mut orders = self
+            .submitted_orders
+            .lock()
+            .map_err(|e| TradeError::InternalError(format!("Lock poisoned: {}", e)))?;
         orders.push(order);
         Ok(id)
     }
@@ -252,7 +290,10 @@ impl TradePort for SpyTradePort {
     }
 
     async fn get_orders(&self, _account_id: &AccountId) -> Result<Vec<Order>, TradeError> {
-        let orders = self.submitted_orders.lock().map_err(|e| TradeError::InternalError(format!("Lock poisoned: {}", e)))?;
+        let orders = self
+            .submitted_orders
+            .lock()
+            .map_err(|e| TradeError::InternalError(format!("Lock poisoned: {}", e)))?;
         Ok(orders.clone())
     }
 
@@ -260,7 +301,11 @@ impl TradePort for SpyTradePort {
         Ok(None)
     }
 
-    async fn ensure_account(&self, _account_id: AccountId, _initial_balance: rust_decimal::Decimal) -> Result<(), TradeError> {
+    async fn ensure_account(
+        &self,
+        _account_id: AccountId,
+        _initial_balance: rust_decimal::Decimal,
+    ) -> Result<(), TradeError> {
         Ok(())
     }
 }
@@ -273,19 +318,32 @@ pub struct MockAlgoOrderPort;
 
 #[async_trait]
 impl crate::trade::port::AlgoOrderPort for MockAlgoOrderPort {
-    async fn submit_algo_order(&self, _order: crate::trade::entity::AlgoOrder) -> Result<OrderId, TradeError> {
+    async fn submit_algo_order(
+        &self,
+        _order: crate::trade::entity::AlgoOrder,
+    ) -> Result<OrderId, TradeError> {
         Ok(OrderId(uuid::Uuid::new_v4().to_string()))
     }
     async fn cancel_algo_order(&self, _id: &OrderId) -> Result<(), TradeError> {
         Ok(())
     }
-    async fn get_algo_order(&self, _id: &OrderId) -> Result<Option<crate::trade::entity::AlgoOrder>, TradeError> {
+    async fn get_algo_order(
+        &self,
+        _id: &OrderId,
+    ) -> Result<Option<crate::trade::entity::AlgoOrder>, TradeError> {
         Ok(None)
     }
-    async fn get_algo_orders(&self, _account_id: &AccountId) -> Result<Vec<crate::trade::entity::AlgoOrder>, TradeError> {
+    async fn get_algo_orders(
+        &self,
+        _account_id: &AccountId,
+    ) -> Result<Vec<crate::trade::entity::AlgoOrder>, TradeError> {
         Ok(vec![])
     }
-    async fn update_algo_status(&self, _id: &OrderId, _status: crate::trade::entity::AlgoOrderStatus) -> Result<(), TradeError> {
+    async fn update_algo_status(
+        &self,
+        _id: &OrderId,
+        _status: crate::trade::entity::AlgoOrderStatus,
+    ) -> Result<(), TradeError> {
         Ok(())
     }
 }
@@ -298,13 +356,28 @@ pub struct MockIndicatorService;
 
 #[async_trait]
 impl crate::market::indicator::IndicatorService for MockIndicatorService {
-    async fn sma(&self, _symbol: &str, _tf: TimeFrame, _period: u32) -> Result<rust_decimal::Decimal, MarketError> {
+    async fn sma(
+        &self,
+        _symbol: &str,
+        _tf: TimeFrame,
+        _period: u32,
+    ) -> Result<rust_decimal::Decimal, MarketError> {
         Ok(rust_decimal::Decimal::ZERO)
     }
-    async fn ema(&self, _symbol: &str, _tf: TimeFrame, _period: u32) -> Result<rust_decimal::Decimal, MarketError> {
+    async fn ema(
+        &self,
+        _symbol: &str,
+        _tf: TimeFrame,
+        _period: u32,
+    ) -> Result<rust_decimal::Decimal, MarketError> {
         Ok(rust_decimal::Decimal::ZERO)
     }
-    async fn rsi(&self, _symbol: &str, _tf: TimeFrame, _period: u32) -> Result<rust_decimal::Decimal, MarketError> {
+    async fn rsi(
+        &self,
+        _symbol: &str,
+        _tf: TimeFrame,
+        _period: u32,
+    ) -> Result<rust_decimal::Decimal, MarketError> {
         Ok(rust_decimal::Decimal::ZERO)
     }
 }

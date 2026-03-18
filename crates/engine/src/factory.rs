@@ -1,5 +1,5 @@
 use okane_core::engine::error::EngineError;
-use okane_core::engine::port::{EngineBuilder, EngineFuture, EngineBuildParams};
+use okane_core::engine::port::{EngineBuildParams, EngineBuilder, EngineFuture};
 use okane_core::market::port::Market;
 use okane_core::strategy::entity::EngineType;
 
@@ -41,10 +41,7 @@ impl EngineBuilder for EngineFactory {
     /// 1. 根据 engine_type 选择 JsEngine。
     /// 2. 对于 JsEngine：因 QuickJS AsyncRuntime 不是 Send，
     ///    使用独立线程 + tokio LocalSet 运行，通过 oneshot 通道桥接结果。
-    fn build(
-        &self,
-        params: EngineBuildParams,
-    ) -> Result<EngineFuture, EngineError> {
+    fn build(&self, params: EngineBuildParams) -> Result<EngineFuture, EngineError> {
         let market = self.market.clone();
 
         match params.engine_type {
@@ -58,16 +55,22 @@ impl EngineBuilder for EngineFactory {
                     let (tx, rx) = tokio::sync::oneshot::channel();
 
                     std::thread::spawn(move || {
-                let rt_res = tokio::runtime::Builder::new_current_thread()
+                        let rt_res = tokio::runtime::Builder::new_current_thread()
                             .enable_all()
                             .build();
 
                         let rt = match rt_res {
                             Ok(rt) => rt,
                             Err(e) => {
-                                let err = EngineError::Plugin(format!("Failed to build tokio current_thread runtime: {}", e));
+                                let err = EngineError::Plugin(format!(
+                                    "Failed to build tokio current_thread runtime: {}",
+                                    e
+                                ));
                                 if let Err(send_err) = tx.send(Err(err)) {
-                                    tracing::warn!("Failed to send error back from JS engine thread: {:?}", send_err);
+                                    tracing::warn!(
+                                        "Failed to send error back from JS engine thread: {:?}",
+                                        send_err
+                                    );
                                 }
                                 return;
                             }

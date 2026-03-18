@@ -57,7 +57,9 @@ impl std::str::FromStr for StrategyStatus {
             "Running" => Ok(StrategyStatus::Running),
             "Stopped" => Ok(StrategyStatus::Stopped),
             other if other.starts_with("Failed:") => {
-                let msg = other.strip_prefix("Failed:").ok_or_else(|| "Invalid Failed prefix".to_string())?;
+                let msg = other
+                    .strip_prefix("Failed:")
+                    .ok_or_else(|| "Invalid Failed prefix".to_string())?;
                 Ok(StrategyStatus::Failed(msg.to_string()))
             }
             _ => Err(format!("Unknown StrategyStatus: {}", s)),

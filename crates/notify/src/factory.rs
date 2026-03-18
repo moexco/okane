@@ -28,11 +28,15 @@ impl DefaultNotifierFactory {
 
     /// # Summary
     /// 根据用户通知配置创建 Notifier 实例。
-    fn create_from_config(config: &UserNotifyConfig) -> Result<Option<Arc<dyn Notifier>>, NotifyError> {
+    fn create_from_config(
+        config: &UserNotifyConfig,
+    ) -> Result<Option<Arc<dyn Notifier>>, NotifyError> {
         match config.channel.as_str() {
             "telegram" => {
                 if config.telegram.bot_token.is_empty() || config.telegram.chat_id.is_empty() {
-                    return Err(NotifyError::Config("Telegram bot_token and chat_id are required".to_string()));
+                    return Err(NotifyError::Config(
+                        "Telegram bot_token and chat_id are required".to_string(),
+                    ));
                 }
                 Ok(Some(Arc::new(crate::telegram::TelegramNotifier::new(
                     config.telegram.bot_token.clone(),
@@ -50,16 +54,27 @@ impl DefaultNotifierFactory {
                 Ok(Some(Arc::new(n)))
             }
             "none" | "" => Ok(None),
-            other => Err(NotifyError::Config(format!("Unknown notify channel: {}", other))),
+            other => Err(NotifyError::Config(format!(
+                "Unknown notify channel: {}",
+                other
+            ))),
         }
     }
 }
 
 #[async_trait]
 impl NotifierFactory for DefaultNotifierFactory {
-    async fn create_for_user(&self, user_id: &str) -> Result<Option<Arc<dyn Notifier>>, NotifyError> {
-        let config = self.store.get_user_notify_config(user_id).await
-            .map_err(|e| NotifyError::Config(format!("Failed to query user notify config: {}", e)))?;
+    async fn create_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<Arc<dyn Notifier>>, NotifyError> {
+        let config = self
+            .store
+            .get_user_notify_config(user_id)
+            .await
+            .map_err(|e| {
+                NotifyError::Config(format!("Failed to query user notify config: {}", e))
+            })?;
 
         match config {
             Some(cfg) => Self::create_from_config(&cfg),
@@ -71,9 +86,9 @@ impl NotifierFactory for DefaultNotifierFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use okane_core::config::{TelegramConfig, EmailConfig, UserNotifyConfig};
+    use okane_core::config::{EmailConfig, TelegramConfig, UserNotifyConfig};
     use okane_core::store::error::StoreError;
-    use okane_core::store::port::{SystemStore, User, UserSession, Position, StockMetadata};
+    use okane_core::store::port::{Position, StockMetadata, SystemStore, User, UserSession};
 
     struct MockSystemStore {
         config: Option<UserNotifyConfig>,
@@ -81,33 +96,88 @@ mod tests {
 
     #[async_trait]
     impl SystemStore for MockSystemStore {
-        async fn get_user_notify_config(&self, _user_id: &str) -> Result<Option<UserNotifyConfig>, StoreError> {
+        async fn get_user_notify_config(
+            &self,
+            _user_id: &str,
+        ) -> Result<Option<UserNotifyConfig>, StoreError> {
             Ok(self.config.clone())
         }
-        
+
         // --- Unimplemented methods for mock ---
-        async fn get_user(&self, _: &str) -> Result<Option<User>, StoreError> { todo!() }
-        async fn get_account_owner(&self, _: &str) -> Result<Option<String>, StoreError> { todo!() }
-        async fn bind_account(&self, _: &str, _: &str) -> Result<(), StoreError> { todo!() }
-        async fn get_user_accounts(&self, _: &str) -> Result<Vec<String>, StoreError> { todo!() }
-        async fn save_user(&self, _: &User) -> Result<(), StoreError> { todo!() }
-        async fn get_watchlist(&self, _: &str) -> Result<Vec<String>, StoreError> { todo!() }
-        async fn add_to_watchlist(&self, _: &str, _: &str) -> Result<(), StoreError> { todo!() }
-        async fn remove_from_watchlist(&self, _: &str, _: &str) -> Result<(), StoreError> { todo!() }
-        async fn get_positions(&self, _: &str) -> Result<Vec<Position>, StoreError> { todo!() }
-        async fn update_position(&self, _: &str, _: &Position) -> Result<(), StoreError> { todo!() }
-        async fn search_stocks(&self, _: &str) -> Result<Vec<StockMetadata>, StoreError> { todo!() }
-        async fn save_stock_metadata(&self, _: &StockMetadata) -> Result<(), StoreError> { todo!() }
-        async fn get_setting(&self, _: &str) -> Result<Option<String>, StoreError> { todo!() }
-        async fn set_setting(&self, _: &str, _: &str) -> Result<(), StoreError> { todo!() }
-        async fn save_user_notify_config(&self, _: &str, _: &UserNotifyConfig) -> Result<(), StoreError> { todo!() }
-        async fn save_session(&self, _: &UserSession) -> Result<(), StoreError> { todo!() }
-        async fn get_session(&self, _: &str) -> Result<Option<UserSession>, StoreError> { todo!() }
-        async fn get_session_by_client(&self, _: &str, _: &str) -> Result<Option<UserSession>, StoreError> { todo!() }
-        async fn revoke_session(&self, _: &str) -> Result<(), StoreError> { todo!() }
-        async fn revoke_all_user_sessions(&self, _: &str) -> Result<(), StoreError> { todo!() }
-        async fn delete_expired_sessions(&self) -> Result<(), StoreError> { todo!() }
-        async fn list_active_sessions(&self) -> Result<Vec<UserSession>, StoreError> { todo!() }
+        async fn get_user(&self, _: &str) -> Result<Option<User>, StoreError> {
+            todo!()
+        }
+        async fn get_account_owner(&self, _: &str) -> Result<Option<String>, StoreError> {
+            todo!()
+        }
+        async fn bind_account(&self, _: &str, _: &str) -> Result<(), StoreError> {
+            todo!()
+        }
+        async fn get_user_accounts(&self, _: &str) -> Result<Vec<String>, StoreError> {
+            todo!()
+        }
+        async fn save_user(&self, _: &User) -> Result<(), StoreError> {
+            todo!()
+        }
+        async fn get_watchlist(&self, _: &str) -> Result<Vec<String>, StoreError> {
+            todo!()
+        }
+        async fn add_to_watchlist(&self, _: &str, _: &str) -> Result<(), StoreError> {
+            todo!()
+        }
+        async fn remove_from_watchlist(&self, _: &str, _: &str) -> Result<(), StoreError> {
+            todo!()
+        }
+        async fn get_positions(&self, _: &str) -> Result<Vec<Position>, StoreError> {
+            todo!()
+        }
+        async fn update_position(&self, _: &str, _: &Position) -> Result<(), StoreError> {
+            todo!()
+        }
+        async fn search_stocks(&self, _: &str) -> Result<Vec<StockMetadata>, StoreError> {
+            todo!()
+        }
+        async fn save_stock_metadata(&self, _: &StockMetadata) -> Result<(), StoreError> {
+            todo!()
+        }
+        async fn get_setting(&self, _: &str) -> Result<Option<String>, StoreError> {
+            todo!()
+        }
+        async fn set_setting(&self, _: &str, _: &str) -> Result<(), StoreError> {
+            todo!()
+        }
+        async fn save_user_notify_config(
+            &self,
+            _: &str,
+            _: &UserNotifyConfig,
+        ) -> Result<(), StoreError> {
+            todo!()
+        }
+        async fn save_session(&self, _: &UserSession) -> Result<(), StoreError> {
+            todo!()
+        }
+        async fn get_session(&self, _: &str) -> Result<Option<UserSession>, StoreError> {
+            todo!()
+        }
+        async fn get_session_by_client(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<UserSession>, StoreError> {
+            todo!()
+        }
+        async fn revoke_session(&self, _: &str) -> Result<(), StoreError> {
+            todo!()
+        }
+        async fn revoke_all_user_sessions(&self, _: &str) -> Result<(), StoreError> {
+            todo!()
+        }
+        async fn delete_expired_sessions(&self) -> Result<(), StoreError> {
+            todo!()
+        }
+        async fn list_active_sessions(&self) -> Result<Vec<UserSession>, StoreError> {
+            todo!()
+        }
     }
 
     #[tokio::test]
@@ -120,7 +190,9 @@ mod tests {
             },
             email: EmailConfig::default(),
         };
-        let store = Arc::new(MockSystemStore { config: Some(config) });
+        let store = Arc::new(MockSystemStore {
+            config: Some(config),
+        });
         let factory = DefaultNotifierFactory::new(store);
 
         let notifier = factory.create_for_user("user1").await?;
@@ -141,7 +213,9 @@ mod tests {
                 to: "recipient@example.com".to_string(),
             },
         };
-        let store = Arc::new(MockSystemStore { config: Some(config) });
+        let store = Arc::new(MockSystemStore {
+            config: Some(config),
+        });
         let factory = DefaultNotifierFactory::new(store);
 
         let notifier = factory.create_for_user("user1").await?;
@@ -152,7 +226,9 @@ mod tests {
     #[tokio::test]
     async fn test_create_none_notifier() -> anyhow::Result<()> {
         let config = UserNotifyConfig::default();
-        let store = Arc::new(MockSystemStore { config: Some(config) });
+        let store = Arc::new(MockSystemStore {
+            config: Some(config),
+        });
         let factory = DefaultNotifierFactory::new(store);
 
         let notifier = factory.create_for_user("user1").await?;
@@ -166,7 +242,9 @@ mod tests {
             channel: "whatsapp".to_string(),
             ..UserNotifyConfig::default()
         };
-        let store = Arc::new(MockSystemStore { config: Some(config) });
+        let store = Arc::new(MockSystemStore {
+            config: Some(config),
+        });
         let factory = DefaultNotifierFactory::new(store);
 
         let result = factory.create_for_user("user1").await;
@@ -184,12 +262,16 @@ mod tests {
             },
             email: EmailConfig::default(),
         };
-        let store = Arc::new(MockSystemStore { config: Some(config) });
+        let store = Arc::new(MockSystemStore {
+            config: Some(config),
+        });
         let factory = DefaultNotifierFactory::new(store);
 
         let result = factory.create_for_user("user1").await;
         assert!(result.is_err());
-        assert!(format!("{:?}", result.err()).contains("Telegram bot_token and chat_id are required"));
+        assert!(
+            format!("{:?}", result.err()).contains("Telegram bot_token and chat_id are required")
+        );
         Ok(())
     }
 

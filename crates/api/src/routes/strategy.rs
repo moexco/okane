@@ -6,10 +6,12 @@
 use axum::extract::{Path, Query, State};
 use serde::Deserialize;
 
-use crate::types::{ApiResponse, ApiResult, Page, SaveStrategySourceRequest, StartStrategyRequest, StrategyResponse};
 use crate::error::ApiError;
-use crate::server::AppState;
 use crate::middleware::auth::CurrentUser;
+use crate::server::AppState;
+use crate::types::{
+    ApiResponse, ApiResult, Page, SaveStrategySourceRequest, StartStrategyRequest, StrategyResponse,
+};
 
 // ============================================================
 //  Handler 实现
@@ -45,20 +47,20 @@ pub async fn list_strategies(
     Query(query): Query<ListStrategiesQuery>,
 ) -> Result<ApiResult<Page<StrategyResponse>>, ApiError> {
     let mut instances = state.strategy_manager.list_strategies(&user.id).await?;
-    
+
     // Sort by created_at descending (newest first)
     instances.sort_by_key(|b| std::cmp::Reverse(b.created_at));
-    
+
     let total = instances.len();
     let offset = query.offset.unwrap_or(0);
     let limit = query.limit.unwrap_or(50).min(500);
-    
-    let paginated_instances: Vec<_> = instances.into_iter()
-        .skip(offset)
-        .take(limit)
-        .collect();
 
-    let responses: Vec<StrategyResponse> = paginated_instances.iter().map(StrategyResponse::from).collect();
+    let paginated_instances: Vec<_> = instances.into_iter().skip(offset).take(limit).collect();
+
+    let responses: Vec<StrategyResponse> = paginated_instances
+        .iter()
+        .map(StrategyResponse::from)
+        .collect();
 
     Ok(ApiResult(Page::new(responses, total, offset, limit)))
 }
@@ -127,17 +129,29 @@ pub async fn deploy_strategy(
         .map_err(|e: String| ApiError::BadRequest(e))?;
 
     // Base64 解码源码
-    use base64::prelude::{Engine as _, BASE64_STANDARD};
+    use base64::prelude::{BASE64_STANDARD, Engine as _};
     let source = BASE64_STANDARD
         .decode(&req.source_base64)
         .map_err(|e| ApiError::BadRequest(format!("base64 decode failed: {}", e)))?;
 
     // IDOR Check: Ensures the strategy binds to an account owned by this user strictly via DB check.
-    let is_owner = state.system_store.verify_account_ownership(&user.id, &req.account_id).await
-        .map_err(|e| ApiError::Internal(format!("database error during permission check: {}", e)))?;
+    let is_owner = state
+        .system_store
+        .verify_account_ownership(&user.id, &req.account_id)
+        .await
+        .map_err(|e| {
+            ApiError::Internal(format!("database error during permission check: {}", e))
+        })?;
     if !is_owner {
-        tracing::warn!("IDOR attempt: user {} tried to deploy strategy on account {}", user.id, req.account_id);
-        return Err(ApiError::Forbidden(format!("account {} does not belong to user {}. please register the account first.", req.account_id, user.id)));
+        tracing::warn!(
+            "IDOR attempt: user {} tried to deploy strategy on account {}",
+            user.id,
+            req.account_id
+        );
+        return Err(ApiError::Forbidden(format!(
+            "account {} does not belong to user {}. please register the account first.",
+            req.account_id, user.id
+        )));
     }
 
     let start_req = StartRequest {
@@ -207,12 +221,15 @@ pub async fn update_strategy(
     Path(id): Path<String>,
     axum::Json(req): axum::Json<SaveStrategySourceRequest>,
 ) -> Result<ApiResult<String>, ApiError> {
-    use base64::prelude::{Engine as _, BASE64_STANDARD};
+    use base64::prelude::{BASE64_STANDARD, Engine as _};
     let source = BASE64_STANDARD
         .decode(&req.source_base64)
         .map_err(|e| ApiError::BadRequest(format!("base64 decode failed: {}", e)))?;
 
-    state.strategy_manager.update_strategy(&user.id, &id, source).await?;
+    state
+        .strategy_manager
+        .update_strategy(&user.id, &id, source)
+        .await?;
     Ok(ApiResult("策略已更新".to_string()))
 }
 
@@ -239,7 +256,10 @@ pub async fn delete_strategy(
     CurrentUser(user): CurrentUser,
     Path(id): Path<String>,
 ) -> Result<ApiResult<String>, ApiError> {
-    state.strategy_manager.delete_strategy(&user.id, &id).await?;
+    state
+        .strategy_manager
+        .delete_strategy(&user.id, &id)
+        .await?;
     Ok(ApiResult("策略已删除".to_string()))
 }
 
@@ -277,14 +297,21 @@ pub async fn get_strategy_logs(
     let limit = query.limit.unwrap_or(100).min(500);
     let offset = query.offset.unwrap_or(0);
 
-    let logs = state.strategy_manager.get_logs(&user.id, &id, limit, offset).await
+    let logs = state
+        .strategy_manager
+        .get_logs(&user.id, &id, limit, offset)
+        .await
         .map_err(|e| ApiError::Internal(format!("failed to query logs: {}", e)))?;
 
     // 由于目前底层的 StrategyLogPort 不直接返回总数，且日志量极大，
     // 这里暂时返回当前获得的数量作为总数（或者可以用特殊的标识如 -1 探测是否有下一页），
     // 考虑到用户需求是“哪怕是分页也放在 data 字段里”，这里采用 Page 包装。
     // 在真实生产环境中，应该给 query_logs 增加 count 支持。
-    let total = if logs.len() < limit { offset + logs.len() } else { 1000000 }; // 这里的 1000000 仅作示意
+    let total = if logs.len() < limit {
+        offset + logs.len()
+    } else {
+        1000000
+    }; // 这里的 1000000 仅作示意
 
     Ok(ApiResult(Page::new(logs, total, offset, limit)))
 }

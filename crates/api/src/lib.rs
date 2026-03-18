@@ -9,8 +9,8 @@
 //! - 调用下层 `StrategyManager` 和 `TradePort` 完成业务操作
 //! - 将领域模型转换为 DTO 返回给前端
 
-pub mod types;
 pub mod error;
 pub mod middleware;
 pub mod routes;
 pub mod server;
+pub mod types;

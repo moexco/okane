@@ -1,6 +1,6 @@
-use thiserror::Error;
-use serde::{Serialize, Deserialize};
 use crate::error::CoreError;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 /// # Summary
 /// 市场数据域错误枚举，处理网络、解析及数据缺失等问题。

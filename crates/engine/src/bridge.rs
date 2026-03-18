@@ -45,7 +45,9 @@ impl AsyncBridge {
                 }
                 // Channel closed => engine dropped, thread exits naturally.
             })
-            .map_err(|e| EngineError::Plugin(format!("Failed to spawn async bridge thread: {}", e)))?;
+            .map_err(|e| {
+                EngineError::Plugin(format!("Failed to spawn async bridge thread: {}", e))
+            })?;
 
         Ok(Self { task_tx: tx })
     }
@@ -65,10 +67,14 @@ impl AsyncBridge {
         let (result_tx, result_rx) = mpsc::sync_channel(1);
         self.task_tx
             .send(Box::new(move |h: &Handle| {
-                result_tx.send(h.block_on(future))
-                    .map_err(|_| tracing::error!("AsyncBridge: result receiver dropped")).ok();
+                result_tx
+                    .send(h.block_on(future))
+                    .map_err(|_| tracing::error!("AsyncBridge: result receiver dropped"))
+                    .ok();
             }))
             .map_err(|_| EngineError::Plugin("Bridge thread disconnected".to_string()))?;
-        result_rx.recv().map_err(|_| EngineError::Plugin("Bridge thread dropped result".to_string()))
+        result_rx
+            .recv()
+            .map_err(|_| EngineError::Plugin("Bridge thread dropped result".to_string()))
     }
 }

@@ -196,7 +196,11 @@ pub trait SystemStore: Send + Sync {
     async fn get_user_accounts(&self, user_id: &str) -> Result<Vec<String>, StoreError>;
 
     /// 快速验证某用户是否对子账户具有所有权
-    async fn verify_account_ownership(&self, user_id: &str, account_id: &str) -> Result<bool, StoreError> {
+    async fn verify_account_ownership(
+        &self,
+        user_id: &str,
+        account_id: &str,
+    ) -> Result<bool, StoreError> {
         if let Some(owner) = self.get_account_owner(account_id).await? {
             Ok(owner == user_id)
         } else {
@@ -349,7 +353,10 @@ pub trait SystemStore: Send + Sync {
     /// # Returns
     /// * `Ok(Some(config))` - 用户已配置
     /// * `Ok(None)` - 用户未配置
-    async fn get_user_notify_config(&self, user_id: &str) -> Result<Option<crate::config::UserNotifyConfig>, StoreError>;
+    async fn get_user_notify_config(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<crate::config::UserNotifyConfig>, StoreError>;
 
     /// # Summary
     /// 保存用户的通知推送配置。
@@ -360,7 +367,11 @@ pub trait SystemStore: Send + Sync {
     ///
     /// # Returns
     /// * `Result<(), StoreError>`
-    async fn save_user_notify_config(&self, user_id: &str, config: &crate::config::UserNotifyConfig) -> Result<(), StoreError>;
+    async fn save_user_notify_config(
+        &self,
+        user_id: &str,
+        config: &crate::config::UserNotifyConfig,
+    ) -> Result<(), StoreError>;
 
     // --- 会话管理域 ---
 
@@ -371,7 +382,11 @@ pub trait SystemStore: Send + Sync {
     async fn get_session(&self, session_id: &str) -> Result<Option<UserSession>, StoreError>;
 
     /// 获取特定用户的特定客户端会话 (用于登录复用)
-    async fn get_session_by_client(&self, user_id: &str, client_id: &str) -> Result<Option<UserSession>, StoreError>;
+    async fn get_session_by_client(
+        &self,
+        user_id: &str,
+        client_id: &str,
+    ) -> Result<Option<UserSession>, StoreError>;
 
     /// 撤销特定会话
     async fn revoke_session(&self, session_id: &str) -> Result<(), StoreError>;

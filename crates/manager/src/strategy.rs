@@ -1,18 +1,20 @@
 use chrono::Utc;
-use okane_core::common::time::TimeProvider;
 use dashmap::DashMap;
-use std::collections::VecDeque;
 use okane_core::common::TimeFrame;
+use okane_core::common::time::TimeProvider;
 use okane_core::engine::error::EngineError;
-use okane_core::engine::port::{EngineBuilder, EngineBuildParams};
+use okane_core::engine::port::{EngineBuildParams, EngineBuilder};
 use okane_core::store::error::StoreError;
+use okane_core::strategy::entity::{
+    EngineType, LogLevel, StrategyInstance, StrategyLogEntry, StrategyStatus,
+};
 use okane_core::strategy::port::{StrategyLogPort, StrategyLogger, StrategyStore};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::task::{AbortHandle, JoinHandle};
 use tracing::{error, info};
 use uuid::Uuid;
-use okane_core::strategy::entity::{EngineType, LogLevel, StrategyInstance, StrategyLogEntry, StrategyStatus};
 
 struct LogWrapper {
     user_id: String,
@@ -23,16 +25,22 @@ struct LogWrapper {
 
 impl StrategyLogger for LogWrapper {
     fn log(&self, level: LogLevel, message: String) {
+        let timestamp = match self.time_provider.now() {
+            Ok(timestamp) => timestamp,
+            Err(err) => {
+                error!("failed to get strategy log timestamp: {}", err);
+                return;
+            }
+        };
+
         let entry = StrategyLogEntry {
             strategy_id: self.strategy_id.clone(),
             level,
             message,
-            timestamp: self.time_provider.now().unwrap_or_else(|_| Utc::now()),
+            timestamp,
         };
         if let Err(e) = self.log_tx.send((self.user_id.clone(), entry)) {
-            // 忽略发送失败 (通常是因为 receiver 已关闭)
-            // 不使用 tracing::error 以免在日志系统崩溃时引起递归调用
-            eprintln!("Strategy logger send failed: {}", e);
+            error!("strategy logger send failed: {}", e);
         }
     }
 }
@@ -122,7 +130,8 @@ impl StrategyManager {
     /// # Returns
     /// * `Arc<Self>` - 可共享的管理器实例。
     pub fn new(params: StrategyManagerParams) -> Arc<Self> {
-        let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<(String, StrategyLogEntry)>();
+        let (log_tx, mut log_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(String, StrategyLogEntry)>();
         let log_port_inner = params.log_port.clone();
 
         let recent_logs = Arc::new(DashMap::<String, VecDeque<StrategyLogEntry>>::new());
@@ -133,7 +142,9 @@ impl StrategyManager {
             while let Some((user_id, log_entry)) = log_rx.recv().await {
                 // 1. 更新内存热数据 (保留最近 100 条)
                 {
-                    let mut entry_ref = recent_logs_clone.entry(log_entry.strategy_id.clone()).or_default();
+                    let mut entry_ref = recent_logs_clone
+                        .entry(log_entry.strategy_id.clone())
+                        .or_default();
                     let q = entry_ref.value_mut();
                     q.push_back(log_entry.clone());
                     if q.len() > 100 {
@@ -178,7 +189,9 @@ impl StrategyManager {
         offset: usize,
     ) -> Result<Vec<StrategyLogEntry>, ManagerError> {
         // 1. 尝试从内存热数据获取 (仅当 offset=0 且命中缓存时)
-        if offset == 0 && let Some(q) = self.recent_logs.get(strategy_id) {
+        if offset == 0
+            && let Some(q) = self.recent_logs.get(strategy_id)
+        {
             let logs: Vec<StrategyLogEntry> = q.iter().rev().take(limit).cloned().collect();
             if !logs.is_empty() && (logs.len() >= limit || logs.len() == q.len()) {
                 return Ok(logs);
@@ -186,7 +199,10 @@ impl StrategyManager {
         }
 
         // 2. 否则从持久化存储获取
-        Ok(self.log_port.query_logs(user_id, strategy_id, limit, offset).await?)
+        Ok(self
+            .log_port
+            .query_logs(user_id, strategy_id, limit, offset)
+            .await?)
     }
 
     /// # Summary
@@ -241,8 +257,16 @@ impl StrategyManager {
             algo_port: self.algo_port.clone(),
             indicator_service: self.indicator_service.clone(),
             time_provider: self.time_provider.clone(),
-            notifier: self.notifier_factory.create_for_user(user_id).await
-                .map_err(|e| ManagerError::Engine(EngineError::Handler(format!("Failed to create notifier for user {}: {}", user_id, e))))?,
+            notifier: self
+                .notifier_factory
+                .create_for_user(user_id)
+                .await
+                .map_err(|e| {
+                    ManagerError::Engine(EngineError::Handler(format!(
+                        "Failed to create notifier for user {}: {}",
+                        user_id, e
+                    )))
+                })?,
             logger: Some(Arc::new(LogWrapper {
                 user_id: user_id.to_string(),
                 strategy_id: instance_id.clone(),
@@ -283,15 +307,17 @@ impl StrategyManager {
                 .update_status(&user_id_owned, &id_owned, new_status.clone())
                 .await
             {
-                error!("Failed to update strategy {} status to {:?}: {}", id_owned, new_status, e);
+                error!(
+                    "Failed to update strategy {} status to {:?}: {}",
+                    id_owned, new_status, e
+                );
             }
 
             // 清理句柄
             running_tasks.remove(&task_key_clone);
         });
 
-        self.running_tasks
-            .insert(task_key, handle.abort_handle());
+        self.running_tasks.insert(task_key, handle.abort_handle());
 
         Ok(instance_id)
     }
@@ -309,11 +335,7 @@ impl StrategyManager {
     ///
     /// # Returns
     /// * `Result<(), ManagerError>`
-    pub async fn stop_strategy(
-        &self,
-        user_id: &str,
-        id: &str,
-    ) -> Result<(), ManagerError> {
+    pub async fn stop_strategy(&self, user_id: &str, id: &str) -> Result<(), ManagerError> {
         let task_key = format!("{}_{}", user_id, id);
 
         if let Some((_, handle)) = self.running_tasks.remove(&task_key) {
@@ -376,14 +398,14 @@ impl StrategyManager {
         source: Vec<u8>,
     ) -> Result<(), ManagerError> {
         let mut instance = self.store.get_instance(user_id, id).await?;
-        
+
         if matches!(instance.status, StrategyStatus::Running) {
             return Err(ManagerError::AlreadyRunning(id.to_string()));
         }
 
         instance.source = source;
         instance.updated_at = Utc::now();
-        
+
         self.store.save_instance(user_id, &instance).await?;
 
         Ok(())
@@ -398,13 +420,9 @@ impl StrategyManager {
     ///
     /// # Returns
     /// * `Result<(), ManagerError>`
-    pub async fn delete_strategy(
-        &self,
-        user_id: &str,
-        id: &str,
-    ) -> Result<(), ManagerError> {
+    pub async fn delete_strategy(&self, user_id: &str, id: &str) -> Result<(), ManagerError> {
         let instance = self.store.get_instance(user_id, id).await?;
-        
+
         if matches!(instance.status, StrategyStatus::Running) {
             return Err(ManagerError::AlreadyRunning(id.to_string()));
         }

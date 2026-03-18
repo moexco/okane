@@ -38,7 +38,10 @@ impl FakeClockProvider {
 
     /// 强制修改时钟的当前时间
     pub fn set_time(&self, new_time: DateTime<Utc>) -> Result<(), crate::error::CoreError> {
-        let mut time = self.current_time.write().map_err(|e| crate::error::CoreError::Poisoned(e.to_string()))?;
+        let mut time = self
+            .current_time
+            .write()
+            .map_err(|e| crate::error::CoreError::Poisoned(e.to_string()))?;
         *time = new_time;
         Ok(())
     }
@@ -46,7 +49,8 @@ impl FakeClockProvider {
 
 impl TimeProvider for FakeClockProvider {
     fn now(&self) -> Result<DateTime<Utc>, crate::error::CoreError> {
-        self.current_time.read()
+        self.current_time
+            .read()
             .map(|t| *t)
             .map_err(|e| crate::error::CoreError::Poisoned(e.to_string()))
     }

@@ -72,12 +72,10 @@ impl IntoResponse for ApiError {
 impl From<okane_manager::strategy::ManagerError> for ApiError {
     fn from(err: okane_manager::strategy::ManagerError) -> Self {
         match &err {
-            okane_manager::strategy::ManagerError::NotFound(msg) => {
-                ApiError::NotFound(msg.clone())
-            }
-            okane_manager::strategy::ManagerError::Store(okane_core::store::error::StoreError::NotFound) => {
-                ApiError::NotFound("not found".to_string())
-            }
+            okane_manager::strategy::ManagerError::NotFound(msg) => ApiError::NotFound(msg.clone()),
+            okane_manager::strategy::ManagerError::Store(
+                okane_core::store::error::StoreError::NotFound,
+            ) => ApiError::NotFound("not found".to_string()),
             okane_manager::strategy::ManagerError::AlreadyRunning(msg) => {
                 ApiError::BadRequest(format!("strategy already running: {}", msg))
             }

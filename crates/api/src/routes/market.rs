@@ -1,13 +1,16 @@
-use axum::extract::{Path, Query, State, ws::{WebSocketUpgrade, WebSocket, Message}};
-use serde::Deserialize;
-use std::str::FromStr;
+use axum::extract::{
+    Path, Query, State,
+    ws::{Message, WebSocket, WebSocketUpgrade},
+};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
+use serde::Deserialize;
+use std::str::FromStr;
 
-use okane_core::common::TimeFrame;
-use crate::server::AppState;
 use crate::error::ApiError;
+use crate::server::AppState;
 use crate::types::{ApiResponse, ApiResult, CandleResponse, StockMetadataResponse};
+use okane_core::common::TimeFrame;
 use utoipa::ToSchema;
 
 #[derive(Deserialize, ToSchema)]
@@ -16,7 +19,7 @@ pub struct SearchQuery {
 }
 
 /// 搜索股票
-/// 
+///
 /// 根据关键字 (代码或名称) 从存储中模糊匹配搜索股票元数据。
 #[utoipa::path(
     get,
@@ -53,7 +56,7 @@ pub struct CandlesQuery {
 }
 
 /// 获取历史 K 线
-/// 
+///
 /// 获取特定股票的多周期 K 线数据。时间必须为 RFC3339 格式 (例如: "2026-03-01T10:00:00Z")。
 #[utoipa::path(
     get,
@@ -79,21 +82,28 @@ pub async fn get_candles(
 ) -> Result<ApiResult<Vec<CandleResponse>>, ApiError> {
     let tf = TimeFrame::from_str(&query.tf)
         .map_err(|e| ApiError::BadRequest(format!("invalid timeframe: {}", e)))?;
-    
+
     let start = DateTime::parse_from_rfc3339(&query.start)
-        .map_err(|_| ApiError::BadRequest("invalid start time format, expected RFC3339".to_string()))?
+        .map_err(|_| {
+            ApiError::BadRequest("invalid start time format, expected RFC3339".to_string())
+        })?
         .with_timezone(&Utc);
-        
+
     let end = DateTime::parse_from_rfc3339(&query.end)
         .map_err(|_| ApiError::BadRequest("invalid end time format, expected RFC3339".to_string()))?
         .with_timezone(&Utc);
 
-    let stock_agg = state.market_port.get_stock(&symbol).await
+    let stock_agg = state
+        .market_port
+        .get_stock(&symbol)
+        .await
         .map_err(|e| ApiError::Internal(format!("market error: {}", e)))?;
-        
-    let history: Vec<okane_core::market::entity::Candle> = stock_agg.fetch_history(tf, start, end).await
+
+    let history: Vec<okane_core::market::entity::Candle> = stock_agg
+        .fetch_history(tf, start, end)
+        .await
         .map_err(|e| ApiError::Internal(format!("fetch history error: {}", e)))?;
-        
+
     let dtos = history.into_iter().map(Into::into).collect();
     Ok(ApiResult(dtos))
 }
@@ -139,7 +149,7 @@ pub struct MarketWsParams {
 }
 
 /// 行情实时推送 (WebSocket)
-/// 
+///
 /// 建立 WebSocket 连接以接收特定股票的实时 K 线推送。
 /// 参数: tf (TimeFrame, 例如 1m)
 #[utoipa::path(
@@ -161,11 +171,20 @@ pub async fn ws_handler(
     Path(symbol): Path<String>,
     Query(query): Query<MarketWsParams>,
 ) -> impl axum::response::IntoResponse {
-    tracing::info!("WebSocket upgrade request for symbol: {}, tf: {}", symbol, query.tf);
+    tracing::info!(
+        "WebSocket upgrade request for symbol: {}, tf: {}",
+        symbol,
+        query.tf
+    );
     ws.on_upgrade(move |socket| handle_socket(socket, state, symbol, query))
 }
 
-async fn handle_socket(mut socket: WebSocket, state: AppState, symbol: String, query: MarketWsParams) {
+async fn handle_socket(
+    mut socket: WebSocket,
+    state: AppState,
+    symbol: String,
+    query: MarketWsParams,
+) {
     let tf = match TimeFrame::from_str(&query.tf) {
         Ok(t) => t,
         Err(_) => return,

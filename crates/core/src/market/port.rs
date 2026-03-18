@@ -166,10 +166,7 @@ pub trait MarketDataProvider: Send + Sync {
     ///
     /// # Returns
     /// 成功返回异步流。
-    async fn subscribe_candles(
-        &self,
-        stock: &StockIdentity,
-    ) -> Result<CandleStream, MarketError>;
+    async fn subscribe_candles(&self, stock: &StockIdentity) -> Result<CandleStream, MarketError>;
 
     /// # Summary
     /// 搜索股票元数据。

@@ -18,6 +18,14 @@ pub struct MarketIndicatorService {
 const CONVERGENCE_WARMUP_FACTOR: u32 = 3;
 
 impl MarketIndicatorService {
+    /// # Logic
+    /// Construct a market indicator service backed by a market port.
+    ///
+    /// # Arguments
+    /// * `market` - Market port used to load historical candle data.
+    ///
+    /// # Returns
+    /// * `Self` - A new indicator service instance.
     pub fn new(market: Arc<dyn Market>) -> Self {
         Self { market }
     }
@@ -30,47 +38,64 @@ impl MarketIndicatorService {
     ) -> Result<Vec<Decimal>, MarketError> {
         let stock = self.market.get_stock(symbol).await?;
         let end = Utc::now();
-        
+
         // 为了使 EMA/RSI 等递归指标收敛，需要获取比 period 更多的数据作为预热
         let total_limit = period.saturating_mul(CONVERGENCE_WARMUP_FACTOR);
-        let limit_i32: i32 = total_limit.try_into().unwrap_or(i32::MAX);
+        let limit_i32 = i32::try_from(total_limit)
+            .map_err(|_| MarketError::Parse("indicator warmup limit too large".into()))?;
         let duration = timeframe.duration() * limit_i32;
         let start = end - duration;
-        
+
         let candles = stock.fetch_history(timeframe, start, end).await?;
         let prices: Vec<Decimal> = candles.into_iter().map(|c| c.close).collect();
-        
-        if prices.len() < period as usize {
+
+        let period_usize =
+            usize::try_from(period).map_err(|_| MarketError::Parse("period too large".into()))?;
+
+        if prices.len() < period_usize {
             return Err(MarketError::Parse(format!(
-                "数据不足: 需要 {}, 实际 {}",
+                "insufficient data: required {}, actual {}",
                 period,
                 prices.len()
             )));
         }
-        
+
         Ok(prices)
     }
 }
 
 #[async_trait]
 impl IndicatorService for MarketIndicatorService {
-    async fn sma(&self, symbol: &str, timeframe: TimeFrame, period: u32) -> Result<Decimal, MarketError> {
+    async fn sma(
+        &self,
+        symbol: &str,
+        timeframe: TimeFrame,
+        period: u32,
+    ) -> Result<Decimal, MarketError> {
         let prices = self.get_closing_prices(symbol, timeframe, period).await?;
         let len = prices.len();
-        let target_prices = &prices[len - period as usize..];
-        
+        let period_usize =
+            usize::try_from(period).map_err(|_| MarketError::Parse("period too large".into()))?;
+        let target_prices = &prices[len - period_usize..];
+
         let sum: Decimal = target_prices.iter().sum();
-        let period_dec = Decimal::from_u32(period).ok_or(MarketError::Parse("Invalid period".into()))?;
-        
+        let period_dec =
+            Decimal::from_u32(period).ok_or(MarketError::Parse("Invalid period".into()))?;
+
         Ok(sum / period_dec)
     }
 
-    async fn ema(&self, symbol: &str, timeframe: TimeFrame, period: u32) -> Result<Decimal, MarketError> {
+    async fn ema(
+        &self,
+        symbol: &str,
+        timeframe: TimeFrame,
+        period: u32,
+    ) -> Result<Decimal, MarketError> {
         // 注：get_closing_prices 内部已按 CONVERGENCE_WARMUP_FACTOR 进行了预热数据拉取
         let prices = self.get_closing_prices(symbol, timeframe, period).await?;
-        
+
         if prices.is_empty() {
-             return Err(MarketError::Parse("Price list is empty".into()));
+            return Err(MarketError::Parse("Price list is empty".into()));
         }
 
         let mut ema = prices[0];
@@ -85,11 +110,19 @@ impl IndicatorService for MarketIndicatorService {
         Ok(ema)
     }
 
-    async fn rsi(&self, symbol: &str, timeframe: TimeFrame, period: u32) -> Result<Decimal, MarketError> {
+    async fn rsi(
+        &self,
+        symbol: &str,
+        timeframe: TimeFrame,
+        period: u32,
+    ) -> Result<Decimal, MarketError> {
         // 注：get_closing_prices 内部已按 CONVERGENCE_WARMUP_FACTOR 进行了预热数据拉取
         let prices = self.get_closing_prices(symbol, timeframe, period).await?;
-        
-        if prices.len() <= period as usize {
+
+        let period_usize =
+            usize::try_from(period).map_err(|_| MarketError::Parse("period too large".into()))?;
+
+        if prices.len() <= period_usize {
             return Err(MarketError::Parse("Insufficient data for RSI".into()));
         }
 
@@ -97,7 +130,7 @@ impl IndicatorService for MarketIndicatorService {
         let mut losses = Vec::new();
 
         for i in 1..prices.len() {
-            let change = prices[i] - prices[i-1];
+            let change = prices[i] - prices[i - 1];
             if change >= Decimal::ZERO {
                 gains.push(change);
                 losses.push(Decimal::ZERO);
@@ -109,13 +142,13 @@ impl IndicatorService for MarketIndicatorService {
 
         // 初始平均值
         let period_dec = Decimal::from(period);
-        let mut avg_gain: Decimal = gains[..period as usize].iter().sum::<Decimal>() / period_dec;
-        let mut avg_loss: Decimal = losses[..period as usize].iter().sum::<Decimal>() / period_dec;
+        let mut avg_gain: Decimal = gains[..period_usize].iter().sum::<Decimal>() / period_dec;
+        let mut avg_loss: Decimal = losses[..period_usize].iter().sum::<Decimal>() / period_dec;
 
         // 平滑计算
         let period_minus_one = Decimal::from(period - 1);
 
-        for i in period as usize..gains.len() {
+        for i in period_usize..gains.len() {
             avg_gain = (avg_gain * period_minus_one + gains[i]) / period_dec;
             avg_loss = (avg_loss * period_minus_one + losses[i]) / period_dec;
         }
@@ -137,9 +170,9 @@ mod tests {
     use super::*;
     use okane_core::common::Stock as StockIdentity;
     use okane_core::market::entity::Candle;
+    use okane_core::market::port::CandleStream;
     use okane_core::market::port::Stock;
     use okane_core::market::port::StockStatus;
-    use okane_core::market::port::CandleStream;
     use rust_decimal_macros::dec;
 
     struct MockStock {
@@ -149,17 +182,32 @@ mod tests {
 
     #[async_trait]
     impl Stock for MockStock {
-        fn identity(&self) -> &StockIdentity { &self.identity }
-        fn current_price(&self) -> Result<Option<Decimal>, MarketError> { Ok(None) }
-        fn latest_candle(&self, _tf: TimeFrame) -> Result<Option<Candle>, MarketError> { Ok(None) }
-        fn last_closed_candle(&self, _tf: TimeFrame) -> Result<Option<Candle>, MarketError> { Ok(None) }
-        fn subscribe(&self, _tf: TimeFrame) -> Result<CandleStream, MarketError> { 
-            Err(MarketError::Parse("Not implemented".into())) 
+        fn identity(&self) -> &StockIdentity {
+            &self.identity
         }
-        async fn fetch_history(&self, _tf: TimeFrame, _start: chrono::DateTime<Utc>, _end: chrono::DateTime<Utc>) -> Result<Vec<Candle>, MarketError> {
+        fn current_price(&self) -> Result<Option<Decimal>, MarketError> {
+            Ok(None)
+        }
+        fn latest_candle(&self, _tf: TimeFrame) -> Result<Option<Candle>, MarketError> {
+            Ok(None)
+        }
+        fn last_closed_candle(&self, _tf: TimeFrame) -> Result<Option<Candle>, MarketError> {
+            Ok(None)
+        }
+        fn subscribe(&self, _tf: TimeFrame) -> Result<CandleStream, MarketError> {
+            Err(MarketError::Parse("Not implemented".into()))
+        }
+        async fn fetch_history(
+            &self,
+            _tf: TimeFrame,
+            _start: chrono::DateTime<Utc>,
+            _end: chrono::DateTime<Utc>,
+        ) -> Result<Vec<Candle>, MarketError> {
             Ok(self.history.clone())
         }
-        fn status(&self) -> StockStatus { StockStatus::Online }
+        fn status(&self) -> StockStatus {
+            StockStatus::Online
+        }
     }
 
     struct MockMarket {
@@ -171,29 +219,38 @@ mod tests {
         async fn get_stock(&self, _symbol: &str) -> Result<Arc<dyn Stock>, MarketError> {
             Ok(self.stock.clone())
         }
-        async fn search_symbols(&self, _query: &str) -> Result<Vec<okane_core::store::port::StockMetadata>, MarketError> {
+        async fn search_symbols(
+            &self,
+            _query: &str,
+        ) -> Result<Vec<okane_core::store::port::StockMetadata>, MarketError> {
             Ok(vec![])
         }
     }
 
     fn create_candles(prices: Vec<Decimal>) -> Vec<Candle> {
-        prices.into_iter().map(|p| Candle {
-            time: Utc::now(),
-            open: p,
-            high: p,
-            low: p,
-            close: p,
-            adj_close: None,
-            volume: dec!(1000),
-            is_final: true,
-        }).collect()
+        prices
+            .into_iter()
+            .map(|p| Candle {
+                time: Utc::now(),
+                open: p,
+                high: p,
+                low: p,
+                close: p,
+                adj_close: None,
+                volume: dec!(1000),
+                is_final: true,
+            })
+            .collect()
     }
 
     #[tokio::test]
     async fn test_sma() -> anyhow::Result<()> {
         let prices = vec![dec!(10), dec!(20), dec!(30), dec!(40)];
         let stock = Arc::new(MockStock {
-            identity: StockIdentity { symbol: "AAPL".into(), exchange: None },
+            identity: StockIdentity {
+                symbol: "AAPL".into(),
+                exchange: None,
+            },
             history: create_candles(prices),
         });
         let market = Arc::new(MockMarket { stock });
@@ -217,7 +274,10 @@ mod tests {
         // EMA2 = (30 - 15) * 0.5 + 15 = 22.5
         let prices = vec![dec!(10), dec!(20), dec!(30)];
         let stock = Arc::new(MockStock {
-            identity: StockIdentity { symbol: "AAPL".into(), exchange: None },
+            identity: StockIdentity {
+                symbol: "AAPL".into(),
+                exchange: None,
+            },
             history: create_candles(prices),
         });
         let market = Arc::new(MockMarket { stock });
@@ -233,14 +293,17 @@ mod tests {
         // Simple case: all up
         let prices = vec![dec!(10), dec!(11), dec!(12), dec!(13), dec!(14)];
         let stock = Arc::new(MockStock {
-            identity: StockIdentity { symbol: "AAPL".into(), exchange: None },
+            identity: StockIdentity {
+                symbol: "AAPL".into(),
+                exchange: None,
+            },
             history: create_candles(prices),
         });
         let market = Arc::new(MockMarket { stock });
         let service = MarketIndicatorService::new(market);
 
         let val = service.rsi("AAPL", TimeFrame::Minute1, 2).await?;
-        // period=2. 
+        // period=2.
         // changes: +1, +1, +1, +1
         // gains: [1, 1, 1, 1], losses: [0, 0, 0, 0]
         // avg_gain: (1+1)/2 = 1.0
@@ -251,7 +314,10 @@ mod tests {
         // Case with a drop
         let prices = vec![dec!(10), dec!(12), dec!(10), dec!(12), dec!(10)];
         let stock = Arc::new(MockStock {
-            identity: StockIdentity { symbol: "AAPL".into(), exchange: None },
+            identity: StockIdentity {
+                symbol: "AAPL".into(),
+                exchange: None,
+            },
             history: create_candles(prices),
         });
         let market = Arc::new(MockMarket { stock });
@@ -277,7 +343,10 @@ mod tests {
     async fn test_insufficient_data() -> anyhow::Result<()> {
         let prices = vec![dec!(10), dec!(20)];
         let stock = Arc::new(MockStock {
-            identity: StockIdentity { symbol: "AAPL".into(), exchange: None },
+            identity: StockIdentity {
+                symbol: "AAPL".into(),
+                exchange: None,
+            },
             history: create_candles(prices),
         });
         let market = Arc::new(MockMarket { stock });
@@ -286,7 +355,7 @@ mod tests {
         let res = service.sma("AAPL", TimeFrame::Minute1, 3).await;
         assert!(res.is_err());
         if let Err(MarketError::Parse(msg)) = res {
-            assert!(msg.contains("数据不足"));
+            assert!(msg.contains("insufficient data"));
         } else {
             return Err(anyhow::anyhow!("Expected Parse error"));
         }

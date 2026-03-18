@@ -213,6 +213,8 @@ pub struct AlgoOrder {
     pub algo: AlgoType,
     /// 当前状态
     pub status: AlgoOrderStatus,
+    /// 原始目标数量
+    pub requested_volume: Decimal,
     /// 已成交总量
     pub filled_volume: Decimal,
     /// 创建时间
@@ -220,11 +222,25 @@ pub struct AlgoOrder {
 }
 
 impl AlgoOrder {
+    /// # Logic
+    /// Create a running algo order with an explicit requested volume.
+    ///
+    /// # Arguments
+    /// * `id` - Unique algo order identifier.
+    /// * `account_id` - Bound logical account identifier.
+    /// * `symbol` - Trading symbol.
+    /// * `algo` - Algo type and parameters.
+    /// * `requested_volume` - Requested parent order volume, must be positive.
+    /// * `now_ms` - Creation timestamp in milliseconds.
+    ///
+    /// # Returns
+    /// * `Self` - A running algo order with zero filled volume.
     pub fn new(
         id: OrderId,
         account_id: AccountId,
         symbol: String,
         algo: AlgoType,
+        requested_volume: Decimal,
         now_ms: i64,
     ) -> Self {
         Self {
@@ -233,6 +249,7 @@ impl AlgoOrder {
             symbol,
             algo,
             status: AlgoOrderStatus::Running,
+            requested_volume,
             filled_volume: Decimal::ZERO,
             created_at: now_ms,
         }

@@ -1,16 +1,18 @@
+mod backtest;
+
 use std::sync::Arc;
 
+use okane_core::common::RealTimeProvider;
 use okane_engine::factory::EngineFactory;
 use okane_feed::yahoo::YahooProvider;
 use okane_manager::strategy::StrategyManager;
+use okane_market::indicator::MarketIndicatorService;
 use okane_market::manager::MarketImpl;
 use okane_store::market::SqliteMarketStore;
 use okane_store::strategy::SqliteStrategyStore;
 use okane_store::system::SqliteSystemStore;
-use okane_trade::service::TradeService;
 use okane_trade::algo::AlgoOrderService;
-use okane_market::indicator::MarketIndicatorService;
-use okane_core::common::RealTimeProvider;
+use okane_trade::service::TradeService;
 use tracing::info;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
@@ -31,10 +33,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive(tracing::Level::INFO.into()),
+        )
         .with_writer(
-            std::io::stdout.with_max_level(tracing::Level::INFO)
-            .and(non_blocking.with_max_level(tracing::Level::DEBUG))
+            std::io::stdout
+                .with_max_level(tracing::Level::INFO)
+                .and(non_blocking.with_max_level(tracing::Level::DEBUG)),
         )
         .with_ansi(true) // 保持控制台颜色，如果嫌麻烦可以拆分 layer
         .init();
@@ -44,20 +50,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1.5 加载全局配置
     let config_file_path = std::path::Path::new("config.toml");
     let mut builder = config::Config::builder();
-    
+
     if config_file_path.exists() {
         builder = builder.add_source(config::File::from(config_file_path).required(true));
     } else if std::path::Path::new("config").exists() {
         // Support legacy no-extension 'config' file
         builder = builder.add_source(config::File::with_name("config").required(true));
     }
-    
+
     builder = builder.add_source(config::Environment::with_prefix("OKANE").separator("_"));
 
     let config_val = builder.build()?;
-    
+
     // 如果配置了解析失败应当报错退出，否则在完全无配置的情况下回退 Default
-    let app_config: okane_core::config::AppConfig = if config_file_path.exists() || std::path::Path::new("config").exists() || std::env::var("OKANE_SERVER_PORT").is_ok() {
+    let app_config: okane_core::config::AppConfig = if config_file_path.exists()
+        || std::path::Path::new("config").exists()
+        || std::env::var("OKANE_SERVER_PORT").is_ok()
+    {
         config_val.try_deserialize()?
     } else {
         okane_core::config::AppConfig::default()
@@ -66,7 +75,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Configuration loaded: {:?}", app_config);
 
     // 设置全局数据目录 (为 Store 层提供根路径)
-    okane_store::config::set_root_dir(std::path::PathBuf::from(app_config.database.data_dir.clone()));
+    okane_store::config::set_root_dir(std::path::PathBuf::from(
+        app_config.database.data_dir.clone(),
+    ));
 
     // 2. 实例化基础设施层
     let feed = Arc::new(YahooProvider::new()?);
@@ -82,7 +93,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 5. 实例化交易、算法单与指标服务
     let account_store = Arc::new(okane_store::account::SqliteAccountStore::new()?);
     let pending_port = Arc::new(okane_store::pending_order_sqlx::SqlitePendingOrderStore::new()?);
-    let matcher = Arc::new(okane_trade::matcher::LocalMatchEngine::new(rust_decimal::Decimal::ZERO));
+    let matcher = Arc::new(okane_trade::matcher::LocalMatchEngine::new(
+        rust_decimal::Decimal::ZERO,
+    ));
     let real_time = Arc::new(RealTimeProvider);
 
     // 核心解耦方案：利用 TradeService 的可选算法单注入
@@ -101,13 +114,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     // 真正的交易服务入口，注入算法单服务以便驱动其运作
-    let trade_service = Arc::new(TradeService::new(
-        account_store,
-        matcher,
-        market.clone(),
-        pending_port,
-        real_time,
-    ).with_algo_service(algo_port.clone()));
+    let trade_service = Arc::new(
+        TradeService::new(
+            account_store,
+            matcher,
+            market.clone(),
+            pending_port,
+            real_time,
+        )
+        .with_algo_service(algo_port.clone()),
+    );
 
     let indicator_service = Arc::new(MarketIndicatorService::new(market.clone()));
 
@@ -116,8 +132,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(SqliteSystemStore::new().await?);
 
     // 7. 创建通知工厂（根据用户 ID 动态创建 Notifier, 配置存储在数据库中）
-    let notifier_factory: Arc<dyn okane_core::notify::port::NotifierFactory> =
-        Arc::new(okane_notify::factory::DefaultNotifierFactory::new(system_store.clone()));
+    let notifier_factory: Arc<dyn okane_core::notify::port::NotifierFactory> = Arc::new(
+        okane_notify::factory::DefaultNotifierFactory::new(system_store.clone()),
+    );
 
     // 8. 构造应用服务层（注入 Core Trait 抽象）
     let manager = StrategyManager::new(okane_manager::strategy::StrategyManagerParams {
@@ -141,6 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backtest_runner = Arc::new(okane_manager::backtest::BacktestRunner::new(
         market.clone(),
         engine_builder_factory,
+        Arc::new(backtest::DefaultBacktestEnvironmentFactory),
     ));
 
     // 9. 挂载 API 服务
@@ -149,7 +167,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for s in active_sessions {
         session_cache.insert(s.id.clone(), s);
     }
-    info!("🚀 Loaded {} active sessions into memory.", session_cache.len());
+    info!(
+        "Loaded {} active sessions into memory.",
+        session_cache.len()
+    );
 
     let app_state = okane_api::server::AppState {
         strategy_manager: manager.clone(),

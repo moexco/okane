@@ -43,7 +43,7 @@ impl MatcherPort for LocalMatchEngine {
 
         let execute_price = current_market_price;
         let executed_volume = order.volume - order.filled_volume;
-        
+
         let transaction_val = execute_price * executed_volume;
         let commission = transaction_val * self.commission_rate;
 
@@ -84,7 +84,8 @@ mod tests {
             1000,
         );
 
-        let trade = matcher.execute_order(&mut order, dec!(150.0), 1001)
+        let trade = matcher
+            .execute_order(&mut order, dec!(150.0), 1001)
             .ok_or("Failed to execute order")?;
 
         assert_eq!(trade.price, dec!(150.0));
@@ -109,7 +110,8 @@ mod tests {
         );
 
         // Since market price is lower (better) than limit price, it will execute at market price.
-        let trade = matcher.execute_order(&mut order, dec!(140.0), 1001)
+        let trade = matcher
+            .execute_order(&mut order, dec!(140.0), 1001)
             .ok_or("Failed to execute order")?;
 
         assert_eq!(trade.price, dec!(140.0));

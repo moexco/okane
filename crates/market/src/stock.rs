@@ -8,10 +8,10 @@ use okane_core::market::entity::Candle;
 use okane_core::market::error::MarketError;
 use okane_core::market::port::{CandleStream, MarketDataProvider, Stock, StockStatus};
 use okane_core::store::port::MarketStore;
+use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::{broadcast, mpsc};
-use rust_decimal::Decimal;
 use tracing::{error, info};
 
 /// # Summary
@@ -152,10 +152,20 @@ impl StockInner {
     ///
     /// # Returns
     /// 无。
-    pub async fn update_and_broadcast(&self, candle: Candle, timeframe: TimeFrame) -> Result<(), MarketError> {
+    pub async fn update_and_broadcast(
+        &self,
+        candle: Candle,
+        timeframe: TimeFrame,
+    ) -> Result<(), MarketError> {
         // 更新价格和快照
-        self.cache.set("p", &candle.close).await.map_err(|e| MarketError::Unknown(format!("Cache error: {}", e)))?;
-        self.cache.set(Self::l_key(timeframe), &candle).await.map_err(|e| MarketError::Unknown(format!("Cache error: {}", e)))?;
+        self.cache
+            .set("p", &candle.close)
+            .await
+            .map_err(|e| MarketError::Unknown(format!("Cache error: {}", e)))?;
+        self.cache
+            .set(Self::l_key(timeframe), &candle)
+            .await
+            .map_err(|e| MarketError::Unknown(format!("Cache error: {}", e)))?;
 
         // 更新滚动缓冲区 (k:rollingbuff)
         let key = Self::k_key(timeframe);
@@ -164,10 +174,16 @@ impl StockInner {
             Ok(None) | Err(_) => RollingBuffer::new(DEFAULT_CANDLE_BUFFER_SIZE),
         };
         buffer.push(candle.clone());
-        self.cache.set(key, &buffer).await.map_err(|e| MarketError::Unknown(format!("Cache error: {}", e)))?;
+        self.cache
+            .set(key, &buffer)
+            .await
+            .map_err(|e| MarketError::Unknown(format!("Cache error: {}", e)))?;
 
         if candle.is_final {
-            self.cache.set(Self::lc_key(timeframe), &candle).await.map_err(|e| MarketError::Unknown(format!("Cache error: {}", e)))?;
+            self.cache
+                .set(Self::lc_key(timeframe), &candle)
+                .await
+                .map_err(|e| MarketError::Unknown(format!("Cache error: {}", e)))?;
             let store = self.store.clone();
             let id = self.identity.clone();
             let c = candle.clone();
@@ -178,7 +194,10 @@ impl StockInner {
             });
         }
 
-        let channels = self.channels.lock().map_err(|e| MarketError::Unknown(format!("Lock poisoned: {}", e)))?;
+        let channels = self
+            .channels
+            .lock()
+            .map_err(|e| MarketError::Unknown(format!("Lock poisoned: {}", e)))?;
         if let Some(tx) = channels.get(&timeframe)
             && let Err(e) = tx.send(candle)
         {
@@ -236,8 +255,10 @@ impl Stock for StockInner {
     /// # Returns
     /// 价格选项。
     fn current_price(&self) -> Result<Option<Decimal>, MarketError> {
-        futures::executor::block_on(async { 
-            self.cache.get::<Decimal>("p").await
+        futures::executor::block_on(async {
+            self.cache
+                .get::<Decimal>("p")
+                .await
                 .map_err(|e| MarketError::Unknown(format!("Cache error: {}", e)))
         })
     }
@@ -295,7 +316,10 @@ impl Stock for StockInner {
     /// 异步行情流。
     fn subscribe(&self, timeframe: TimeFrame) -> Result<CandleStream, MarketError> {
         let (_tx, rx) = {
-            let mut channels = self.channels.lock().map_err(|_| MarketError::Core(CoreError::Poisoned("channels lock".to_string())))?;
+            let mut channels = self
+                .channels
+                .lock()
+                .map_err(|_| MarketError::Core(CoreError::Poisoned("channels lock".to_string())))?;
             let tx = channels.entry(timeframe).or_insert_with(|| {
                 let (tx, _) = broadcast::channel(128);
                 tx
@@ -345,7 +369,8 @@ impl Stock for StockInner {
         }
 
         // 本地缺失则拉取远端数据
-        let upstream = self.provider
+        let upstream = self
+            .provider
             .fetch_candles(&self.identity, timeframe, start, end)
             .await?;
 
@@ -355,8 +380,15 @@ impl Stock for StockInner {
             let identity_clone = self.identity.clone();
             let candles_clone = upstream.clone();
             tokio::spawn(async move {
-                if let Err(e) = store.save_candles(&identity_clone, timeframe, &candles_clone).await {
-                    tracing::error!("Failed to cache K-line data for {}: {}", identity_clone.symbol, e);
+                if let Err(e) = store
+                    .save_candles(&identity_clone, timeframe, &candles_clone)
+                    .await
+                {
+                    tracing::error!(
+                        "Failed to cache K-line data for {}: {}",
+                        identity_clone.symbol,
+                        e
+                    );
                 }
             });
         }
@@ -427,16 +459,14 @@ impl StockFetcher {
     /// 无。
     async fn run(self) {
         info!("Fetcher for {} started", self.identity.symbol);
-        if let Ok(mut stream) = self
-            .provider
-            .subscribe_candles(&self.identity)
-            .await
-        {
+        if let Ok(mut stream) = self.provider.subscribe_candles(&self.identity).await {
             while let Some(result) = futures::StreamExt::next(&mut stream).await {
                 match result {
                     Ok(candle) => {
                         if let Some(stock) = self.inner.upgrade() {
-                            if let Err(e) = stock.update_and_broadcast(candle, TimeFrame::Minute1).await {
+                            if let Err(e) =
+                                stock.update_and_broadcast(candle, TimeFrame::Minute1).await
+                            {
                                 error!("Fetcher: Failed to update stock: {}", e);
                             }
                         } else {
@@ -475,10 +505,7 @@ mod tests {
         ) -> Result<Vec<Candle>, MarketError> {
             Ok(vec![])
         }
-        async fn subscribe_candles(
-            &self,
-            _: &StockIdentity,
-        ) -> Result<CandleStream, MarketError> {
+        async fn subscribe_candles(&self, _: &StockIdentity) -> Result<CandleStream, MarketError> {
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
             use rust_decimal_macros::dec;
             tx.send(Candle {

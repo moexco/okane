@@ -7,15 +7,26 @@ use std::time::Duration;
 use tokio::time::timeout;
 
 /// # Summary
+/// 初始化 Rustls 加密提供程序。
+fn init_crypto() {
+    match rustls::crypto::aws_lc_rs::default_provider().install_default() {
+        Ok(()) => {}
+        Err(_already_installed) => {}
+    }
+}
+
+/// # Summary
 /// 雅虎财经行情获取的集成测试。
 ///
 /// # Logic
-/// 1. 初始化 YahooProvider。
-/// 2. 抓取 AAPL 过去 7 天的日线数据。
-/// 3. 断言数据非空且返回成功。
+/// 1. 初始化 Rustls 加密提供程序。
+/// 2. 初始化 YahooProvider。
+/// 3. 抓取 AAPL 过去 7 天的日线数据。
+/// 4. 断言数据非空且返回成功。
 #[tokio::test]
 #[ignore]
 async fn test_yahoo_real_fetch() -> Result<(), Box<dyn std::error::Error>> {
+    init_crypto();
     let provider = YahooProvider::new()?;
     let stock = Stock {
         symbol: "AAPL".to_string(),
@@ -29,8 +40,13 @@ async fn test_yahoo_real_fetch() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     assert!(!candles.is_empty(), "Candles list should not be empty");
-    assert!(candles.iter().all(|c| c.close > rust_decimal::Decimal::ZERO), "All candles should have positive close price");
-    
+    assert!(
+        candles
+            .iter()
+            .all(|c| c.close > rust_decimal::Decimal::ZERO),
+        "All candles should have positive close price"
+    );
+
     Ok(())
 }
 
@@ -39,24 +55,27 @@ async fn test_yahoo_real_fetch() -> Result<(), Box<dyn std::error::Error>> {
 ///
 /// # Logic
 /// 1. 初始化 YahooProvider 并订阅 AAPL 的日线流。
-/// 2. 验证流是否能产生至少一个数据点（初始订阅会触发一次即时抓取）。
+/// 2. 验证流是否能产生至少一个数据点（Yahoo 首条 tick 可能只有价格，没有 volume delta）。
 /// 3. 设置 30 秒超时以应对网络波动。
 #[tokio::test]
 #[ignore]
 async fn test_yahoo_stream_subscribe() -> Result<(), Box<dyn std::error::Error>> {
+    init_crypto();
     let provider = YahooProvider::new()?;
     let stock = Stock {
-        symbol: "BTC-USD".to_string(),
+        symbol: "AAPL".to_string(),
         exchange: None,
     };
 
     let mut stream = provider.subscribe_candles(&stock).await?;
 
-    // 初始订阅后，WS 连接并等待数据
-    let first_item = timeout(Duration::from_secs(60), stream.next()).await?;
+    // 初始订阅后，WS 或 fallback polling 连接并等待数据
+    let first_item = timeout(Duration::from_secs(90), stream.next()).await?;
     let candle = first_item.ok_or("流已关闭且未收到数据")??;
 
     assert!(candle.close > rust_decimal::Decimal::ZERO);
+    assert!(!candle.is_final);
+    assert!(candle.volume >= rust_decimal::Decimal::ZERO);
     Ok(())
 }
 
@@ -70,13 +89,14 @@ async fn test_yahoo_stream_subscribe() -> Result<(), Box<dyn std::error::Error>>
 #[tokio::test]
 #[ignore]
 async fn test_yahoo_search_symbols() -> Result<(), Box<dyn std::error::Error>> {
+    init_crypto();
     let provider = YahooProvider::new()?;
     let query = "Apple";
 
     let symbols = provider.search_symbols(query).await?;
 
     assert!(!symbols.is_empty(), "搜索结果不应为空");
-    
+
     // 检查是否包含 AAPL
     let has_aapl = symbols.iter().any(|s| s.symbol == "AAPL");
     assert!(has_aapl, "搜索结果应包含 AAPL");

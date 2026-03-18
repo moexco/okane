@@ -151,7 +151,7 @@ mod tests {
         buffer.push(3); // Overwrites 1
         assert_eq!(buffer.to_vec(), vec![2, 3]);
         assert_eq!(buffer.last(), Some(3));
-        
+
         buffer.push(4); // Overwrites 2
         assert_eq!(buffer.to_vec(), vec![3, 4]);
         assert_eq!(buffer.last(), Some(4));

@@ -63,7 +63,9 @@ pub async fn run_backtest(
 
     // 校验时间范围
     if start_time >= end_time {
-        return Err(ApiError::BadRequest("start time must be before end time".to_string()));
+        return Err(ApiError::BadRequest(
+            "start time must be before end time".to_string(),
+        ));
     }
 
     // 解析初始资金
@@ -71,7 +73,7 @@ pub async fn run_backtest(
         .map_err(|_| ApiError::BadRequest("invalid initial balance value".to_string()))?;
 
     // Base64 解码源码
-    use base64::prelude::{Engine as _, BASE64_STANDARD};
+    use base64::prelude::{BASE64_STANDARD, Engine as _};
     let source = BASE64_STANDARD
         .decode(&req.source_base64)
         .map_err(|e| ApiError::BadRequest(format!("base64 decode failed: {}", e)))?;

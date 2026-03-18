@@ -98,14 +98,16 @@ pub struct AlgoOrderResponse {
     /// 股票代码
     #[schema(example = "NVDA")]
     pub symbol: String,
-    /// 算法类型 (Grid, Twap, Snipe)
-    #[schema(example = "Grid")]
+    /// 算法类型 (当前对外支持 Snipe)
+    #[schema(example = "Snipe")]
     pub algo_type: String,
     /// 算法参数 (JSON 对象)
     pub params: serde_json::Value,
     /// 状态 (Running, Completed, Canceled 等)
     #[schema(example = "Running")]
     pub status: String,
+    /// 目标数量
+    pub requested_volume: String,
     /// 已成交数量
     pub filled_volume: String,
     /// 创建时间
@@ -372,7 +374,12 @@ pub struct Page<T: Serialize + ToSchema> {
 impl<T: Serialize + ToSchema> Page<T> {
     /// 创建分页对象
     pub fn new(items: Vec<T>, total: usize, offset: usize, limit: usize) -> Self {
-        Self { items, total, offset, limit }
+        Self {
+            items,
+            total,
+            offset,
+            limit,
+        }
     }
 }
 
@@ -442,8 +449,8 @@ impl ApiErrorResponse {
 //  扩展：用于中间件单次序列化的机制
 // ============================================================
 
-use axum::response::{IntoResponse, Response};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 
 /// 被擦除类型的响应数据，由中间件负责序列化
 pub trait ErasedResponse: Send + Sync + 'static {
@@ -484,7 +491,7 @@ impl<T: Serialize + ToSchema + Send + Sync + 'static> ErasedResponse for Success
             code: u32,
             latency_ms: Option<u64>,
         }
-        
+
         let resp = TempResponse {
             success: true,
             data: Some(&self.data),
@@ -492,7 +499,16 @@ impl<T: Serialize + ToSchema + Send + Sync + 'static> ErasedResponse for Success
             code: self.code,
             latency_ms: Some(latency),
         };
-        serde_json::to_vec(&resp).unwrap_or_else(|_| vec![])
+        match serde_json::to_vec(&resp) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                tracing::error!("failed to serialize success response: {}", err);
+                format!(
+                    "{{\"success\":false,\"error\":\"response serialization failure\",\"code\":500,\"latency_ms\":{latency}}}"
+                )
+                .into_bytes()
+            }
+        }
     }
 }
 
@@ -524,7 +540,17 @@ impl ErasedResponse for ErrorMarker {
             code: self.code,
             latency_ms: Some(latency),
         };
-        serde_json::to_vec(&resp).unwrap_or_else(|_| vec![])
+        match serde_json::to_vec(&resp) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                tracing::error!("failed to serialize error response: {}", err);
+                format!(
+                    "{{\"success\":false,\"error\":\"response serialization failure\",\"code\":{},\"latency_ms\":{latency}}}",
+                    self.code
+                )
+                .into_bytes()
+            }
+        }
     }
 }
 
@@ -542,7 +568,8 @@ impl<T: Serialize + ToSchema + Send + Sync + 'static> IntoResponse for ApiResult
             code: 200,
             latency_ms: None,
         };
-        res.extensions_mut().insert(Arc::new(marker) as Arc<dyn ErasedResponse>);
+        res.extensions_mut()
+            .insert(Arc::new(marker) as Arc<dyn ErasedResponse>);
         res
     }
 }
@@ -764,14 +791,24 @@ impl From<okane_core::trade::entity::Trade> for TradeResponse {
 
 impl From<okane_core::trade::entity::AlgoOrder> for AlgoOrderResponse {
     fn from(o: okane_core::trade::entity::AlgoOrder) -> Self {
-        let val = serde_json::to_value(&o.algo).unwrap_or(serde_json::Value::Null);
-        let algo_type = val.get("type")
-            .and_then(|t| t.as_str())
-            .unwrap_or("Unknown")
-            .to_string();
-        let params = val.get("params")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
+        let (algo_type, params) = match serde_json::to_value(&o.algo) {
+            Ok(val) => {
+                let algo_type = val
+                    .get("type")
+                    .and_then(|t| t.as_str())
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| "unknown".to_string());
+                let params = val
+                    .get("params")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                (algo_type, params)
+            }
+            Err(err) => {
+                tracing::error!("failed to serialize algo order params: {}", err);
+                ("unknown".to_string(), serde_json::Value::Null)
+            }
+        };
 
         Self {
             id: o.id.0,
@@ -780,6 +817,7 @@ impl From<okane_core::trade::entity::AlgoOrder> for AlgoOrderResponse {
             algo_type,
             params,
             status: format!("{:?}", o.status),
+            requested_volume: o.requested_volume.to_string(),
             filled_volume: o.filled_volume.to_string(),
             created_at: o.created_at,
         }
