@@ -252,16 +252,24 @@ async fn test_user_account_and_strategy_deployment() -> anyhow::Result<()> {
         .access_token;
 
     // 3. 注册金融账号
-    assert_post!(
+    let account_res = assert_post!(
         &client,
         format!("{}/api/v1/user/account", base_url),
         Some(&trader_token),
         &CreateAccountRequest {
-            account_id: "acc_trader_02".to_string(),
-            initial_balance: Some("100000.00".to_string()),
+            account_name: "Trader Account 02".to_string(),
+            account_type: "local".to_string(),
+            config: serde_json::json!({ "initial_balance": "100000.00" }),
         },
         StatusCode::OK
     );
+    let account_id = account_res
+        .json::<ApiResponse<okane_api::types::AccountProfileResponse>>()
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?
+        .data
+        .ok_or_else(|| anyhow::anyhow!("Account profile null"))?
+        .account_id;
 
     // 4. 部署策略 (源码透明化)
     let js_code = r#"
@@ -279,9 +287,10 @@ async fn test_user_account_and_strategy_deployment() -> anyhow::Result<()> {
         Some(&trader_token),
         &StartStrategyRequest {
             symbol: "AAPL".to_string(),
-            account_id: "acc_trader_02".to_string(),
+            account_id,
             timeframe: "1m".to_string(),
             engine_type: "JavaScript".to_string(),
+            run_mode: None,
             source_base64: encode_js_source(js_code),
         },
         StatusCode::OK

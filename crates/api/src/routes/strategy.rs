@@ -113,7 +113,7 @@ pub async fn deploy_strategy(
     axum::Json(req): axum::Json<StartStrategyRequest>,
 ) -> Result<ApiResult<String>, ApiError> {
     use okane_core::common::TimeFrame;
-    use okane_core::strategy::entity::EngineType;
+    use okane_core::strategy::entity::{EngineType, StrategyRunMode};
     use okane_manager::strategy::StartRequest;
 
     // 解析 TimeFrame
@@ -125,6 +125,13 @@ pub async fn deploy_strategy(
     // 解析 EngineType
     let engine_type: EngineType = req
         .engine_type
+        .parse()
+        .map_err(|e: String| ApiError::BadRequest(e))?;
+
+    let run_mode: StrategyRunMode = req
+        .run_mode
+        .as_deref()
+        .unwrap_or("LivePaper")
         .parse()
         .map_err(|e: String| ApiError::BadRequest(e))?;
 
@@ -159,6 +166,7 @@ pub async fn deploy_strategy(
         account_id: req.account_id,
         timeframe,
         engine_type,
+        run_mode,
         source,
     };
 

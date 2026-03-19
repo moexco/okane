@@ -6,7 +6,8 @@ use okane_core::engine::error::EngineError;
 use okane_core::engine::port::{EngineBuildParams, EngineBuilder};
 use okane_core::store::error::StoreError;
 use okane_core::strategy::entity::{
-    EngineType, LogLevel, StrategyInstance, StrategyLogEntry, StrategyStatus,
+    EngineType, LogLevel, StrategyInstance, StrategyLogEntry, StrategyRunMode, StrategyRunRecord,
+    StrategyStatus,
 };
 use okane_core::strategy::port::{StrategyLogPort, StrategyLogger, StrategyStore};
 use std::collections::VecDeque;
@@ -74,6 +75,8 @@ pub struct StartRequest {
     pub timeframe: TimeFrame,
     // 引擎类型
     pub engine_type: EngineType,
+    // 运行模式
+    pub run_mode: StrategyRunMode,
     // 策略源码 (JS) 或字节码 (WASM)
     pub source: Vec<u8>,
 }
@@ -228,16 +231,20 @@ impl StrategyManager {
         req: StartRequest,
     ) -> Result<String, ManagerError> {
         let instance_id = Uuid::new_v4().to_string();
+        let run_id = Uuid::new_v4().to_string();
         let now = Utc::now();
 
         // 构建聚合根
         let instance = StrategyInstance {
             id: instance_id.clone(),
+            name: format!("{} {}", req.symbol, &instance_id[..8]),
             symbol: req.symbol.clone(),
             account_id: req.account_id.clone(),
             timeframe: req.timeframe,
             engine_type: req.engine_type.clone(),
             source: req.source.clone(),
+            parameter_schema: serde_json::json!([]),
+            latest_run_id: Some(run_id.clone()),
             status: StrategyStatus::Pending,
             created_at: now,
             updated_at: now,
@@ -245,6 +252,28 @@ impl StrategyManager {
 
         // 持久化
         self.store.save_instance(user_id, &instance).await?;
+        self.store
+            .save_run(
+                user_id,
+                &StrategyRunRecord {
+                    id: run_id.clone(),
+                    strategy_id: instance_id.clone(),
+                    symbol: req.symbol.clone(),
+                    account_id: req.account_id.clone(),
+                    timeframe: req.timeframe,
+                    engine_type: req.engine_type.clone(),
+                    mode: req.run_mode,
+                    source: req.source.clone(),
+                    parameter_values: serde_json::json!({}),
+                    summary: serde_json::json!({}),
+                    status: StrategyStatus::Pending,
+                    started_at: now,
+                    finished_at: None,
+                    created_at: now,
+                    updated_at: now,
+                },
+            )
+            .await?;
 
         let fut = self.engine_builder.build(EngineBuildParams {
             engine_type: req.engine_type,
@@ -279,12 +308,16 @@ impl StrategyManager {
         self.store
             .update_status(user_id, &instance_id, StrategyStatus::Running)
             .await?;
+        self.store
+            .update_run_status(user_id, &run_id, StrategyStatus::Running, None, None)
+            .await?;
 
         // 启动协程
         let task_key = format!("{}_{}", user_id, instance_id);
         let store_clone = self.store.clone();
         let user_id_owned = user_id.to_string();
         let id_owned = instance_id.clone();
+        let run_id_owned = run_id.clone();
         let running_tasks = self.running_tasks.clone();
         let task_key_clone = task_key.clone();
 
@@ -310,6 +343,21 @@ impl StrategyManager {
                 error!(
                     "Failed to update strategy {} status to {:?}: {}",
                     id_owned, new_status, e
+                );
+            }
+            if let Err(e) = store_clone
+                .update_run_status(
+                    &user_id_owned,
+                    &run_id_owned,
+                    new_status.clone(),
+                    Some(Utc::now()),
+                    None,
+                )
+                .await
+            {
+                error!(
+                    "Failed to update strategy run {} status to {:?}: {}",
+                    run_id_owned, new_status, e
                 );
             }
 
@@ -345,6 +393,17 @@ impl StrategyManager {
         self.store
             .update_status(user_id, id, StrategyStatus::Stopped)
             .await?;
+        if let Some(run_id) = self.store.get_instance(user_id, id).await?.latest_run_id {
+            self.store
+                .update_run_status(
+                    user_id,
+                    &run_id,
+                    StrategyStatus::Stopped,
+                    Some(Utc::now()),
+                    None,
+                )
+                .await?;
+        }
 
         Ok(())
     }

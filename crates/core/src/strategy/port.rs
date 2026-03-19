@@ -1,5 +1,5 @@
 use crate::store::error::StoreError;
-use crate::strategy::entity::{StrategyInstance, StrategyStatus};
+use crate::strategy::entity::{StrategyInstance, StrategyRunRecord, StrategyStatus};
 use async_trait::async_trait;
 
 /// # Summary
@@ -73,6 +73,33 @@ pub trait StrategyStore: Send + Sync {
     /// # Returns
     /// * `Result<(), StoreError>`
     async fn delete_instance(&self, user_id: &str, id: &str) -> Result<(), StoreError>;
+
+    /// # Summary
+    /// 保存或更新某次策略运行记录。
+    async fn save_run(&self, user_id: &str, run: &StrategyRunRecord) -> Result<(), StoreError>;
+
+    /// # Summary
+    /// 更新策略运行记录状态。
+    async fn update_run_status(
+        &self,
+        user_id: &str,
+        run_id: &str,
+        status: StrategyStatus,
+        finished_at: Option<chrono::DateTime<chrono::Utc>>,
+        summary: Option<serde_json::Value>,
+    ) -> Result<(), StoreError>;
+
+    /// # Summary
+    /// 列出指定策略的所有运行记录。
+    async fn list_runs(
+        &self,
+        user_id: &str,
+        strategy_id: &str,
+    ) -> Result<Vec<StrategyRunRecord>, StoreError>;
+
+    /// # Summary
+    /// 删除指定策略的全部运行记录。
+    async fn delete_runs(&self, user_id: &str, strategy_id: &str) -> Result<(), StoreError>;
 }
 
 /// # Summary

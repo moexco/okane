@@ -2,7 +2,7 @@ use okane_core::common::TimeFrame;
 use okane_core::engine::error::EngineError;
 use okane_core::engine::port::{EngineBuildParams, EngineBuilder, EngineFuture};
 use okane_core::notify::port::NotifierFactory;
-use okane_core::strategy::entity::{EngineType, StrategyStatus};
+use okane_core::strategy::entity::{EngineType, StrategyRunMode, StrategyStatus};
 use okane_core::test_utils::{MockAlgoOrderPort, MockIndicatorService, SpyTradePort};
 use okane_manager::strategy::{StartRequest, StrategyManager};
 use okane_store::strategy::SqliteStrategyStore;
@@ -66,6 +66,7 @@ async fn test_strategy_lifecycle() -> anyhow::Result<()> {
         account_id: "SystemDefault_01".to_string(),
         timeframe: TimeFrame::Minute1,
         engine_type: EngineType::JavaScript,
+        run_mode: StrategyRunMode::LivePaper,
         source: b"console.log('hello')".to_vec(),
     };
 
@@ -134,6 +135,7 @@ async fn test_strategy_lifecycle() -> anyhow::Result<()> {
         account_id: "SystemDefault_01".to_string(),
         timeframe: TimeFrame::Minute1,
         engine_type: EngineType::JavaScript,
+        run_mode: StrategyRunMode::LivePaper,
         source: b"loop".to_vec(),
     };
     let id_inf = manager_inf

@@ -37,6 +37,41 @@ pub enum StrategyStatus {
     Failed(String), // 附带错误信息
 }
 
+/// # Summary
+/// 策略运行模式。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub enum StrategyRunMode {
+    Backtest,
+    LivePaper,
+    LiveSignal,
+    AutoTrade,
+}
+
+impl std::fmt::Display for StrategyRunMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StrategyRunMode::Backtest => write!(f, "Backtest"),
+            StrategyRunMode::LivePaper => write!(f, "LivePaper"),
+            StrategyRunMode::LiveSignal => write!(f, "LiveSignal"),
+            StrategyRunMode::AutoTrade => write!(f, "AutoTrade"),
+        }
+    }
+}
+
+impl std::str::FromStr for StrategyRunMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Backtest" => Ok(StrategyRunMode::Backtest),
+            "LivePaper" => Ok(StrategyRunMode::LivePaper),
+            "LiveSignal" => Ok(StrategyRunMode::LiveSignal),
+            "AutoTrade" => Ok(StrategyRunMode::AutoTrade),
+            _ => Err(format!("Unknown StrategyRunMode: {}", s)),
+        }
+    }
+}
+
 impl std::fmt::Display for StrategyStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -100,18 +135,46 @@ pub struct StrategyLogEntry {
 /// `StrategyInstance` 聚合根。
 ///
 /// # Invariants
-/// - 代表系统内一个需要托管生命周期的策略单元。
-/// - 与指定的用户和证券代码强绑定。
+/// - 代表系统内一个可持续编辑与运行的策略实体。
+/// - 承载草稿源码、默认运行输入与最新运行状态快照。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct StrategyInstance {
     pub id: String,
+    pub name: String,
     pub symbol: String,
-    pub account_id: String, // 绑定的交易账户
+    pub account_id: String,
     pub timeframe: crate::common::TimeFrame,
     pub engine_type: EngineType,
     #[schema(value_type = String, format = "binary")]
     pub source: Vec<u8>,
+    #[schema(value_type = Object)]
+    pub parameter_schema: serde_json::Value,
+    pub latest_run_id: Option<String>,
     pub status: StrategyStatus,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// # Summary
+/// 策略运行结果记录。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct StrategyRunRecord {
+    pub id: String,
+    pub strategy_id: String,
+    pub symbol: String,
+    pub account_id: String,
+    pub timeframe: crate::common::TimeFrame,
+    pub engine_type: EngineType,
+    pub mode: StrategyRunMode,
+    #[schema(value_type = String, format = "binary")]
+    pub source: Vec<u8>,
+    #[schema(value_type = Object)]
+    pub parameter_values: serde_json::Value,
+    #[schema(value_type = Object)]
+    pub summary: serde_json::Value,
+    pub status: StrategyStatus,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

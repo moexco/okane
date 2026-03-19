@@ -92,7 +92,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4. 实例化引擎工厂（App 层知道具体实现，Manager 不知道）
     let engine_builder = Arc::new(EngineFactory::new(market.clone()));
 
-    // 5. 实例化交易、算法单与指标服务
+    // 5. 实例化系统级存储（提供给鉴权系统 + 账号后端解析 + 用户通知配置查询）
+    let system_store: Arc<dyn okane_core::store::port::SystemStore> =
+        Arc::new(SqliteSystemStore::new().await?);
+
+    // 6. 实例化交易、算法单与指标服务
     let account_store = Arc::new(okane_store::account::SqliteAccountStore::new()?);
     let pending_port = Arc::new(okane_store::pending_order_sqlx::SqlitePendingOrderStore::new()?);
     let matcher = Arc::new(okane_trade::matcher::LocalMatchEngine::new(
@@ -100,9 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     let real_time = Arc::new(RealTimeProvider);
 
-    // 核心解耦方案：利用 TradeService 的可选算法单注入
-    // 算法单服务需要 TradePort 以执行子单
-    let trade_service_base = Arc::new(TradeService::new(
+    let local_trade_service = Arc::new(TradeService::new(
         account_store.clone(),
         matcher.clone(),
         market.clone(),
@@ -110,28 +112,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         real_time.clone(),
     ));
 
+    let trade_service = Arc::new(okane_trade::router::RoutedTradePort::new(
+        local_trade_service.clone(),
+        system_store.clone(),
+    ));
+
     let algo_port = Arc::new(AlgoOrderService::new(
-        trade_service_base.clone(),
+        trade_service.clone(),
         real_time.clone(),
     ));
 
-    // 真正的交易服务入口，注入算法单服务以便驱动其运作
-    let trade_service = Arc::new(
-        TradeService::new(
-            account_store,
-            matcher,
-            market.clone(),
-            pending_port,
-            real_time,
-        )
-        .with_algo_service(algo_port.clone())?,
-    );
+    local_trade_service.set_algo_service(algo_port.clone())?;
 
     let indicator_service = Arc::new(MarketIndicatorService::new(market.clone()));
-
-    // 6. 实例化系统级存储（提供给鉴权系统 + 用户通知配置查询）
-    let system_store: Arc<dyn okane_core::store::port::SystemStore> =
-        Arc::new(SqliteSystemStore::new().await?);
 
     // 7. 创建通知工厂（根据用户 ID 动态创建 Notifier, 配置存储在数据库中）
     let notifier_factory: Arc<dyn okane_core::notify::port::NotifierFactory> = Arc::new(

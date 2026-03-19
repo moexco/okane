@@ -9,7 +9,6 @@ use okane_manager::backtest::{
 use okane_manager::strategy::ManagerError;
 use okane_market::history::BacktestMarket;
 use okane_market::indicator::MarketIndicatorService;
-use okane_trade::account::AccountManager;
 use okane_trade::algo::AlgoOrderService;
 use okane_trade::service::TradeService;
 use okane_trade::trade_log::TradeLog;
@@ -112,11 +111,21 @@ impl BacktestEnvironmentFactory for DefaultBacktestEnvironmentFactory {
         source_stock: Arc<dyn Stock>,
     ) -> Result<BacktestEnvironment, ManagerError> {
         let fake_clock = Arc::new(FakeClockProvider::new(req.start));
-        let account_manager = Arc::new(AccountManager::new());
+        let account_store = Arc::new(
+            okane_store::account::SqliteAccountStore::new().map_err(|e| {
+                ManagerError::Trade(okane_core::trade::port::TradeError::InternalError(
+                    e.to_string(),
+                ))
+            })?,
+        );
         let backtest_account_id = AccountId(format!("backtest_{}", uuid::Uuid::new_v4()));
-        account_manager.ensure_account_exists(backtest_account_id.clone(), req.initial_balance);
-
-        let pending_port = Arc::new(okane_store::pending_order::MemoryPendingOrderStore::new());
+        let pending_port = Arc::new(
+            okane_store::pending_order_sqlx::SqlitePendingOrderStore::new().map_err(|e| {
+                ManagerError::Trade(okane_core::trade::port::TradeError::InternalError(
+                    e.to_string(),
+                ))
+            })?,
+        );
         let matcher = Arc::new(okane_trade::matcher::LocalMatchEngine::new(Decimal::ZERO));
         let trade_log = Arc::new(TradeLog::new());
         let lazy_market = Arc::new(LazyMarket::new());
@@ -124,7 +133,7 @@ impl BacktestEnvironmentFactory for DefaultBacktestEnvironmentFactory {
 
         let trade_service = Arc::new(
             TradeService::new(
-                account_manager.clone(),
+                account_store,
                 matcher,
                 lazy_market.clone(),
                 pending_port,
@@ -132,6 +141,9 @@ impl BacktestEnvironmentFactory for DefaultBacktestEnvironmentFactory {
             )
             .with_trade_log(trade_log.clone()),
         );
+        trade_service
+            .ensure_account(backtest_account_id.clone(), req.initial_balance)
+            .await?;
 
         let backtest_market: Arc<dyn Market> = Arc::new(BacktestMarket::with_source(
             req.symbol.clone(),

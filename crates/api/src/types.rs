@@ -27,7 +27,7 @@ pub struct PositionResponse {
 /// 账户快照 DTO - 对应 UI 顶部 Key Metrics 区域
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AccountSnapshotResponse {
-    /// 系统账户 ID
+    /// 逻辑交易账号 ID
     #[schema(example = "SysAcct_Alpha_01")]
     pub account_id: String,
     /// 可用资金余额
@@ -43,15 +43,38 @@ pub struct AccountSnapshotResponse {
     pub positions: Vec<PositionResponse>,
 }
 
-/// 创建新金融账号请求体
+/// 逻辑交易账号档案 DTO
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AccountProfileResponse {
+    /// 逻辑交易账号 ID
+    #[schema(example = "acct_3f2c3af9b7aa4e56")]
+    pub account_id: String,
+    /// 用户定义的账号名称
+    #[schema(example = "我的本地测试账户")]
+    pub account_name: String,
+    /// 账号类型
+    #[schema(example = "local")]
+    #[serde(rename = "type")]
+    pub account_type: String,
+    /// 账号配置
+    pub config: serde_json::Value,
+    /// 创建时间
+    #[schema(example = "2026-03-19T10:00:00Z")]
+    pub created_at: String,
+}
+
+/// 创建新逻辑交易账号请求体
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CreateAccountRequest {
-    /// 想要申请的系统账户 ID
-    #[schema(example = "MyNewAccount_01")]
-    pub account_id: String,
-    /// 初始资金 (可选，默认 0)
-    #[schema(example = "10000.00")]
-    pub initial_balance: Option<String>,
+    /// 用户定义的账号名称
+    #[schema(example = "我的 Schwab 主账户")]
+    pub account_name: String,
+    /// 账号类型，例如 `local`、`futu`、`schwab`。
+    #[schema(example = "local")]
+    #[serde(rename = "type")]
+    pub account_type: String,
+    /// 账号配置。不同账号类型由对应实现解释。
+    pub config: serde_json::Value,
 }
 
 /// 订单流 DTO
@@ -203,10 +226,13 @@ pub struct StrategyResponse {
     /// 策略实例 ID
     #[schema(example = "a1b2c3d4-e5f6-7890")]
     pub id: String,
+    /// 策略名称
+    #[schema(example = "NVDA Momentum")]
+    pub name: String,
     /// 交易标的
     #[schema(example = "NVDA")]
     pub symbol: String,
-    /// 绑定的系统账户
+    /// 默认挂载的逻辑交易账号
     #[schema(example = "SysAcct_Alpha_01")]
     pub account_id: String,
     /// K 线周期 (如 "1m", "5m", "1d")
@@ -218,12 +244,20 @@ pub struct StrategyResponse {
     /// 当前状态 (Pending / Running / Stopped / Failed)
     #[schema(example = "Running")]
     pub status: String,
+    /// 当前参数定义
+    pub parameter_schema: serde_json::Value,
+    /// 最新运行记录 ID
+    #[schema(example = "run-b33f5d48")]
+    pub latest_run_id: Option<String>,
     /// 策略源码 (Base64 编码)
     #[schema(example = "Y29uc29sZS5sb2coJ2hlbGxvJyk7")]
     pub source_base64: String,
     /// 创建时间 (ISO 8601)
     #[schema(example = "2026-03-01T00:00:00Z")]
     pub created_at: String,
+    /// 更新时间 (ISO 8601)
+    #[schema(example = "2026-03-02T00:00:00Z")]
+    pub updated_at: String,
 }
 
 /// 启动策略请求体 DTO
@@ -241,6 +275,9 @@ pub struct StartStrategyRequest {
     /// 引擎类型 ("JavaScript" 或 "Wasm")
     #[schema(example = "JavaScript")]
     pub engine_type: String,
+    /// 运行模式
+    #[schema(example = "LivePaper", default = "LivePaper")]
+    pub run_mode: Option<String>,
     /// 策略源码 (base64 编码的脚本)
     #[schema(example = "Y29uc29sZS5sb2coJ2hlbGxvJyk7")]
     pub source_base64: String,
@@ -714,18 +751,34 @@ impl From<okane_core::trade::entity::AccountSnapshot> for AccountSnapshotRespons
     }
 }
 
+impl From<okane_core::store::port::AccountProfile> for AccountProfileResponse {
+    fn from(profile: okane_core::store::port::AccountProfile) -> Self {
+        Self {
+            account_id: profile.id,
+            account_name: profile.account_name,
+            account_type: profile.account_type,
+            config: profile.config,
+            created_at: profile.created_at.to_rfc3339(),
+        }
+    }
+}
+
 impl From<&okane_core::strategy::entity::StrategyInstance> for StrategyResponse {
     fn from(i: &okane_core::strategy::entity::StrategyInstance) -> Self {
         use base64::Engine;
         Self {
             id: i.id.clone(),
+            name: i.name.clone(),
             symbol: i.symbol.clone(),
             account_id: i.account_id.clone(),
             timeframe: format!("{}", i.timeframe),
             engine_type: format!("{}", i.engine_type),
-            status: format!("{:?}", i.status),
+            status: i.status.to_string(),
+            parameter_schema: i.parameter_schema.clone(),
+            latest_run_id: i.latest_run_id.clone(),
             source_base64: base64::prelude::BASE64_STANDARD.encode(&i.source),
             created_at: i.created_at.to_rfc3339(),
+            updated_at: i.updated_at.to_rfc3339(),
         }
     }
 }

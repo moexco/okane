@@ -414,21 +414,28 @@ async fn test_idor_view_others_orders() -> anyhow::Result<()> {
         .context("data null")?
         .access_token;
 
-    assert_post!(
+    let create_res = assert_post!(
         &client,
         format!("{}/api/v1/user/account", base_url),
         Some(&victim_token),
         &serde_json::json!({
-            "account_id": "victim_acc",
-            "initial_balance": "1000"
+            "account_name": "Victim Account",
+            "type": "local",
+            "config": { "initial_balance": "1000" }
         }),
         StatusCode::OK
     );
+    let victim_account_id = create_res
+        .json::<ApiResponse<okane_api::types::AccountProfileResponse>>()
+        .await?
+        .data
+        .context("data null")?
+        .account_id;
 
     // 1. 受害者自己应该能看到（正向基准）
     let res = assert_get!(
         &client,
-        format!("{}/api/v1/user/orders?account_id=victim_acc", base_url),
+        format!("{}/api/v1/user/orders?account_id={}", base_url, victim_account_id),
         Some(&victim_token),
         StatusCode::OK
     );
@@ -441,7 +448,7 @@ async fn test_idor_view_others_orders() -> anyhow::Result<()> {
     // 2. 攻击者查看受害者订单（越权测试）
     assert_get!(
         &client,
-        format!("{}/api/v1/user/orders?account_id=victim_acc", base_url),
+        format!("{}/api/v1/user/orders?account_id={}", base_url, victim_account_id),
         Some(&attacker_token),
         StatusCode::FORBIDDEN
     );
@@ -449,7 +456,7 @@ async fn test_idor_view_others_orders() -> anyhow::Result<()> {
     // 3. 闭环验证：受害者数据未被泄露或篡改
     let res = assert_get!(
         &client,
-        format!("{}/api/v1/user/orders?account_id=victim_acc", base_url),
+        format!("{}/api/v1/user/orders?account_id={}", base_url, victim_account_id),
         Some(&victim_token),
         StatusCode::OK
     );
@@ -493,6 +500,7 @@ async fn test_strategy_lifecycle_gap_coverage() -> anyhow::Result<()> {
             account_id: "trader_01".to_string(),
             timeframe: "1m".to_string(),
             engine_type: "JavaScript".to_string(),
+            run_mode: None,
             source_base64: source_b64,
         },
         StatusCode::OK
@@ -945,8 +953,9 @@ async fn test_account_initial_balance_invalid() -> anyhow::Result<()> {
         .post(format!("{}/api/v1/user/account", base_url))
         .bearer_auth(&token)
         .json(&serde_json::json!({
-            "account_id": "new_acc",
-            "initial_balance": "not-a-decimal"
+            "account_name": "New Account",
+            "type": "local",
+            "config": { "initial_balance": "not-a-decimal" }
         }))
         .send()
         .await?;
@@ -956,7 +965,7 @@ async fn test_account_initial_balance_invalid() -> anyhow::Result<()> {
         body.error
             .context("Error body missing")?
             .to_lowercase()
-            .contains("format")
+            .contains("initial_balance")
     );
     Ok(())
 }
@@ -1219,7 +1228,15 @@ async fn test_trade_account_not_found_error_path() -> anyhow::Result<()> {
     let token = get_admin_token(&client, &base_url).await?;
 
     // Bind a non-existent account "ghost" to admin
-    system_store.bind_account("admin", "ghost").await?;
+    system_store
+        .bind_account(
+            "admin",
+            "ghost",
+            "Ghost",
+            "local",
+            serde_json::json!({}),
+        )
+        .await?;
 
     // Now IDOR check passes, but TradePort.get_account fails
     assert_get!(
@@ -1448,7 +1465,15 @@ async fn test_trade_get_orders_not_found() -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     let token = get_admin_token(&client, &base_url).await?;
 
-    system_store.bind_account("admin", "ghost").await?;
+    system_store
+        .bind_account(
+            "admin",
+            "ghost",
+            "Ghost",
+            "local",
+            serde_json::json!({}),
+        )
+        .await?;
     // For a list resource, empty result is 200 OK
     let res = assert_get!(
         &client,

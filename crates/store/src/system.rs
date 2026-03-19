@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use okane_core::store::error::StoreError;
-use okane_core::store::port::{Position, StockMetadata, SystemStore, User};
+use okane_core::store::port::{AccountProfile, Position, StockMetadata, SystemStore, User};
 use rust_decimal::Decimal;
 use sqlx::{
     SqlitePool,
@@ -50,7 +50,10 @@ CREATE INDEX IF NOT EXISTS idx_user_sessions_user_client ON user_sessions(user_i
 
 CREATE TABLE IF NOT EXISTS accounts (
     id TEXT PRIMARY KEY,
+    account_name TEXT NOT NULL DEFAULT '',
     owner_id TEXT NOT NULL,
+    account_type TEXT NOT NULL DEFAULT 'local',
+    config TEXT NOT NULL DEFAULT '{}',
     created_at DATETIME NOT NULL,
     FOREIGN KEY(owner_id) REFERENCES users(id)
 );
@@ -180,6 +183,19 @@ impl SqliteSystemStore {
             .execute(&pool)
             .await
             .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        sqlx::query("ALTER TABLE accounts ADD COLUMN account_name TEXT NOT NULL DEFAULT ''")
+            .execute(&pool)
+            .await
+            .ok();
+        sqlx::query("ALTER TABLE accounts ADD COLUMN account_type TEXT NOT NULL DEFAULT 'local'")
+            .execute(&pool)
+            .await
+            .ok();
+        sqlx::query("ALTER TABLE accounts ADD COLUMN config TEXT NOT NULL DEFAULT '{}'")
+            .execute(&pool)
+            .await
+            .ok();
 
         let count: (i64,) = sqlx::query_as(SQL_COUNT_USERS)
             .fetch_one(&pool)
@@ -475,6 +491,32 @@ impl SystemStore for SqliteSystemStore {
         Ok(row.map(|r| r.0))
     }
 
+    async fn get_account_profile(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<AccountProfile>, StoreError> {
+        let row = sqlx::query_as::<_, (String, String, String, String, String, DateTime<Utc>)>(
+            "SELECT id, account_name, owner_id, account_type, config, created_at FROM accounts WHERE id = ?",
+        )
+        .bind(account_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        row.map(|row| {
+            Ok(AccountProfile {
+                id: row.0,
+                account_name: row.1,
+                owner_id: row.2,
+                account_type: row.3,
+                config: serde_json::from_str(&row.4)
+                    .map_err(|e| StoreError::Database(format!("failed to parse account config: {}", e)))?,
+                created_at: row.5,
+            })
+        })
+        .transpose()
+    }
+
     async fn get_user_accounts(&self, user_id: &str) -> Result<Vec<String>, StoreError> {
         let rows = sqlx::query_as::<_, (String,)>("SELECT id FROM accounts WHERE owner_id = ?")
             .bind(user_id)
@@ -485,11 +527,23 @@ impl SystemStore for SqliteSystemStore {
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
-    async fn bind_account(&self, user_id: &str, account_id: &str) -> Result<(), StoreError> {
+    async fn bind_account(
+        &self,
+        user_id: &str,
+        account_id: &str,
+        account_name: &str,
+        account_type: &str,
+        config: serde_json::Value,
+    ) -> Result<(), StoreError> {
         let now = Utc::now();
-        sqlx::query("INSERT INTO accounts (id, owner_id, created_at) VALUES (?, ?, ?)")
+        sqlx::query(
+            "INSERT INTO accounts (id, account_name, owner_id, account_type, config, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        )
             .bind(account_id)
+            .bind(account_name)
             .bind(user_id)
+            .bind(account_type)
+            .bind(config.to_string())
             .bind(now)
             .execute(&self.pool)
             .await

@@ -111,6 +111,18 @@ pub struct StockMetadata {
 }
 
 /// # Summary
+/// 逻辑交易账号的持久化档案。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AccountProfile {
+    pub id: String,
+    pub account_name: String,
+    pub owner_id: String,
+    pub account_type: String,
+    pub config: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
+/// # Summary
 /// 市场数据存储接口，负责 K 线数据的持久化与读取。
 ///
 /// # Invariants
@@ -186,16 +198,44 @@ pub trait SystemStore: Send + Sync {
 
     // --- 账户从属 ---
 
-    /// 获取子账户的所有者 user_id
+    /// 获取逻辑交易账号的所有者 user_id
     async fn get_account_owner(&self, account_id: &str) -> Result<Option<String>, StoreError>;
 
-    /// 将新创建的账户绑定给目标用户
-    async fn bind_account(&self, user_id: &str, account_id: &str) -> Result<(), StoreError>;
+    /// 获取逻辑交易账号档案
+    async fn get_account_profile(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<AccountProfile>, StoreError>;
 
-    /// 获取某用户拥有的所有金融账号 ID 列表
+    /// 将新创建的逻辑交易账号绑定给目标用户
+    async fn bind_account(
+        &self,
+        user_id: &str,
+        account_id: &str,
+        account_name: &str,
+        account_type: &str,
+        config: serde_json::Value,
+    ) -> Result<(), StoreError>;
+
+    /// 获取某用户拥有的所有逻辑交易账号 ID 列表
     async fn get_user_accounts(&self, user_id: &str) -> Result<Vec<String>, StoreError>;
 
-    /// 快速验证某用户是否对子账户具有所有权
+    /// 获取某用户拥有的所有逻辑交易账号档案
+    async fn get_user_account_profiles(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<AccountProfile>, StoreError> {
+        let account_ids = self.get_user_accounts(user_id).await?;
+        let mut profiles = Vec::with_capacity(account_ids.len());
+        for account_id in account_ids {
+            if let Some(profile) = self.get_account_profile(&account_id).await? {
+                profiles.push(profile);
+            }
+        }
+        Ok(profiles)
+    }
+
+    /// 快速验证某用户是否对逻辑交易账号具有所有权
     async fn verify_account_ownership(
         &self,
         user_id: &str,

@@ -118,7 +118,20 @@ mod tests {
         async fn get_account_owner(&self, _: &str) -> Result<Option<String>, StoreError> {
             Err(unsupported_store_call())
         }
-        async fn bind_account(&self, _: &str, _: &str) -> Result<(), StoreError> {
+        async fn get_account_profile(
+            &self,
+            _: &str,
+        ) -> Result<Option<okane_core::store::port::AccountProfile>, StoreError> {
+            Err(unsupported_store_call())
+        }
+        async fn bind_account(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: serde_json::Value,
+        ) -> Result<(), StoreError> {
             Err(unsupported_store_call())
         }
         async fn get_user_accounts(&self, _: &str) -> Result<Vec<String>, StoreError> {
@@ -276,7 +289,20 @@ mod tests {
             async fn get_account_owner(&self, _: &str) -> Result<Option<String>, StoreError> {
                 Err(unsupported_store_call())
             }
-            async fn bind_account(&self, _: &str, _: &str) -> Result<(), StoreError> {
+            async fn get_account_profile(
+                &self,
+                _: &str,
+            ) -> Result<Option<okane_core::store::port::AccountProfile>, StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn bind_account(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+                _: &str,
+                _: serde_json::Value,
+            ) -> Result<(), StoreError> {
                 Err(unsupported_store_call())
             }
             async fn get_user_accounts(&self, _: &str) -> Result<Vec<String>, StoreError> {

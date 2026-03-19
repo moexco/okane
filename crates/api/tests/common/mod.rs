@@ -242,7 +242,13 @@ pub async fn spawn_test_server() -> anyhow::Result<(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to save admin user: {}", e))?;
     system_store
-        .bind_account("admin", "trader_01")
+        .bind_account(
+            "admin",
+            "trader_01",
+            "Trader 01",
+            "local",
+            serde_json::json!({}),
+        )
         .await
         .map_err(|e| anyhow::anyhow!("Failed to bind trader_01: {}", e))?;
 
@@ -344,12 +350,16 @@ pub async fn spawn_test_server() -> anyhow::Result<(
             .map_err(|e| anyhow::anyhow!("Failed to init SqlitePendingOrderStore: {}", e))?,
     );
     let matcher = std::sync::Arc::new(LocalMatchEngine::new(rust_decimal::Decimal::ZERO));
-    let trade_service = Arc::new(TradeService::new(
+    let local_trade_service = Arc::new(TradeService::new(
         account_manager,
         matcher,
         market.clone(),
         pending_port,
         Arc::new(okane_core::common::time::RealTimeProvider),
+    ));
+    let trade_service = Arc::new(okane_trade::router::RoutedTradePort::new(
+        local_trade_service.clone(),
+        system_store.clone(),
     ));
 
     let engine_builder_factory = Arc::new(|m: Arc<dyn okane_core::market::port::Market>| {
@@ -361,6 +371,7 @@ pub async fn spawn_test_server() -> anyhow::Result<(
         trade_service.clone(),
         Arc::new(okane_core::common::time::RealTimeProvider),
     ));
+    local_trade_service.set_algo_service(algo_service.clone())?;
     let indicator_service = Arc::new(okane_market::indicator::MarketIndicatorService::new(
         market.clone(),
     ));

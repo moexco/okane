@@ -3,9 +3,9 @@ mod common;
 use anyhow::Context;
 use common::spawn_test_server;
 use okane_api::types::{
-    AccountSnapshotResponse, ApiResponse, CreateAccountRequest, LoginRequest, LoginResponse,
-    NotifyConfigResponse, OrderResponse, StockMetadataResponse, UpdateNotifyConfigRequest,
-    UpdateSettingsRequest, WatchlistRequest,
+    AccountProfileResponse, AccountSnapshotResponse, ApiResponse, CreateAccountRequest,
+    LoginRequest, LoginResponse, NotifyConfigResponse, OrderResponse, StockMetadataResponse,
+    UpdateNotifyConfigRequest, UpdateSettingsRequest, WatchlistRequest,
 };
 use reqwest::StatusCode;
 use std::str::FromStr;
@@ -87,8 +87,9 @@ async fn test_account_management_api() -> anyhow::Result<()> {
         format!("{}/api/v1/user/account", base_url),
         Some(&token),
         &CreateAccountRequest {
-            account_id: "test_detailed_acc".to_string(),
-            initial_balance: Some("5000.00".to_string()),
+            account_name: "Detailed Account".to_string(),
+            account_type: "local".to_string(),
+            config: serde_json::json!({ "initial_balance": "5000.00" }),
         },
         StatusCode::OK
     );
@@ -101,18 +102,22 @@ async fn test_account_management_api() -> anyhow::Result<()> {
         StatusCode::OK
     );
     let accounts = res
-        .json::<ApiResponse<Vec<String>>>()
+        .json::<ApiResponse<Vec<AccountProfileResponse>>>()
         .await
         .map_err(|e| anyhow::anyhow!("Parse: {}", e))?
         .data
         .ok_or_else(|| anyhow::anyhow!("Data null"))?;
-    assert!(accounts.iter().any(|a| a == "trader_01"));
-    assert!(accounts.iter().any(|a| a == "test_detailed_acc"));
+    assert!(accounts.iter().any(|a| a.account_id == "trader_01"));
+    assert!(accounts.iter().any(|a| a.account_name == "Detailed Account" && a.account_type == "local"));
 
     // 3. 查询单个 (修正：应查询新创建的 test_detailed_acc 以验证完整流程)
+    let created = accounts
+        .iter()
+        .find(|a| a.account_name == "Detailed Account")
+        .context("created account missing")?;
     let res = assert_get!(
         &client,
-        format!("{}/api/v1/user/account/{}", base_url, "test_detailed_acc"),
+        format!("{}/api/v1/user/account/{}", base_url, created.account_id),
         Some(&token),
         StatusCode::OK
     );
@@ -122,7 +127,7 @@ async fn test_account_management_api() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Parse: {}", e))?
         .data
         .ok_or_else(|| anyhow::anyhow!("Data null"))?;
-    assert_eq!(acc.account_id, "test_detailed_acc");
+    assert_eq!(acc.account_id, created.account_id);
     let avail = rust_decimal::Decimal::from_str(&acc.available_balance)
         .map_err(|e| anyhow::anyhow!("Parse actual: {}", e))?;
     let expected = rust_decimal::Decimal::from_str("5000.00")
@@ -349,20 +354,28 @@ async fn test_manual_trade_api() -> anyhow::Result<()> {
         .access_token;
 
     // 准备一个账号
-    assert_post!(
+    let create_res = assert_post!(
         &client,
         format!("{}/api/v1/user/account", base_url),
         Some(&token),
         &CreateAccountRequest {
-            account_id: "trade_acc".to_string(),
-            initial_balance: Some("100000.00".to_string()),
+            account_name: "Trade Account".to_string(),
+            account_type: "local".to_string(),
+            config: serde_json::json!({ "initial_balance": "100000.00" }),
         },
         StatusCode::OK
     );
+    let trade_account_id = create_res
+        .json::<ApiResponse<AccountProfileResponse>>()
+        .await
+        .map_err(|e| anyhow::anyhow!("Parse create account: {}", e))?
+        .data
+        .ok_or_else(|| anyhow::anyhow!("Create account data null"))?
+        .account_id;
 
-    // 1. 下单 (修正：使用前面步骤中新准备的 trade_acc)
+    // 1. 下单
     let order_req = serde_json::json!({
-        "account_id": "trade_acc",
+        "account_id": trade_account_id,
         "symbol": "AAPL",
         "direction": "Buy",
         "price": "150.00",
@@ -382,10 +395,10 @@ async fn test_manual_trade_api() -> anyhow::Result<()> {
         .data
         .ok_or_else(|| anyhow::anyhow!("Data null"))?;
 
-    // 2. 获取挂单列表 (修正：查询 trade_acc)
+    // 2. 获取挂单列表
     let res = assert_get!(
         &client,
-        format!("{}/api/v1/user/orders?account_id=trade_acc", base_url),
+        format!("{}/api/v1/user/orders?account_id={}", base_url, trade_account_id),
         Some(&token),
         StatusCode::OK
     );
@@ -408,7 +421,7 @@ async fn test_manual_trade_api() -> anyhow::Result<()> {
     // 4. 确认列表中的订单已经消失
     let res = assert_get!(
         &client,
-        format!("{}/api/v1/user/orders?account_id=trade_acc", base_url),
+        format!("{}/api/v1/user/orders?account_id={}", base_url, trade_account_id),
         Some(&token),
         StatusCode::OK
     );

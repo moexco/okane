@@ -2204,6 +2204,7 @@ dependencies = [
  "okane-store",
  "okane-trade",
  "rust_decimal",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -2244,6 +2245,7 @@ dependencies = [
  "okane-core",
  "reqwest 0.13.2",
  "serde",
+ "serde_json",
  "tokio",
 ]
 

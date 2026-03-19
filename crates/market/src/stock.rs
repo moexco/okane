@@ -194,14 +194,42 @@ impl StockInner {
             });
         }
 
-        let channels = self
-            .channels
-            .lock()
-            .map_err(|e| MarketError::Unknown(format!("Lock poisoned: {}", e)))?;
-        if let Some(tx) = channels.get(&timeframe)
+        let tx = {
+            let mut channels = self
+                .channels
+                .lock()
+                .map_err(|e| MarketError::Unknown(format!("Lock poisoned: {}", e)))?;
+            match channels.get(&timeframe) {
+                Some(tx) if tx.receiver_count() == 0 => {
+                    channels.remove(&timeframe);
+                    tracing::debug!(
+                        "Removed stale candle channel for {} [{:?}] because it has no receivers",
+                        self.identity.symbol,
+                        timeframe
+                    );
+                    None
+                }
+                Some(tx) => Some(tx.clone()),
+                None => None,
+            }
+        };
+
+        if let Some(tx) = tx
             && let Err(e) = tx.send(candle)
         {
-            error!("Failed to send candle for timeframe {:?}: {}", timeframe, e);
+            if tx.receiver_count() == 0 {
+                if let Ok(mut channels) = self.channels.lock() {
+                    channels.remove(&timeframe);
+                }
+                tracing::debug!(
+                    "Removed closed candle channel for {} [{:?}]: {}",
+                    self.identity.symbol,
+                    timeframe,
+                    e
+                );
+            } else {
+                error!("Failed to send candle for timeframe {:?}: {}", timeframe, e);
+            }
         }
         Ok(())
     }
