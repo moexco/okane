@@ -9,10 +9,7 @@ use tokio::time::timeout;
 /// # Summary
 /// 初始化 Rustls 加密提供程序。
 fn init_crypto() {
-    match rustls::crypto::aws_lc_rs::default_provider().install_default() {
-        Ok(()) => {}
-        Err(_already_installed) => {}
-    }
+    okane_core::common::install_rustls_crypto_provider();
 }
 
 /// # Summary

@@ -28,6 +28,8 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 /// 5. 挂起等待外部信号退出。
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    okane_core::common::install_rustls_crypto_provider();
+
     // 1. 初始化两路输出日志 (控制台 + 滚动文件)
     let file_appender = tracing_appender::rolling::daily("logs", "okane-engine.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);

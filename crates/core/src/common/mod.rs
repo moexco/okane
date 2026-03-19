@@ -5,6 +5,19 @@ pub mod time;
 pub use time::*;
 
 /// # Summary
+/// 安装进程级 Rustls CryptoProvider。
+///
+/// # Logic
+/// 1. 选择统一的 `ring` 作为 Rustls 加密提供程序。
+/// 2. 若已安装则忽略重复安装，保证可重入。
+pub fn install_rustls_crypto_provider() {
+    match rustls::crypto::ring::default_provider().install_default() {
+        Ok(()) => {}
+        Err(_already_installed) => {}
+    }
+}
+
+/// # Summary
 /// 证券标的实体，代表系统关注的特定股票或资产。
 ///
 /// # Invariants

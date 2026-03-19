@@ -90,6 +90,10 @@ mod tests {
     use okane_core::store::error::StoreError;
     use okane_core::store::port::{Position, StockMetadata, SystemStore, User, UserSession};
 
+    fn init_rustls() {
+        okane_core::common::install_rustls_crypto_provider();
+    }
+
     struct MockSystemStore {
         config: Option<UserNotifyConfig>,
     }
@@ -186,6 +190,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_telegram_notifier() -> anyhow::Result<()> {
+        init_rustls();
+
         let config = UserNotifyConfig {
             channel: "telegram".to_string(),
             telegram: TelegramConfig {
@@ -206,6 +212,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_email_notifier() -> anyhow::Result<()> {
+        init_rustls();
+
         let config = UserNotifyConfig {
             channel: "email".to_string(),
             telegram: TelegramConfig::default(),

@@ -16,10 +16,8 @@ async fn test_store_full_integration() -> anyhow::Result<()> {
     // 1. 初始化临时测试环境
     let tmp_dir = tempdir().map_err(|e| anyhow::anyhow!("Failed to create temp dir: {}", e))?;
     let root_path = tmp_dir.path().to_path_buf();
-    set_root_dir(root_path.clone());
-
     // 2. 测试 SqliteSystemStore
-    let system_store = SqliteSystemStore::new()
+    let system_store = SqliteSystemStore::new_with_path(Some(root_path.clone()))
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create system store: {}", e))?;
 
@@ -90,7 +88,7 @@ async fn test_store_full_integration() -> anyhow::Result<()> {
     assert_eq!(search_results.len(), 1);
 
     // 3. 测试 SqliteMarketStore
-    let market_store = SqliteMarketStore::new()
+    let market_store = SqliteMarketStore::new_with_path(Some(root_path.clone()))
         .map_err(|e| anyhow::anyhow!("Failed to create market store: {}", e))?;
     let stock = Stock {
         symbol: "AAPL".into(),

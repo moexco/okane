@@ -63,7 +63,7 @@ okane-engine = { path = "../engine" }
 okane-market = { path = "../market" }
 okane-store = { path = "../store" }
 okane-trade = { path = "../trade" }
-reqwest = { version = "0.13.2", features = ["json"] }
+reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls-no-provider"] }
 tempfile = "3.26.0"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 tokio-tungstenite = "0.26"

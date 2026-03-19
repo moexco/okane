@@ -3,6 +3,10 @@ use okane_notify::email::EmailNotifier;
 use okane_notify::telegram::TelegramNotifier;
 use std::env;
 
+fn init_rustls() {
+    okane_core::common::install_rustls_crypto_provider();
+}
+
 /// # Summary
 /// 集成测试：验证 Telegram 通知发送功能。
 ///
@@ -14,6 +18,8 @@ use std::env;
 #[tokio::test]
 #[ignore] // 默认忽略，仅在手动测试时通过环境变量开启
 async fn test_telegram_notification() -> anyhow::Result<()> {
+    init_rustls();
+
     dotenvy::dotenv().ok();
     let bot_token = env::var("OKANE_TG_BOT_TOKEN")
         .map_err(|_| anyhow::anyhow!("OKANE_TG_BOT_TOKEN must be set"))?;
@@ -40,6 +46,8 @@ async fn test_telegram_notification() -> anyhow::Result<()> {
 #[tokio::test]
 #[ignore] // 默认忽略
 async fn test_email_notification() -> anyhow::Result<()> {
+    init_rustls();
+
     dotenvy::dotenv().ok();
     let host = env::var("OKANE_EMAIL_HOST")
         .map_err(|_| anyhow::anyhow!("OKANE_EMAIL_HOST must be set"))?;

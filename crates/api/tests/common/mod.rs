@@ -207,6 +207,8 @@ pub async fn spawn_test_server() -> anyhow::Result<(
     Vec<Arc<dyn Stock>>,
     Arc<MockMarketDataProvider>,
 )> {
+    okane_core::common::install_rustls_crypto_provider();
+
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         tracing_subscriber::fmt()

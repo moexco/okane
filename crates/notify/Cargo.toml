@@ -8,9 +8,9 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1.89"
-lettre = { version = "0.11.19", features = ["tokio1", "tokio1-rustls", "aws-lc-rs", "webpki-roots", "builder", "smtp-transport", "hostname"], default-features = false }
+lettre = { version = "0.11.19", features = ["tokio1", "tokio1-rustls", "ring", "webpki-roots", "builder", "smtp-transport", "hostname"], default-features = false }
 okane-core = { version = "0.1.0", path = "../core" }
-reqwest = { version = "0.13.1", features = ["json"] }
+reqwest = { version = "0.13.1", default-features = false, features = ["json", "rustls-no-provider"] }
 serde = { version = "1.0.228", features = ["derive"] }
 
 [dev-dependencies]
