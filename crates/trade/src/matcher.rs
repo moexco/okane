@@ -16,6 +16,10 @@ impl LocalMatchEngine {
 }
 
 impl MatcherPort for LocalMatchEngine {
+    fn estimate_commission(&self, price: Decimal, volume: Decimal) -> Decimal {
+        price * volume * self.commission_rate
+    }
+
     fn execute_order(
         &self,
         order: &mut Order,
@@ -44,8 +48,7 @@ impl MatcherPort for LocalMatchEngine {
         let execute_price = current_market_price;
         let executed_volume = order.volume - order.filled_volume;
 
-        let transaction_val = execute_price * executed_volume;
-        let commission = transaction_val * self.commission_rate;
+        let commission = self.estimate_commission(execute_price, executed_volume);
 
         order.filled_volume += executed_volume;
         order.status = OrderStatus::Filled;

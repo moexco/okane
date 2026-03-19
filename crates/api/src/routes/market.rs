@@ -44,7 +44,7 @@ pub async fn search_stocks(
             let dtos = upstream_results.into_iter().map(Into::into).collect();
             Ok(ApiResult(dtos))
         }
-        Err(e) => Err(ApiError::Internal(format!("upstream search error: {}", e))),
+        Err(e) => Err(ApiError::upstream(format!("upstream search error: {}", e))),
     }
 }
 
@@ -97,12 +97,12 @@ pub async fn get_candles(
         .market_port
         .get_stock(&symbol)
         .await
-        .map_err(|e| ApiError::Internal(format!("market error: {}", e)))?;
+        .map_err(|e| ApiError::upstream(format!("market error: {}", e)))?;
 
     let history: Vec<okane_core::market::entity::Candle> = stock_agg
         .fetch_history(tf, start, end)
         .await
-        .map_err(|e| ApiError::Internal(format!("fetch history error: {}", e)))?;
+        .map_err(|e| ApiError::upstream(format!("fetch history error: {}", e)))?;
 
     let dtos = history.into_iter().map(Into::into).collect();
     Ok(ApiResult(dtos))
@@ -139,7 +139,7 @@ pub async fn get_rsi_indicator(
 
     match state.indicator_service.rsi(&symbol, tf, query.period).await {
         Ok(val) => Ok(ApiResult(val.to_string())),
-        Err(e) => Err(ApiError::Internal(format!("indicator error: {}", e))),
+        Err(e) => Err(ApiError::runtime(format!("indicator error: {}", e))),
     }
 }
 

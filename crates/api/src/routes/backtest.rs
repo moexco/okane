@@ -94,7 +94,7 @@ pub async fn run_backtest(
         .backtest_runner
         .run(run_req)
         .await
-        .map_err(|e| ApiError::Internal(format!("backtest execution failed: {}", e)))?;
+        .map_err(|e| ApiError::runtime(format!("backtest execution failed: {}", e)))?;
 
     // 转换结果为 Response
     let ret = BacktestResponse {

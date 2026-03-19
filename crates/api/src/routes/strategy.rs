@@ -140,7 +140,7 @@ pub async fn deploy_strategy(
         .verify_account_ownership(&user.id, &req.account_id)
         .await
         .map_err(|e| {
-            ApiError::Internal(format!("database error during permission check: {}", e))
+            ApiError::database(format!("database error during permission check: {}", e))
         })?;
     if !is_owner {
         tracing::warn!(
@@ -301,7 +301,7 @@ pub async fn get_strategy_logs(
         .strategy_manager
         .get_logs(&user.id, &id, limit, offset)
         .await
-        .map_err(|e| ApiError::Internal(format!("failed to query logs: {}", e)))?;
+        .map_err(|e| ApiError::database(format!("failed to query logs: {}", e)))?;
 
     // 由于目前底层的 StrategyLogPort 不直接返回总数，且日志量极大，
     // 这里暂时返回当前获得的数量作为总数（或者可以用特殊的标识如 -1 探测是否有下一页），

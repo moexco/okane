@@ -433,5 +433,9 @@ async fn test_strategy_backtest() -> anyhow::Result<()> {
         .data
         .ok_or_else(|| anyhow::anyhow!("Backtest data null"))?;
     assert!(result.final_snapshot.account_id.starts_with("backtest_"));
+    assert!(
+        result.candle_count > 0,
+        "backtest must report processed candles"
+    );
     Ok(())
 }

@@ -122,7 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pending_port,
             real_time,
         )
-        .with_algo_service(algo_port.clone()),
+        .with_algo_service(algo_port.clone())?,
     );
 
     let indicator_service = Arc::new(MarketIndicatorService::new(market.clone()));

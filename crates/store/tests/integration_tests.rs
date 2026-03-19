@@ -2,8 +2,11 @@ use chrono::{TimeZone, Utc};
 use okane_core::common::{Stock, TimeFrame};
 use okane_core::market::entity::Candle;
 use okane_core::store::port::{MarketStore, Position, StockMetadata, SystemStore, User};
+use okane_core::trade::entity::{AccountId, Order, OrderDirection, OrderId, OrderStatus};
+use okane_core::trade::port::PendingOrderPort;
 use okane_store::config::set_root_dir;
 use okane_store::market::SqliteMarketStore;
+use okane_store::pending_order_sqlx::SqlitePendingOrderStore;
 use okane_store::system::SqliteSystemStore;
 use rust_decimal_macros::dec;
 use tempfile::tempdir;
@@ -133,5 +136,46 @@ async fn test_store_full_integration() -> anyhow::Result<()> {
     assert_eq!(loaded[0].close, dec!(152.0));
     assert_eq!(loaded[0].adj_close, Some(dec!(152.0)));
     assert!(loaded[0].is_final);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_pending_order_store_recovers_orders_after_restart() -> anyhow::Result<()> {
+    let tmp_dir = tempdir().map_err(|e| anyhow::anyhow!("Failed to create temp dir: {}", e))?;
+    let root_path = tmp_dir.path().to_path_buf();
+    set_root_dir(root_path.clone());
+
+    let store = SqlitePendingOrderStore::new_with_path(Some(root_path.clone()))?;
+    let order_id = OrderId("restart-order-1".to_string());
+    let order = Order {
+        id: order_id.clone(),
+        account_id: AccountId("acct_restart".to_string()),
+        symbol: "AAPL".to_string(),
+        direction: OrderDirection::Buy,
+        price: Some(dec!(150.0)),
+        volume: dec!(10.0),
+        filled_volume: dec!(0.0),
+        status: OrderStatus::Pending,
+        created_at: Utc::now().timestamp_millis(),
+    };
+    store.save(order.clone()).await?;
+    drop(store);
+
+    let restarted = SqlitePendingOrderStore::new_with_path(Some(root_path))?;
+    let recovered = restarted
+        .get(&order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order should be recoverable after restart"))?;
+    assert_eq!(recovered.account_id.0, "acct_restart");
+
+    let by_symbol = restarted.get_by_symbol("AAPL").await?;
+    assert_eq!(by_symbol.len(), 1);
+
+    let removed = restarted
+        .remove(&order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order should be removable after restart"))?;
+    assert_eq!(removed.id.0, order.id.0);
+
     Ok(())
 }

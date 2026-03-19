@@ -58,16 +58,16 @@ impl AccountState {
     }
 
     /// # Logic
-    /// 实际发生成交时扣款（如买入扣款），从冻结资金中扣除。如果不够，尝试扣可用余额。
-    pub fn deduct_funds(&mut self, target_amount: Decimal) {
-        if self.frozen_balance >= target_amount {
-            self.frozen_balance -= target_amount;
-        } else {
-            let remain = target_amount - self.frozen_balance;
-            self.frozen_balance = Decimal::ZERO;
-            // 极限情况下（如滑点极大导致超过开单前预期冻结值），扣减可用资金
-            self.available_balance -= remain;
+    /// 实际发生成交时扣款（如买入扣款），必须完全从冻结资金中扣除。
+    pub fn deduct_funds(&mut self, target_amount: Decimal) -> Result<(), TradeError> {
+        if target_amount > self.frozen_balance {
+            return Err(TradeError::InternalError(format!(
+                "account reconciliation failure: tried to deduct {} but only {} frozen for account {}",
+                target_amount, self.frozen_balance, self.account_id.0
+            )));
         }
+        self.frozen_balance -= target_amount;
+        Ok(())
     }
 
     /// # Logic
@@ -120,9 +120,8 @@ impl AccountState {
     }
 
     /// # Logic
-    /// 获取对外透明的只读快照数据。
+    /// 获取账户账面快照数据。
     pub fn to_snapshot(&self) -> AccountSnapshot {
-        // 未实现总权益动态浮盈计算，先简单求和当前现金作为 placeholder
         let total_equity = self.available_balance + self.frozen_balance;
 
         AccountSnapshot {
@@ -208,7 +207,7 @@ impl AccountPort for AccountManager {
 
         if trade.direction == OrderDirection::Buy {
             let actual_cost = trade.price * trade.volume + trade.commission;
-            acct.deduct_funds(actual_cost);
+            acct.deduct_funds(actual_cost)?;
             let over_frozen = est_req_funds - actual_cost;
             if over_frozen > rust_decimal::Decimal::ZERO {
                 acct.unfreeze_funds(over_frozen)?;

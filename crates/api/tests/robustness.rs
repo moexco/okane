@@ -1482,7 +1482,8 @@ async fn test_trade_place_order_none_price() -> anyhow::Result<()> {
         StatusCode::OK
     );
 
-    // Side-Effect Verification: 验证订单已落盘且状态为 Filled (由于是 Mock 环境通常会立即成交) 或存在于列表
+    // Side-Effect Verification: 市价单应立即成交，因而不应继续留在“活动订单”列表中；
+    // 真实副作用应体现在持仓/账户状态上。
     let res = assert_get!(
         &client,
         format!("{}/api/v1/user/orders?account_id=trader_01", base_url),
@@ -1495,11 +1496,29 @@ async fn test_trade_place_order_none_price() -> anyhow::Result<()> {
         .data
         .context("data null")?;
     assert!(
-        orders_page
-            .items
+        orders_page.items.is_empty(),
+        "filled market order should not remain in active order list"
+    );
+
+    let res = assert_get!(
+        &client,
+        format!("{}/api/v1/user/account/trader_01/positions", base_url),
+        Some(&token),
+        StatusCode::OK
+    );
+    let positions = res
+        .json::<ApiResponse<serde_json::Value>>()
+        .await?
+        .data
+        .context("data null")?;
+    let positions = positions
+        .as_array()
+        .context("positions should be returned as array")?;
+    assert!(
+        positions
             .iter()
-            .any(|o| o.symbol == "AAPL" && o.volume == "1"),
-        "Market order should be visible in order list"
+            .any(|p| p.get("symbol") == Some(&serde_json::Value::String("AAPL".to_string()))),
+        "market order should be reflected in positions"
     );
 
     Ok(())

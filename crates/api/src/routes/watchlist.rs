@@ -24,7 +24,7 @@ pub async fn get_watchlist(
 ) -> Result<ApiResult<Vec<String>>, ApiError> {
     match state.system_store.get_watchlist(&user.id).await {
         Ok(symbols) => Ok(ApiResult(symbols)),
-        Err(e) => Err(ApiError::Internal(format!("store error: {}", e))),
+        Err(e) => Err(ApiError::database(format!("store error: {}", e))),
     }
 }
 
@@ -48,20 +48,23 @@ pub async fn add_to_watchlist(
     axum::Json(req): axum::Json<WatchlistRequest>,
 ) -> Result<ApiResult<String>, ApiError> {
     // 1. 验证目标证券是否存在
-    // 首先看本地有没有
-    let symbol_exists = match state.system_store.search_stocks(&req.symbol).await {
-        Ok(results) => results.iter().any(|m| m.symbol == req.symbol),
-        Err(_) => false,
-    };
+    let local_matches = state
+        .system_store
+        .search_stocks(&req.symbol)
+        .await
+        .map_err(|e| ApiError::database(format!("store error: {}", e)))?;
+    let symbol_exists = local_matches.iter().any(|m| m.symbol == req.symbol);
 
     // 如果本地没有，去上游查
     let is_valid = if symbol_exists {
         true
     } else {
-        match state.market_port.search_symbols(&req.symbol).await {
-            Ok(upstream) => upstream.iter().any(|m| m.symbol == req.symbol),
-            Err(_) => false,
-        }
+        let upstream = state
+            .market_port
+            .search_symbols(&req.symbol)
+            .await
+            .map_err(|e| ApiError::upstream(format!("upstream search error: {}", e)))?;
+        upstream.iter().any(|m| m.symbol == req.symbol)
     };
 
     if !is_valid {
@@ -77,7 +80,7 @@ pub async fn add_to_watchlist(
         .await
     {
         Ok(_) => Ok(ApiResult("ok".to_string())),
-        Err(e) => Err(ApiError::Internal(format!("store error: {}", e))),
+        Err(e) => Err(ApiError::database(format!("store error: {}", e))),
     }
 }
 
@@ -108,6 +111,6 @@ pub async fn remove_from_watchlist(
         .await
     {
         Ok(_) => Ok(ApiResult("ok".to_string())),
-        Err(e) => Err(ApiError::Internal(format!("Store error: {}", e))),
+        Err(e) => Err(ApiError::database(format!("store error: {}", e))),
     }
 }

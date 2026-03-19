@@ -460,6 +460,22 @@ pub trait ErasedResponse: Send + Sync + 'static {
     fn render(&self, latency: u64) -> Vec<u8>;
 }
 
+fn render_serialization_failure(code: u32, latency: u64, err: &serde_json::Error) -> Vec<u8> {
+    let safe_error = ApiErrorResponse {
+        success: false,
+        error: format!("response serialization failure: {}", err),
+        code,
+        latency_ms: Some(latency),
+    };
+    serde_json::to_vec(&safe_error).unwrap_or_else(|fallback_err| {
+        tracing::error!(
+            "failed to serialize fallback error response: {}",
+            fallback_err
+        );
+        br#"{"success":false,"error":"response serialization failure: fallback serialization failed","code":500,"latency_ms":null}"#.to_vec()
+    })
+}
+
 /// 成功响应的中间态
 pub struct SuccessMarker<T: Serialize + ToSchema + Send + Sync + 'static> {
     pub data: T,
@@ -503,10 +519,7 @@ impl<T: Serialize + ToSchema + Send + Sync + 'static> ErasedResponse for Success
             Ok(bytes) => bytes,
             Err(err) => {
                 tracing::error!("failed to serialize success response: {}", err);
-                format!(
-                    "{{\"success\":false,\"error\":\"response serialization failure\",\"code\":500,\"latency_ms\":{latency}}}"
-                )
-                .into_bytes()
+                render_serialization_failure(500, latency, &err)
             }
         }
     }
@@ -544,11 +557,7 @@ impl ErasedResponse for ErrorMarker {
             Ok(bytes) => bytes,
             Err(err) => {
                 tracing::error!("failed to serialize error response: {}", err);
-                format!(
-                    "{{\"success\":false,\"error\":\"response serialization failure\",\"code\":{},\"latency_ms\":{latency}}}",
-                    self.code
-                )
-                .into_bytes()
+                render_serialization_failure(self.code, latency, &err)
             }
         }
     }
@@ -789,28 +798,23 @@ impl From<okane_core::trade::entity::Trade> for TradeResponse {
     }
 }
 
-impl From<okane_core::trade::entity::AlgoOrder> for AlgoOrderResponse {
-    fn from(o: okane_core::trade::entity::AlgoOrder) -> Self {
-        let (algo_type, params) = match serde_json::to_value(&o.algo) {
-            Ok(val) => {
-                let algo_type = val
-                    .get("type")
-                    .and_then(|t| t.as_str())
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| "unknown".to_string());
-                let params = val
-                    .get("params")
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Null);
-                (algo_type, params)
-            }
-            Err(err) => {
-                tracing::error!("failed to serialize algo order params: {}", err);
-                ("unknown".to_string(), serde_json::Value::Null)
-            }
-        };
+impl TryFrom<okane_core::trade::entity::AlgoOrder> for AlgoOrderResponse {
+    type Error = String;
 
-        Self {
+    fn try_from(o: okane_core::trade::entity::AlgoOrder) -> Result<Self, Self::Error> {
+        let val = serde_json::to_value(&o.algo)
+            .map_err(|err| format!("failed to serialize algo order params: {}", err))?;
+        let algo_type = val
+            .get("type")
+            .and_then(|t| t.as_str())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| "failed to extract algo type from serialized params".to_string())?;
+        let params = val
+            .get("params")
+            .cloned()
+            .ok_or_else(|| "failed to extract algo params from serialized params".to_string())?;
+
+        Ok(Self {
             id: o.id.0,
             account_id: o.account_id.0,
             symbol: o.symbol,
@@ -820,7 +824,7 @@ impl From<okane_core::trade::entity::AlgoOrder> for AlgoOrderResponse {
             requested_volume: o.requested_volume.to_string(),
             filled_volume: o.filled_volume.to_string(),
             created_at: o.created_at,
-        }
+        })
     }
 }
 
@@ -859,5 +863,24 @@ impl From<UpdateNotifyConfigRequest> for okane_core::config::UserNotifyConfig {
                 to: dto.email.to,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_serialization_failure;
+
+    #[test]
+    fn test_render_serialization_failure_keeps_error_context()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let err = match serde_json::from_str::<serde_json::Value>("{") {
+            Ok(_) => return Err("expected parse err".into()),
+            Err(err) => err,
+        };
+        let bytes = render_serialization_failure(500, 7, &err);
+        let body = String::from_utf8(bytes)?;
+        assert!(body.contains("response serialization failure"));
+        assert!(body.contains("EOF"));
+        Ok(())
     }
 }

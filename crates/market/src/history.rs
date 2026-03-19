@@ -22,6 +22,7 @@ use okane_core::trade::port::BacktestTradePort;
 use rust_decimal::Decimal;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tracing::debug;
 
 /// # Summary
@@ -47,6 +48,8 @@ pub struct BacktestStock {
     time_provider: Arc<FakeClockProvider>,
     /// 撮合端口
     trade_port: Arc<dyn BacktestTradePort>,
+    /// 已处理 K 线计数
+    emitted_candles: Arc<AtomicUsize>,
 }
 
 impl BacktestStock {
@@ -58,6 +61,7 @@ impl BacktestStock {
         end: DateTime<Utc>,
         time_provider: Arc<FakeClockProvider>,
         trade_port: Arc<dyn BacktestTradePort>,
+        emitted_candles: Arc<AtomicUsize>,
     ) -> Self {
         Self {
             identity: StockIdentity {
@@ -71,6 +75,7 @@ impl BacktestStock {
             static_candles: None,
             time_provider,
             trade_port,
+            emitted_candles,
         }
     }
 
@@ -80,6 +85,7 @@ impl BacktestStock {
         candles: Vec<Candle>,
         time_provider: Arc<FakeClockProvider>,
         trade_port: Arc<dyn BacktestTradePort>,
+        emitted_candles: Arc<AtomicUsize>,
     ) -> Self {
         let (start, end) = if let (Some(f), Some(l)) = (candles.first(), candles.last()) {
             (f.time, l.time)
@@ -98,6 +104,7 @@ impl BacktestStock {
             static_candles: Some(candles),
             time_provider,
             trade_port,
+            emitted_candles,
         }
     }
 }
@@ -151,6 +158,7 @@ impl Stock for BacktestStock {
         let static_candles = self.static_candles.clone();
         let start = self.start_time;
         let end = self.end_time;
+        let emitted_candles = self.emitted_candles.clone();
 
         Ok(Box::pin(async_stream::stream! {
             let mut current = start;
@@ -201,9 +209,13 @@ impl Stock for BacktestStock {
                     }
 
                     // 驱动撮合 (非致命，记录日志并忽略)
-                    trade.tick(&symbol, &candle).await.ok();
+                    if let Err(err) = trade.tick(&symbol, &candle).await {
+                        yield Err(MarketError::Unknown(format!("backtest trade tick failed: {}", err)));
+                        break;
+                    }
 
                     let candle_time = candle.time;
+                    emitted_candles.fetch_add(1, Ordering::Relaxed);
                     yield Ok(candle);
                     current = candle_time + timeframe.duration();
                 }
@@ -261,6 +273,7 @@ impl BacktestMarket {
         end: DateTime<Utc>,
         time_provider: Arc<FakeClockProvider>,
         trade_port: Arc<dyn BacktestTradePort>,
+        emitted_candles: Arc<AtomicUsize>,
     ) -> Self {
         Self {
             stock: Arc::new(BacktestStock::with_source(
@@ -270,6 +283,7 @@ impl BacktestMarket {
                 end,
                 time_provider,
                 trade_port,
+                emitted_candles,
             )),
         }
     }
@@ -280,6 +294,7 @@ impl BacktestMarket {
         candles: Vec<Candle>,
         time_provider: Arc<FakeClockProvider>,
         trade_port: Arc<dyn BacktestTradePort>,
+        emitted_candles: Arc<AtomicUsize>,
     ) -> Self {
         Self {
             stock: Arc::new(BacktestStock::new(
@@ -287,6 +302,7 @@ impl BacktestMarket {
                 candles,
                 time_provider,
                 trade_port,
+                emitted_candles,
             )),
         }
     }
@@ -360,6 +376,7 @@ mod tests {
                 .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?,
         ));
         let spy_trade = Arc::new(MockTradePort);
+        let counter = Arc::new(AtomicUsize::new(0));
         let candles = vec![
             Candle {
                 time: Utc
@@ -389,7 +406,13 @@ mod tests {
             },
         ];
 
-        let stock = BacktestStock::new("AAPL".into(), candles, tp.clone(), spy_trade.clone());
+        let stock = BacktestStock::new(
+            "AAPL".into(),
+            candles,
+            tp.clone(),
+            spy_trade.clone(),
+            counter.clone(),
+        );
 
         assert_eq!(stock.identity().symbol, "AAPL");
         assert_eq!(stock.status(), StockStatus::Online);
@@ -415,6 +438,7 @@ mod tests {
         assert_eq!(c2.time.timestamp(), 1060);
         assert_eq!(tp.now()?, c2.time);
         assert_eq!(stock.current_price()?, Some(dec!(101)));
+        assert_eq!(counter.load(Ordering::Relaxed), 2);
         assert_eq!(
             stock
                 .last_closed_candle(TimeFrame::Minute1)?
@@ -435,6 +459,7 @@ mod tests {
                 .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?,
         ));
         let spy_trade = Arc::new(MockTradePort);
+        let counter = Arc::new(AtomicUsize::new(0));
         let candles = vec![
             Candle {
                 time: Utc
@@ -477,7 +502,13 @@ mod tests {
             },
         ];
 
-        let stock = BacktestStock::new("AAPL".into(), candles, tp.clone(), spy_trade.clone());
+        let stock = BacktestStock::new(
+            "AAPL".into(),
+            candles,
+            tp.clone(),
+            spy_trade.clone(),
+            counter,
+        );
 
         // Load some data into the buffer by ticking once
         let mut stream = stock.subscribe(TimeFrame::Minute1)?;

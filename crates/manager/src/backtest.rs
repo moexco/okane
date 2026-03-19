@@ -10,6 +10,7 @@ use okane_core::trade::entity::{AccountId, AccountSnapshot, Trade};
 use okane_core::trade::port::{AlgoOrderPort, BacktestTradePort};
 use rust_decimal::Decimal;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tracing::info;
 
 use crate::strategy::ManagerError;
@@ -88,6 +89,7 @@ pub struct BacktestEnvironment {
     pub time_provider: Arc<dyn TimeProvider>,
     pub account_id: AccountId,
     pub result_collector: Arc<dyn BacktestResultCollector>,
+    pub candle_counter: Arc<AtomicUsize>,
 }
 
 /// # Summary
@@ -213,7 +215,7 @@ impl BacktestRunner {
         Ok(BacktestResult {
             final_snapshot,
             trades,
-            candle_count: 0, // 流式模式下不再预先计数，此处设为 0 或记录实耗数
+            candle_count: environment.candle_counter.load(Ordering::Relaxed),
         })
     }
 }

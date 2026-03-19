@@ -94,6 +94,10 @@ mod tests {
         config: Option<UserNotifyConfig>,
     }
 
+    fn unsupported_store_call() -> StoreError {
+        StoreError::Unknown("unsupported mock store call".to_string())
+    }
+
     #[async_trait]
     impl SystemStore for MockSystemStore {
         async fn get_user_notify_config(
@@ -105,78 +109,78 @@ mod tests {
 
         // --- Unimplemented methods for mock ---
         async fn get_user(&self, _: &str) -> Result<Option<User>, StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn get_account_owner(&self, _: &str) -> Result<Option<String>, StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn bind_account(&self, _: &str, _: &str) -> Result<(), StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn get_user_accounts(&self, _: &str) -> Result<Vec<String>, StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn save_user(&self, _: &User) -> Result<(), StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn get_watchlist(&self, _: &str) -> Result<Vec<String>, StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn add_to_watchlist(&self, _: &str, _: &str) -> Result<(), StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn remove_from_watchlist(&self, _: &str, _: &str) -> Result<(), StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn get_positions(&self, _: &str) -> Result<Vec<Position>, StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn update_position(&self, _: &str, _: &Position) -> Result<(), StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn search_stocks(&self, _: &str) -> Result<Vec<StockMetadata>, StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn save_stock_metadata(&self, _: &StockMetadata) -> Result<(), StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn get_setting(&self, _: &str) -> Result<Option<String>, StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn set_setting(&self, _: &str, _: &str) -> Result<(), StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn save_user_notify_config(
             &self,
             _: &str,
             _: &UserNotifyConfig,
         ) -> Result<(), StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn save_session(&self, _: &UserSession) -> Result<(), StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn get_session(&self, _: &str) -> Result<Option<UserSession>, StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn get_session_by_client(
             &self,
             _: &str,
             _: &str,
         ) -> Result<Option<UserSession>, StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn revoke_session(&self, _: &str) -> Result<(), StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn revoke_all_user_sessions(&self, _: &str) -> Result<(), StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn delete_expired_sessions(&self) -> Result<(), StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
         async fn list_active_sessions(&self) -> Result<Vec<UserSession>, StoreError> {
-            todo!()
+            Err(unsupported_store_call())
         }
     }
 
@@ -249,6 +253,104 @@ mod tests {
 
         let result = factory.create_for_user("user1").await;
         assert!(result.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_for_user_store_error() -> anyhow::Result<()> {
+        struct ErrorStore;
+
+        #[async_trait]
+        impl SystemStore for ErrorStore {
+            async fn get_user(&self, _: &str) -> Result<Option<User>, StoreError> {
+                Err(StoreError::Database("db down".to_string()))
+            }
+            async fn get_account_owner(&self, _: &str) -> Result<Option<String>, StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn bind_account(&self, _: &str, _: &str) -> Result<(), StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn get_user_accounts(&self, _: &str) -> Result<Vec<String>, StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn save_user(&self, _: &User) -> Result<(), StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn get_watchlist(&self, _: &str) -> Result<Vec<String>, StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn add_to_watchlist(&self, _: &str, _: &str) -> Result<(), StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn remove_from_watchlist(&self, _: &str, _: &str) -> Result<(), StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn get_positions(&self, _: &str) -> Result<Vec<Position>, StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn update_position(&self, _: &str, _: &Position) -> Result<(), StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn search_stocks(&self, _: &str) -> Result<Vec<StockMetadata>, StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn save_stock_metadata(&self, _: &StockMetadata) -> Result<(), StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn get_setting(&self, _: &str) -> Result<Option<String>, StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn set_setting(&self, _: &str, _: &str) -> Result<(), StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn save_user_notify_config(
+                &self,
+                _: &str,
+                _: &UserNotifyConfig,
+            ) -> Result<(), StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn get_user_notify_config(
+                &self,
+                _: &str,
+            ) -> Result<Option<UserNotifyConfig>, StoreError> {
+                Err(StoreError::Database("db down".to_string()))
+            }
+            async fn save_session(&self, _: &UserSession) -> Result<(), StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn get_session(&self, _: &str) -> Result<Option<UserSession>, StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn get_session_by_client(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<Option<UserSession>, StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn revoke_session(&self, _: &str) -> Result<(), StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn revoke_all_user_sessions(&self, _: &str) -> Result<(), StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn delete_expired_sessions(&self) -> Result<(), StoreError> {
+                Err(unsupported_store_call())
+            }
+            async fn list_active_sessions(&self) -> Result<Vec<UserSession>, StoreError> {
+                Err(unsupported_store_call())
+            }
+        }
+
+        let factory = DefaultNotifierFactory::new(Arc::new(ErrorStore));
+        let err = factory
+            .create_for_user("user1")
+            .await
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected store error"))?;
+        assert!(err.to_string().to_lowercase().contains("failed to query"));
         Ok(())
     }
 

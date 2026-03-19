@@ -40,7 +40,7 @@ pub async fn login(
         .system_store
         .get_user(&req.username)
         .await
-        .map_err(|e| ApiError::Internal(format!("db error: {}", e)))?;
+        .map_err(|e| ApiError::database(format!("db error: {}", e)))?;
 
     let user = match user_opt {
         Some(u) => u,
@@ -53,7 +53,7 @@ pub async fn login(
 
     // 2. 验证密码
     let valid = bcrypt::verify(&req.password, &user.password_hash)
-        .map_err(|e| ApiError::Internal(format!("hash verification failed: {}", e)))?;
+        .map_err(|e| ApiError::crypto(format!("hash verification failed: {}", e)))?;
 
     if !valid {
         return Err(ApiError::Unauthorized(
@@ -89,10 +89,14 @@ pub async fn login(
         .system_store
         .save_session(&session)
         .await
-        .map_err(|e| ApiError::Internal(format!("failed to save session: {}", e)))?;
+        .map_err(|e| ApiError::database(format!("failed to save session: {}", e)))?;
 
     // 全局自动净化：仅在登录成功后，顺便清理系统中所有过期数据
-    state.system_store.delete_expired_sessions().await.ok();
+    state
+        .system_store
+        .delete_expired_sessions()
+        .await
+        .map_err(|e| ApiError::database(format!("failed to delete expired sessions: {}", e)))?;
 
     state
         .session_cache
@@ -175,7 +179,9 @@ pub async fn refresh(
             .system_store
             .revoke_all_user_sessions(&claims.sub)
             .await
-            .ok();
+            .map_err(|e| {
+                ApiError::database(format!("failed to revoke all user sessions: {}", e))
+            })?;
         state.session_cache.retain(|_, v| v.user_id != claims.sub);
 
         return Err(ApiError::Unauthorized(
@@ -196,7 +202,7 @@ pub async fn refresh(
         .system_store
         .save_session(&session)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(|e| ApiError::database(e.to_string()))?;
 
     state
         .session_cache
@@ -207,7 +213,7 @@ pub async fn refresh(
         .system_store
         .get_user(&claims.sub)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map_err(|e| ApiError::database(e.to_string()))?
         .ok_or_else(|| ApiError::Unauthorized("user not found".into()))?;
 
     let access_token = generate_access_token(
@@ -253,7 +259,7 @@ pub async fn logout(
         .system_store
         .revoke_session(&claims.sid)
         .await
-        .map_err(|e| ApiError::Internal(format!("failed to revoke session: {}", e)))?;
+        .map_err(|e| ApiError::database(format!("failed to revoke session: {}", e)))?;
 
     // 2. 从内存缓存中即时移除
     state.session_cache.remove(&claims.sid);
@@ -287,12 +293,12 @@ pub async fn change_password(
         .system_store
         .get_user(&user_ctx.id)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map_err(|e| ApiError::database(e.to_string()))?
         .ok_or_else(|| ApiError::Unauthorized("user not found".into()))?;
 
     // 2. 验证旧密码
     let valid = bcrypt::verify(&req.old_password, &user.password_hash)
-        .map_err(|e| ApiError::Internal(format!("hash verification failed: {}", e)))?;
+        .map_err(|e| ApiError::crypto(format!("hash verification failed: {}", e)))?;
 
     if !valid {
         return Err(ApiError::Unauthorized("invalid old password".into()));
@@ -300,7 +306,7 @@ pub async fn change_password(
 
     // 3. 更新密码
     let new_hashed = bcrypt::hash(&req.new_password, bcrypt::DEFAULT_COST)
-        .map_err(|_| ApiError::Internal("failed to hash new password".into()))?;
+        .map_err(|_| ApiError::crypto("failed to hash new password"))?;
 
     user.password_hash = new_hashed;
     user.force_password_change = false;
@@ -309,14 +315,14 @@ pub async fn change_password(
         .system_store
         .save_user(&user)
         .await
-        .map_err(|e| ApiError::Internal(format!("failed to save user: {}", e)))?;
+        .map_err(|e| ApiError::database(format!("failed to save user: {}", e)))?;
 
     // 4. 全局注销：撤销该用户所有活跃 Session (强制重新登录)
     state
         .system_store
         .revoke_all_user_sessions(&user.id)
         .await
-        .map_err(|e| ApiError::Internal(format!("failed to revoke sessions: {}", e)))?;
+        .map_err(|e| ApiError::database(format!("failed to revoke sessions: {}", e)))?;
 
     state.session_cache.retain(|_, v| v.user_id != user.id);
 
@@ -333,7 +339,7 @@ fn generate_access_token(
 ) -> Result<String, ApiError> {
     let expiration = Utc::now()
         .checked_add_signed(chrono::Duration::seconds(ACCESS_TOKEN_EXPIRES_IN))
-        .ok_or_else(|| ApiError::Internal("timestamp calculation overflow".into()))?
+        .ok_or_else(|| ApiError::runtime("timestamp calculation overflow"))?
         .timestamp();
 
     let claims = Claims {
@@ -342,7 +348,7 @@ fn generate_access_token(
         jti: jti.to_string(),
         exp: expiration
             .try_into()
-            .map_err(|_| ApiError::Internal("timestamp out of bounds".into()))?,
+            .map_err(|_| ApiError::runtime("timestamp out of bounds"))?,
         role: user.role.to_string(),
         force_password_change: user.force_password_change,
     };
@@ -352,7 +358,7 @@ fn generate_access_token(
         &claims,
         &EncodingKey::from_secret(secret.as_ref()),
     )
-    .map_err(|e| ApiError::Internal(format!("jwt sign failed: {}", e)))
+    .map_err(|e| ApiError::crypto(format!("jwt sign failed: {}", e)))
 }
 
 fn generate_refresh_token(
@@ -363,7 +369,7 @@ fn generate_refresh_token(
 ) -> Result<String, ApiError> {
     let expiration = Utc::now()
         .checked_add_signed(chrono::Duration::seconds(REFRESH_TOKEN_EXPIRES_IN))
-        .ok_or_else(|| ApiError::Internal("timestamp calculation overflow".into()))?
+        .ok_or_else(|| ApiError::runtime("timestamp calculation overflow"))?
         .timestamp();
 
     let claims = Claims {
@@ -372,7 +378,7 @@ fn generate_refresh_token(
         jti: jti.to_string(),
         exp: expiration
             .try_into()
-            .map_err(|_| ApiError::Internal("timestamp out of bounds".into()))?,
+            .map_err(|_| ApiError::runtime("timestamp out of bounds"))?,
         role: user.role.to_string(),
         force_password_change: user.force_password_change,
     };
@@ -382,7 +388,7 @@ fn generate_refresh_token(
         &claims,
         &EncodingKey::from_secret(secret.as_ref()),
     )
-    .map_err(|e| ApiError::Internal(format!("jwt refresh sign failed: {}", e)))
+    .map_err(|e| ApiError::crypto(format!("jwt refresh sign failed: {}", e)))
 }
 
 /// 生成确定性的 Session ID

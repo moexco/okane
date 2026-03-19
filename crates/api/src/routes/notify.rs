@@ -27,7 +27,7 @@ pub async fn get_notify_config(
         .system_store
         .get_user_notify_config(&user.id)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map_err(|e| ApiError::database(e.to_string()))?
         .ok_or_else(|| ApiError::NotFound("notify config not found".to_string()))?;
 
     Ok(ApiResult(NotifyConfigResponse::from(config)))
@@ -67,7 +67,7 @@ pub async fn update_notify_config(
         .system_store
         .save_user_notify_config(&user.id, &config)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(|e| ApiError::database(e.to_string()))?;
 
     Ok(ApiResult("notification config updated".to_string()))
 }

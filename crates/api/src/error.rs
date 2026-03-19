@@ -6,6 +6,27 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use thiserror::Error;
 
+#[derive(Debug, Clone, Copy)]
+pub enum InternalErrorKind {
+    Database,
+    Upstream,
+    Crypto,
+    Serialization,
+    Runtime,
+}
+
+impl InternalErrorKind {
+    fn client_message(self) -> &'static str {
+        match self {
+            InternalErrorKind::Database => "database operation failed",
+            InternalErrorKind::Upstream => "upstream service failed",
+            InternalErrorKind::Crypto => "security operation failed",
+            InternalErrorKind::Serialization => "serialization operation failed",
+            InternalErrorKind::Runtime => "internal runtime failure",
+        }
+    }
+}
+
 /// API 层统一错误枚举
 #[derive(Error, Debug)]
 pub enum ApiError {
@@ -16,8 +37,11 @@ pub enum ApiError {
     #[error("not found: {0}")]
     NotFound(String),
 
-    #[error("internal server error: {0}")]
-    Internal(String),
+    #[error("internal server error")]
+    Internal {
+        kind: InternalErrorKind,
+        fact: String,
+    },
 
     // === 10: Auth & Identity Errors (10XXX) ===
     #[error("unauthorized: {0}")]
@@ -28,13 +52,48 @@ pub enum ApiError {
 }
 
 impl ApiError {
+    pub fn database(fact: impl Into<String>) -> Self {
+        Self::Internal {
+            kind: InternalErrorKind::Database,
+            fact: fact.into(),
+        }
+    }
+
+    pub fn upstream(fact: impl Into<String>) -> Self {
+        Self::Internal {
+            kind: InternalErrorKind::Upstream,
+            fact: fact.into(),
+        }
+    }
+
+    pub fn crypto(fact: impl Into<String>) -> Self {
+        Self::Internal {
+            kind: InternalErrorKind::Crypto,
+            fact: fact.into(),
+        }
+    }
+
+    pub fn serialization(fact: impl Into<String>) -> Self {
+        Self::Internal {
+            kind: InternalErrorKind::Serialization,
+            fact: fact.into(),
+        }
+    }
+
+    pub fn runtime(fact: impl Into<String>) -> Self {
+        Self::Internal {
+            kind: InternalErrorKind::Runtime,
+            fact: fact.into(),
+        }
+    }
+
     /// 获取 HTTP 状态码和业务错误码 (MMXXX)
     pub fn codes(&self) -> (StatusCode, u32) {
         match self {
             // Common (00)
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, 400),
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, 404),
-            ApiError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, 500),
+            ApiError::Internal { .. } => (StatusCode::INTERNAL_SERVER_ERROR, 500),
 
             // Auth (10)
             ApiError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, 10001),
@@ -48,10 +107,13 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, business_code) = self.codes();
         let message = match &self {
-            ApiError::Internal(_) => {
-                // Internal error only logged, not leaked fully to client
-                tracing::error!("internal server error: {}", self);
-                "internal server error".to_string()
+            ApiError::Internal { kind, fact } => {
+                tracing::error!(
+                    "internal server error [{}]: {}",
+                    kind.client_message(),
+                    fact
+                );
+                kind.client_message().to_string()
             }
             _ => self.to_string(),
         };
@@ -79,7 +141,10 @@ impl From<okane_manager::strategy::ManagerError> for ApiError {
             okane_manager::strategy::ManagerError::AlreadyRunning(msg) => {
                 ApiError::BadRequest(format!("strategy already running: {}", msg))
             }
-            _ => ApiError::Internal(err.to_string()),
+            okane_manager::strategy::ManagerError::Store(store_err) => {
+                ApiError::database(store_err.to_string())
+            }
+            _ => ApiError::runtime(err.to_string()),
         }
     }
 }
@@ -97,7 +162,10 @@ impl From<okane_core::trade::port::TradeError> for ApiError {
             okane_core::trade::port::TradeError::OrderNotFound(msg) => {
                 ApiError::NotFound(msg.clone())
             }
-            _ => ApiError::Internal(err.to_string()),
+            okane_core::trade::port::TradeError::BrokerIntegrationError(msg) => {
+                ApiError::upstream(msg.clone())
+            }
+            _ => ApiError::runtime(err.to_string()),
         }
     }
 }

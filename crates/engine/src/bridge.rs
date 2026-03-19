@@ -67,10 +67,10 @@ impl AsyncBridge {
         let (result_tx, result_rx) = mpsc::sync_channel(1);
         self.task_tx
             .send(Box::new(move |h: &Handle| {
-                result_tx
-                    .send(h.block_on(future))
-                    .map_err(|_| tracing::error!("AsyncBridge: result receiver dropped"))
-                    .ok();
+                let result = h.block_on(future);
+                if result_tx.send(result).is_err() {
+                    tracing::error!("async bridge result receiver dropped");
+                }
             }))
             .map_err(|_| EngineError::Plugin("Bridge thread disconnected".to_string()))?;
         result_rx

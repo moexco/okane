@@ -85,6 +85,30 @@ impl SqlitePendingOrderStore {
         Ok(pool)
     }
 
+    async fn ensure_discovered_pools(&self) -> Result<(), TradeError> {
+        let entries = std::fs::read_dir(&self.base_path).map_err(|e| {
+            TradeError::InternalError(format!("failed to scan pending order directory: {}", e))
+        })?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| {
+                TradeError::InternalError(format!("failed to read dir entry: {}", e))
+            })?;
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            if !file_name.starts_with("account_") || !file_name.ends_with(".db") {
+                continue;
+            }
+
+            let account_id = &file_name["account_".len()..file_name.len() - ".db".len()];
+            if !self.pools.contains_key(account_id) {
+                self.get_or_init_pool(account_id).await?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Helper to convert a sqlite row to an Order
     fn row_to_order(row: sqlx::sqlite::SqliteRow) -> Result<Order, TradeError> {
         use sqlx::Row;
@@ -201,6 +225,7 @@ impl PendingOrderPort for SqlitePendingOrderStore {
     }
 
     async fn remove(&self, order_id: &OrderId) -> Result<Option<Order>, TradeError> {
+        self.ensure_discovered_pools().await?;
         // 由于分库，移除时如果不知道 account_id 就必须遍历所有的池并尝试删除
         // 优化方法是在核心对象里增加一个 global routing 表，但为了简单，这里直接遍历内存已缓存的池
         let mut target_order = None;
@@ -230,6 +255,7 @@ impl PendingOrderPort for SqlitePendingOrderStore {
     }
 
     async fn get(&self, order_id: &OrderId) -> Result<Option<Order>, TradeError> {
+        self.ensure_discovered_pools().await?;
         for entry in self.pools.iter() {
             let pool = entry.value();
             let row_opt = sqlx::query("SELECT * FROM pending_orders WHERE id = ?")
@@ -261,6 +287,7 @@ impl PendingOrderPort for SqlitePendingOrderStore {
     }
 
     async fn get_by_symbol(&self, symbol: &str) -> Result<Vec<Order>, TradeError> {
+        self.ensure_discovered_pools().await?;
         let mut orders = Vec::new();
         for entry in self.pools.iter() {
             let pool = entry.value();
@@ -282,6 +309,7 @@ impl PendingOrderPort for SqlitePendingOrderStore {
         order_id: &OrderId,
         status: OrderStatus,
     ) -> Result<(), TradeError> {
+        self.ensure_discovered_pools().await?;
         let status_str = match status {
             OrderStatus::Pending => "Pending",
             OrderStatus::Submitted => "Submitted",

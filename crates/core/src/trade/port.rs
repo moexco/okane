@@ -143,6 +143,13 @@ pub trait AccountPort: Send + Sync {
 /// # Summary
 /// 本地或远程撮合引擎对接端口。
 pub trait MatcherPort: Send + Sync {
+    /// 估算给定价格与数量下的手续费。
+    fn estimate_commission(
+        &self,
+        price: rust_decimal::Decimal,
+        volume: rust_decimal::Decimal,
+    ) -> rust_decimal::Decimal;
+
     /// 执行/评估一张尚未完结的订单 (市场价或现价单，与当前 K 线价位对比)。
     fn execute_order(
         &self,

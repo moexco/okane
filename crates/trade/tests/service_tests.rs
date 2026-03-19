@@ -13,6 +13,7 @@ use tokio::time::{Duration, sleep};
 
 struct DummyStock {
     identity: StockIdentity,
+    price: rust_decimal::Decimal,
 }
 
 #[async_trait::async_trait]
@@ -21,7 +22,7 @@ impl Stock for DummyStock {
         &self.identity
     }
     fn current_price(&self) -> Result<Option<rust_decimal::Decimal>, MarketError> {
-        Ok(Some(dec!(150.0))) // Mock 固定的市场价用于本地测试撮合
+        Ok(Some(self.price))
     }
     fn latest_candle(&self, _timeframe: TimeFrame) -> Result<Option<Candle>, MarketError> {
         Ok(None)
@@ -30,7 +31,9 @@ impl Stock for DummyStock {
         Ok(None)
     }
     fn subscribe(&self, _timeframe: TimeFrame) -> Result<CandleStream, MarketError> {
-        unimplemented!()
+        Err(MarketError::Unknown(
+            "subscribe is not supported in this test".to_string(),
+        ))
     }
     async fn fetch_history(
         &self,
@@ -38,7 +41,9 @@ impl Stock for DummyStock {
         _start: chrono::DateTime<chrono::Utc>,
         _end: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<Candle>, MarketError> {
-        unimplemented!()
+        Err(MarketError::Unknown(
+            "fetch history is not supported in this test".to_string(),
+        ))
     }
 
     fn status(&self) -> StockStatus {
@@ -56,6 +61,7 @@ impl Market for MockMarket {
                 symbol: symbol.to_string(),
                 exchange: None,
             },
+            price: dec!(150.0),
         }))
     }
 
@@ -164,6 +170,11 @@ async fn test_high_concurrency_order_execution() -> anyhow::Result<()> {
         dec!(924977.5),
         "balance transfer must be consistent without loss"
     );
+    assert_eq!(
+        snapshot.total_equity,
+        dec!(999977.5),
+        "total equity must include mark-to-market position value"
+    );
 
     assert_eq!(snapshot.positions.len(), 1);
     let pos = snapshot
@@ -227,5 +238,103 @@ async fn test_insufficient_funds_rejection() -> anyhow::Result<()> {
     assert_eq!(snapshot.available_balance, dec!(10.0));
     assert_eq!(snapshot.frozen_balance, dec!(0.0));
     assert!(snapshot.positions.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_buy_order_reserves_commission_upfront() -> anyhow::Result<()> {
+    let account_manager = Arc::new(AccountManager::new());
+    let acct_id = AccountId("TightWallet".to_string());
+    account_manager.ensure_account_exists(acct_id.clone(), dec!(150.0));
+
+    let market = Arc::new(MockMarket);
+    let pending_port = Arc::new(okane_store::pending_order::MemoryPendingOrderStore::new());
+    let matcher = Arc::new(okane_trade::matcher::LocalMatchEngine::new(dec!(0.001)));
+    let trade_service = TradeService::new(
+        account_manager.clone(),
+        matcher,
+        market,
+        pending_port,
+        Arc::new(okane_core::common::time::RealTimeProvider),
+    );
+
+    let order = Order::new(
+        OrderId("buy_requires_fee".into()),
+        acct_id.clone(),
+        "AAPL".into(),
+        OrderDirection::Buy,
+        None,
+        dec!(1.0),
+        0,
+    );
+
+    let err = trade_service
+        .submit_order(order)
+        .await
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("expected insufficient funds"))?;
+
+    match err {
+        okane_core::trade::port::TradeError::InsufficientFunds { required, actual } => {
+            assert_eq!(required, dec!(150.15));
+            assert_eq!(actual, dec!(150.0));
+        }
+        other => return Err(anyhow::anyhow!("unexpected error: {}", other)),
+    }
+
+    let snapshot = trade_service.get_account(acct_id).await?;
+    assert_eq!(snapshot.available_balance, dec!(150.0));
+    assert_eq!(snapshot.frozen_balance, dec!(0.0));
+    assert!(snapshot.positions.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_filled_market_order_is_not_returned_as_active_and_cannot_be_canceled()
+-> anyhow::Result<()> {
+    let account_manager = Arc::new(AccountManager::new());
+    let acct_id = AccountId("ActiveOrderWallet".to_string());
+    account_manager.ensure_account_exists(acct_id.clone(), dec!(1000.0));
+
+    let market = Arc::new(MockMarket);
+    let pending_port = Arc::new(okane_store::pending_order::MemoryPendingOrderStore::new());
+    let matcher = Arc::new(okane_trade::matcher::LocalMatchEngine::new(dec!(0.001)));
+    let trade_service = TradeService::new(
+        account_manager,
+        matcher,
+        market,
+        pending_port,
+        Arc::new(okane_core::common::time::RealTimeProvider),
+    );
+
+    let order_id = OrderId("filled_market_order".into());
+    let order = Order::new(
+        order_id.clone(),
+        acct_id.clone(),
+        "AAPL".into(),
+        OrderDirection::Buy,
+        None,
+        dec!(1.0),
+        0,
+    );
+
+    trade_service.submit_order(order).await?;
+
+    let orders = trade_service.get_orders(&acct_id).await?;
+    assert!(
+        orders.is_empty(),
+        "filled market orders must not remain active"
+    );
+
+    let err = trade_service
+        .cancel_order(order_id)
+        .await
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("expected cancel to fail"))?;
+    assert!(matches!(
+        err,
+        okane_core::trade::port::TradeError::OrderNotFound(_)
+    ));
+
     Ok(())
 }

@@ -33,21 +33,20 @@ pub async fn register_account(
     axum::Json(req): axum::Json<CreateAccountRequest>,
 ) -> Result<ApiResult<String>, ApiError> {
     // 1. 检查账号是否已存在
-    if let Ok(Some(_)) = state.system_store.get_account_owner(&req.account_id).await {
+    if state
+        .system_store
+        .get_account_owner(&req.account_id)
+        .await
+        .map_err(|e| ApiError::database(format!("failed to check account owner: {}", e)))?
+        .is_some()
+    {
         return Err(ApiError::BadRequest(format!(
             "Account {} already exists and is owned by someone",
             req.account_id
         )));
     }
 
-    // 2. 绑定账号到当前用户
-    state
-        .system_store
-        .bind_account(&user.id, &req.account_id)
-        .await
-        .map_err(|e| ApiError::Internal(format!("Failed to bind account: {}", e)))?;
-
-    // 3. 初始化交易引擎账户 (通过 TradePort 同步初始化快照与资金)
+    // 2. 初始化交易引擎账户。先完成易失败的非持久化步骤，避免把绑定状态写成半成功。
     let initial_balance = if let Some(bal_str) = req.initial_balance {
         Decimal::from_str(&bal_str)
             .map_err(|_| ApiError::BadRequest("Invalid initial balance format".to_string()))?
@@ -60,7 +59,14 @@ pub async fn register_account(
         .trade_port
         .ensure_account(acc_id, initial_balance)
         .await
-        .map_err(|e| ApiError::Internal(format!("Failed to initialize trade account: {}", e)))?;
+        .map_err(|e| ApiError::runtime(format!("failed to initialize trade account: {}", e)))?;
+
+    // 3. 绑定账号到当前用户
+    state
+        .system_store
+        .bind_account(&user.id, &req.account_id)
+        .await
+        .map_err(|e| ApiError::database(format!("failed to bind account: {}", e)))?;
 
     tracing::info!(
         "User {} created and bound account {}",
@@ -89,7 +95,7 @@ pub async fn list_accounts(
         .system_store
         .get_user_accounts(&user.id)
         .await
-        .map_err(|e| ApiError::Internal(format!("Failed to list accounts: {}", e)))?;
+        .map_err(|e| ApiError::database(format!("failed to list accounts: {}", e)))?;
 
     Ok(ApiResult(accounts))
 }
@@ -122,7 +128,7 @@ pub async fn get_account_snapshot(
         .system_store
         .verify_account_ownership(&user.id, &account_id)
         .await
-        .map_err(|e| ApiError::Internal(format!("Database error: {}", e)))?;
+        .map_err(|e| ApiError::database(format!("database error: {}", e)))?;
     if !is_owner {
         tracing::warn!(
             "IDOR attempt: user {} tried to access account {}",

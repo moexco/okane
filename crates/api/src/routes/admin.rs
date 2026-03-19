@@ -35,7 +35,7 @@ pub async fn create_user(
         .system_store
         .get_user(&req.id)
         .await
-        .map_err(|e| ApiError::Internal(format!("DB Checked failed: {}", e)))?;
+        .map_err(|e| ApiError::database(format!("db check failed: {}", e)))?;
 
     if existing.is_some() {
         tracing::warn!("User ID {} already exists!", req.id);
@@ -46,7 +46,7 @@ pub async fn create_user(
     let role = req.role.parse::<UserRole>().map_err(ApiError::BadRequest)?;
 
     let hashed_pwd = bcrypt::hash(&req.password, bcrypt::DEFAULT_COST)
-        .map_err(|_| ApiError::Internal("Failed to hash new user password".into()))?;
+        .map_err(|_| ApiError::crypto("failed to hash new user password"))?;
 
     // 3. 构造并保存
     let force_change = req_json
@@ -67,7 +67,7 @@ pub async fn create_user(
         .system_store
         .save_user(&new_user)
         .await
-        .map_err(|e| ApiError::Internal(format!("Failed to save new user to database: {}", e)))?;
+        .map_err(|e| ApiError::database(format!("failed to save new user: {}", e)))?;
 
     Ok(ApiResult(UserResponse::from(&new_user)))
 }
@@ -100,7 +100,7 @@ pub async fn update_settings(
         .system_store
         .set_setting(&req.setting_key, &req.setting_value)
         .await
-        .map_err(|e| ApiError::Internal(format!("failed to save setting: {}", e)))?;
+        .map_err(|e| ApiError::database(format!("failed to save setting: {}", e)))?;
 
     // TODO: Broadcast event to Engine for hot-reloading if applicable
     Ok(ApiResult("ok".to_string()))

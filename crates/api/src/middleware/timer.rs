@@ -3,6 +3,28 @@ use http_body_util::BodyExt;
 use serde_json::Value;
 use std::time::Instant;
 
+fn serialization_failure_response(message: &str) -> Response {
+    tracing::error!("{}", message);
+    let body = crate::types::ApiErrorResponse::new("serialization operation failed", 500);
+    let bytes = match serde_json::to_vec(&body) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            tracing::error!(
+                "failed to serialize timer middleware error response: {}",
+                err
+            );
+            br#"{"success":false,"error":"serialization operation failed","latency_ms":null,"code":500}"#.to_vec()
+        }
+    };
+    let mut response = Response::new(Body::from(bytes));
+    *response.status_mut() = axum::http::StatusCode::INTERNAL_SERVER_ERROR;
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    response
+}
+
 pub async fn timer_middleware(req: Request<Body>, next: Next) -> Response {
     let start = Instant::now();
     let path = req.uri().path().to_string();
@@ -56,24 +78,48 @@ pub async fn timer_middleware(req: Request<Body>, next: Next) -> Response {
         // Collect body bytes
         let bytes = match body.collect().await {
             Ok(collected) => collected.to_bytes(),
-            Err(_) => return Response::from_parts(parts, Body::empty()),
+            Err(err) => {
+                return serialization_failure_response(&format!(
+                    "failed to collect response body in timer middleware: {}",
+                    err
+                ));
+            }
         };
 
         // Try to inject latency_ms into JSON (这是旧的耗时方式)
-        if let Ok(mut json) = serde_json::from_slice::<Value>(&bytes) {
-            if let Some(obj) = json.as_object_mut() {
-                // Only inject if it looks like our standard ApiResponse or ApiErrorResponse
-                if obj.contains_key("success") {
-                    obj.insert("latency_ms".to_string(), Value::from(elapsed));
-
-                    if let Ok(new_bytes) = serde_json::to_vec(&json) {
-                        return Response::from_parts(parts, Body::from(new_bytes));
-                    }
-                }
+        let mut json = match serde_json::from_slice::<Value>(&bytes) {
+            Ok(json) => json,
+            Err(err) => {
+                return serialization_failure_response(&format!(
+                    "failed to parse json response in timer middleware: {}",
+                    err
+                ));
             }
+        };
+        if let Some(obj) = json.as_object_mut() {
+            // Only inject if it looks like our standard ApiResponse or ApiErrorResponse
+            if obj.contains_key("success") {
+                obj.insert("latency_ms".to_string(), Value::from(elapsed));
+                let new_bytes = match serde_json::to_vec(&json) {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
+                        return serialization_failure_response(&format!(
+                            "failed to serialize json response in timer middleware: {}",
+                            err
+                        ));
+                    }
+                };
+                return Response::from_parts(parts, Body::from(new_bytes));
+            }
+        } else {
+            return serialization_failure_response(
+                "timer middleware expected a json object response payload",
+            );
         }
 
-        Response::from_parts(parts, Body::from(bytes))
+        serialization_failure_response(
+            "timer middleware expected a standard api response payload with success field",
+        )
     } else {
         Response::from_parts(parts, body)
     }

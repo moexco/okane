@@ -48,7 +48,7 @@ pub async fn get_orders(
         .system_store
         .verify_account_ownership(&user.id, &account.0)
         .await
-        .map_err(|e| ApiError::Internal(format!("database error: {}", e)))?;
+        .map_err(|e| ApiError::database(format!("database error: {}", e)))?;
     if !is_owner {
         return Err(ApiError::Forbidden(
             "forbidden: account does not belong to you".to_string(),
@@ -71,7 +71,7 @@ pub async fn get_orders(
             // 使用标准的 Page 结构，包含在 data 字段内
             Ok(ApiResult(Page::new(items, total, offset, limit)))
         }
-        Err(e) => Err(ApiError::Internal(format!("trade error: {}", e))),
+        Err(e) => Err(ApiError::runtime(format!("trade error: {}", e))),
     }
 }
 
@@ -109,7 +109,7 @@ pub async fn place_order(
         .system_store
         .verify_account_ownership(&user.id, &req.account_id)
         .await
-        .map_err(|e| ApiError::Internal(format!("database error: {}", e)))?;
+        .map_err(|e| ApiError::database(format!("database error: {}", e)))?;
     if !is_owner {
         return Err(ApiError::Forbidden(
             "forbidden: account does not belong to you".to_string(),
@@ -187,7 +187,7 @@ pub async fn cancel_order(
         .trade_port
         .get_order(&order_id)
         .await
-        .map_err(|e| ApiError::Internal(format!("failed to fetch order: {}", e)))?
+        .map_err(|e| ApiError::database(format!("failed to fetch order: {}", e)))?
         .ok_or_else(|| ApiError::NotFound("order not found".to_string()))?;
 
     // 2. IDOR Check: Ensures the user owns the account associated with the order
@@ -195,7 +195,7 @@ pub async fn cancel_order(
         .system_store
         .verify_account_ownership(&user.id, &order.account_id.0)
         .await
-        .map_err(|e| ApiError::Internal(format!("database error: {}", e)))?;
+        .map_err(|e| ApiError::database(format!("database error: {}", e)))?;
     if !is_owner {
         tracing::warn!(
             "IDOR attempt: user {} tried to cancel order {} belonging to account {}",
@@ -244,7 +244,7 @@ pub async fn submit_algo_order(
         .system_store
         .verify_account_ownership(&user.id, &req.account_id)
         .await
-        .map_err(|e| ApiError::Internal(format!("database error: {}", e)))?;
+        .map_err(|e| ApiError::database(format!("database error: {}", e)))?;
     if !is_owner {
         return Err(ApiError::Forbidden("forbidden".to_string()));
     }
@@ -308,14 +308,18 @@ pub async fn get_algo_orders(
         .system_store
         .verify_account_ownership(&user.id, &account.0)
         .await
-        .map_err(|e| ApiError::Internal(format!("database error: {}", e)))?;
+        .map_err(|e| ApiError::database(format!("database error: {}", e)))?;
     if !is_owner {
         return Err(ApiError::Forbidden("forbidden".to_string()));
     }
 
     match state.algo_port.get_algo_orders(&account).await {
         Ok(orders) => {
-            let dtos = orders.into_iter().map(Into::into).collect();
+            let dtos = orders
+                .into_iter()
+                .map(AlgoOrderResponse::try_from)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(ApiError::serialization)?;
             Ok(ApiResult(dtos))
         }
         Err(e) => Err(ApiError::from(e)),
@@ -349,14 +353,14 @@ pub async fn cancel_algo_order(
         .algo_port
         .get_algo_order(&order_id)
         .await
-        .map_err(|e| ApiError::Internal(format!("failed to fetch algo order: {}", e)))?
+        .map_err(|e| ApiError::database(format!("failed to fetch algo order: {}", e)))?
         .ok_or_else(|| ApiError::NotFound("algo order not found".to_string()))?;
 
     let is_owner = state
         .system_store
         .verify_account_ownership(&user.id, &order.account_id.0)
         .await
-        .map_err(|e| ApiError::Internal(format!("database error: {}", e)))?;
+        .map_err(|e| ApiError::database(format!("database error: {}", e)))?;
     if !is_owner {
         return Err(ApiError::Forbidden("forbidden".to_string()));
     }
@@ -390,7 +394,7 @@ pub async fn get_positions(
         .system_store
         .verify_account_ownership(&user.id, &account.0)
         .await
-        .map_err(|e| ApiError::Internal(format!("database error: {}", e)))?;
+        .map_err(|e| ApiError::database(format!("database error: {}", e)))?;
     if !is_owner {
         return Err(ApiError::Forbidden("forbidden".to_string()));
     }
@@ -400,7 +404,7 @@ pub async fn get_positions(
             // 返回持仓快照的 JSON 形式
             Ok(ApiResult(
                 serde_json::to_value(acc.positions)
-                    .map_err(|e| ApiError::Internal(e.to_string()))?,
+                    .map_err(|e| ApiError::serialization(e.to_string()))?,
             ))
         }
         Err(e) => Err(ApiError::from(e)),

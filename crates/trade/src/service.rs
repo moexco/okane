@@ -32,6 +32,47 @@ pub struct TradeService {
 }
 
 impl TradeService {
+    fn is_active_order_status(status: OrderStatus) -> bool {
+        matches!(
+            status,
+            OrderStatus::Pending | OrderStatus::Submitted | OrderStatus::PartialFilled
+        )
+    }
+
+    fn estimate_buy_funds(
+        &self,
+        price: rust_decimal::Decimal,
+        volume: rust_decimal::Decimal,
+    ) -> rust_decimal::Decimal {
+        let commission = self.matcher.estimate_commission(price, volume);
+        price * volume + commission
+    }
+
+    async fn mark_to_market_snapshot(
+        &self,
+        mut snapshot: AccountSnapshot,
+    ) -> Result<AccountSnapshot, TradeError> {
+        let mut positions_market_value = rust_decimal::Decimal::ZERO;
+        for position in &snapshot.positions {
+            let stock = self.market.get_stock(&position.symbol).await.map_err(|e| {
+                TradeError::BrokerIntegrationError(format!("Failed to get market data: {}", e))
+            })?;
+            let latest_price = stock
+                .current_price()
+                .map_err(|e| TradeError::InternalError(e.to_string()))?
+                .ok_or_else(|| {
+                    TradeError::InternalError(format!(
+                        "No latest price available for stock {}",
+                        position.symbol
+                    ))
+                })?;
+            positions_market_value += position.volume * latest_price;
+        }
+        snapshot.total_equity =
+            snapshot.available_balance + snapshot.frozen_balance + positions_market_value;
+        Ok(snapshot)
+    }
+
     pub fn new(
         account_port: Arc<dyn AccountPort>,
         matcher: Arc<dyn MatcherPort>,
@@ -50,9 +91,12 @@ impl TradeService {
         }
     }
 
-    pub fn with_algo_service(self, algo_service: Arc<crate::algo::AlgoOrderService>) -> Self {
-        self.set_algo_service(algo_service);
-        self
+    pub fn with_algo_service(
+        self,
+        algo_service: Arc<crate::algo::AlgoOrderService>,
+    ) -> Result<Self, TradeError> {
+        self.set_algo_service(algo_service)?;
+        Ok(self)
     }
 
     /// # Logic
@@ -63,10 +107,16 @@ impl TradeService {
     ///
     /// # Returns
     /// None.
-    pub fn set_algo_service(&self, algo_service: Arc<crate::algo::AlgoOrderService>) {
-        if let Ok(mut guard) = self.algo_service.write() {
-            *guard = Some(algo_service);
-        }
+    pub fn set_algo_service(
+        &self,
+        algo_service: Arc<crate::algo::AlgoOrderService>,
+    ) -> Result<(), TradeError> {
+        let mut guard = self
+            .algo_service
+            .write()
+            .map_err(|e| TradeError::InternalError(format!("algo service lock poisoned: {}", e)))?;
+        *guard = Some(algo_service);
+        Ok(())
     }
 
     /// 设置交易事件收集器。回测场景下使用。
@@ -109,7 +159,7 @@ impl TradePort for TradeService {
         // 预估单价 (限价单取限价，市价单取市场最新的成交价进行预估撮合)。
         // OK: Intentional business fallback for Market Orders
         let est_price = order.price.unwrap_or(latest_price);
-        let est_req_funds = est_price * order.volume;
+        let est_req_funds = self.estimate_buy_funds(est_price, order.volume);
 
         // 如果是多头买单，先冻结需要的总现金款
         if order.direction == OrderDirection::Buy {
@@ -138,10 +188,9 @@ impl TradePort for TradeService {
                     .await?;
             }
 
-            // 核心修复：市价单无论是否完全成交，均需记录到后端（用于历史查询和状态观测）
-            // 注意：如果已完全成交，pending_port 的具体实现可以决定是否保留在“活动单”中
-            // 但为了 API 一致性，这里必须确保它被 submit 过。
-            self.pending_port.save(order).await?;
+            if Self::is_active_order_status(order.status) {
+                self.pending_port.save(order).await?;
+            }
         } else {
             // 限价单，等待未来穿越
             order.status = OrderStatus::Pending;
@@ -152,27 +201,36 @@ impl TradePort for TradeService {
     }
 
     async fn cancel_order(&self, order_id: OrderId) -> Result<(), TradeError> {
-        if let Some(mut order) = self.pending_port.remove(&order_id).await? {
-            order.status = OrderStatus::Canceled;
-            // 还需要退回冻结资金
-            if order.direction == OrderDirection::Buy
-                && let Some(price) = order.price
-            {
-                let amount = price * (order.volume - order.filled_volume);
-                self.account_port
-                    .unfreeze_funds(&order.account_id, amount)
-                    .await?;
-            }
-            Ok(())
-        } else {
-            Err(TradeError::OrderNotFound(
-                "Order not found or already filled".into(),
-            ))
+        let order =
+            self.pending_port.get(&order_id).await?.ok_or_else(|| {
+                TradeError::OrderNotFound("order not found or already filled".into())
+            })?;
+
+        if !Self::is_active_order_status(order.status) {
+            return Err(TradeError::InvalidOrderStatus);
         }
+
+        let mut order =
+            self.pending_port.remove(&order_id).await?.ok_or_else(|| {
+                TradeError::OrderNotFound("order not found or already filled".into())
+            })?;
+        order.status = OrderStatus::Canceled;
+        // 还需要退回冻结资金
+        if order.direction == OrderDirection::Buy
+            && let Some(price) = order.price
+        {
+            let remaining_volume = order.volume - order.filled_volume;
+            let amount = self.estimate_buy_funds(price, remaining_volume);
+            self.account_port
+                .unfreeze_funds(&order.account_id, amount)
+                .await?;
+        }
+        Ok(())
     }
 
     async fn get_account(&self, account_id: AccountId) -> Result<AccountSnapshot, TradeError> {
-        self.account_port.snapshot(&account_id).await
+        let snapshot = self.account_port.snapshot(&account_id).await?;
+        self.mark_to_market_snapshot(snapshot).await
     }
 
     async fn get_orders(&self, account_id: &AccountId) -> Result<Vec<Order>, TradeError> {
@@ -229,18 +287,10 @@ impl BacktestTradePort for TradeService {
                             log.record(&trade)
                                 .map_err(|e| TradeError::InternalError(e.to_string()))?;
                         }
-                        let est_req_funds = limit_price * trade.volume; // 原本冻结的总数
-                        if let Err(e) = self
-                            .account_port
+                        let est_req_funds = self.estimate_buy_funds(limit_price, trade.volume);
+                        self.account_port
                             .process_trade(&order.account_id, &trade, est_req_funds)
-                            .await
-                        {
-                            tracing::warn!(
-                                "Backtest tick: Failed process trade on account {}: {}",
-                                order.id.0,
-                                e
-                            );
-                        }
+                            .await?;
                     }
 
                     // 核心修复：只有达到终态才移除，否则更新（部分成交）

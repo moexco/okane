@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use okane_core::common::time::FakeClockProvider;
 use okane_core::market::port::{Market, Stock};
 use okane_core::trade::entity::{AccountId, AccountSnapshot, Trade};
-use okane_core::trade::port::AccountPort;
+use okane_core::trade::port::TradePort;
 use okane_manager::backtest::{
     BacktestEnvironment, BacktestEnvironmentFactory, BacktestRequest, BacktestResultCollector,
 };
@@ -14,6 +14,7 @@ use okane_trade::algo::AlgoOrderService;
 use okane_trade::service::TradeService;
 use okane_trade::trade_log::TradeLog;
 use rust_decimal::Decimal;
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 
 struct LazyMarket {
@@ -83,7 +84,7 @@ impl Market for LazyMarket {
 }
 
 struct DefaultBacktestResultCollector {
-    account_manager: Arc<AccountManager>,
+    trade_port: Arc<dyn TradePort>,
     trade_log: Arc<TradeLog>,
 }
 
@@ -93,7 +94,7 @@ impl BacktestResultCollector for DefaultBacktestResultCollector {
         &self,
         account_id: &AccountId,
     ) -> Result<AccountSnapshot, ManagerError> {
-        Ok(self.account_manager.snapshot(account_id).await?)
+        Ok(self.trade_port.get_account(account_id.clone()).await?)
     }
 
     async fn drain_trades(&self) -> Result<Vec<Trade>, ManagerError> {
@@ -119,6 +120,7 @@ impl BacktestEnvironmentFactory for DefaultBacktestEnvironmentFactory {
         let matcher = Arc::new(okane_trade::matcher::LocalMatchEngine::new(Decimal::ZERO));
         let trade_log = Arc::new(TradeLog::new());
         let lazy_market = Arc::new(LazyMarket::new());
+        let candle_counter = Arc::new(AtomicUsize::new(0));
 
         let trade_service = Arc::new(
             TradeService::new(
@@ -138,6 +140,7 @@ impl BacktestEnvironmentFactory for DefaultBacktestEnvironmentFactory {
             req.end,
             fake_clock.clone(),
             trade_service.clone(),
+            candle_counter.clone(),
         ));
 
         lazy_market.set(backtest_market.clone()).map_err(|e| {
@@ -151,19 +154,20 @@ impl BacktestEnvironmentFactory for DefaultBacktestEnvironmentFactory {
             trade_service.clone(),
             fake_clock.clone(),
         ));
-        trade_service.set_algo_service(algo_service.clone());
+        trade_service.set_algo_service(algo_service.clone())?;
 
         Ok(BacktestEnvironment {
             market: backtest_market.clone(),
-            trade_port: trade_service,
+            trade_port: trade_service.clone(),
             algo_port: algo_service,
             indicator_service: Arc::new(MarketIndicatorService::new(backtest_market)),
             time_provider: fake_clock,
             account_id: backtest_account_id,
             result_collector: Arc::new(DefaultBacktestResultCollector {
-                account_manager,
+                trade_port: trade_service.clone(),
                 trade_log,
             }),
+            candle_counter,
         })
     }
 }
